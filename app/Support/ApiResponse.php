@@ -16,7 +16,7 @@ class ApiResponse
         ], fn ($value) => $value !== null));
     }
 
-    public static function paginated(LengthAwarePaginator $paginator, mixed $data = null): JsonResponse
+    public static function paginated(LengthAwarePaginator $paginator, mixed $data = null, array $extraMeta = []): JsonResponse
     {
         return response()->json([
             'data' => $data ?? $paginator->items(),
@@ -27,6 +27,7 @@ class ApiResponse
                 'total' => $paginator->total(),
                 'from' => $paginator->firstItem(),
                 'to' => $paginator->lastItem(),
+                ...$extraMeta,
             ],
             'links' => [
                 'first' => $paginator->url(1),

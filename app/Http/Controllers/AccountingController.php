@@ -11,6 +11,7 @@ use App\Notifications\PaymentReminderNotification;
 use App\Services\BookingManagementService;
 use App\Services\PaymentEventService;
 use App\Support\ApiResponse;
+use App\Support\ResourceVersion;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
@@ -122,6 +123,11 @@ class AccountingController extends Controller
             default => $query->orderBy('event_date', 'asc'),
         };
 
+        $versionMeta = ResourceVersion::fromQuery($query);
+        if (ResourceVersion::matches($request, $versionMeta)) {
+            return ResourceVersion::unchanged($versionMeta);
+        }
+
         $perPage = min(max((int) $request->query('per_page', 25), 1), 100);
         $bookings = $query->paginate($perPage)->through(function ($b) {
                 $paidAmount = (float) $b->payments
@@ -141,7 +147,14 @@ class AccountingController extends Controller
                 ]);
             });
 
-        return response()->json($bookings);
+        $payload = $bookings->toArray();
+        $payload['meta'] = [
+            ...($payload['meta'] ?? []),
+            ...$versionMeta,
+            'changed' => true,
+        ];
+
+        return response()->json($payload);
     }
 
     public function summary()

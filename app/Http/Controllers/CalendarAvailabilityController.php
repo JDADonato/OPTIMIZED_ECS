@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\Booking;
 use App\Models\CalendarAvailabilityOverride;
 use App\Services\CalendarAvailabilityService;
+use App\Support\ResourceVersion;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -50,6 +51,7 @@ class CalendarAvailabilityController extends Controller
                 'total_cost',
                 'selected_menu',
                 'assigned_to',
+                'updated_at',
             ])
             ->whereBetween('event_date', [$start->toDateString(), $end->toDateString()])
             ->whereNotIn('status', ['Cancelled', 'cancelled'])
@@ -67,7 +69,26 @@ class CalendarAvailabilityController extends Controller
             })
             ->orderBy('event_date')
             ->orderBy('event_time')
-            ->get()
+            ->get();
+
+        $overrides = $availability->monthOverrides($data['month'] ?? $start->format('Y-m'))->values();
+        $versionMeta = ResourceVersion::make(
+            $events->count() + $overrides->count(),
+            collect([
+                $events->max('updated_at'),
+                $overrides->max('updated_at'),
+            ])->filter()->max(),
+            collect([
+                $events->max('id'),
+                $overrides->max('id'),
+            ])->filter()->max()
+        );
+
+        if (ResourceVersion::matches($request, $versionMeta)) {
+            return ResourceVersion::unchanged($versionMeta);
+        }
+
+        $events = $events
             ->map(function (Booking $booking) use ($request) {
                 $taskCount = $booking->preparationTasks->count();
                 $doneTasks = $booking->preparationTasks->where('status', 'Done')->count();
@@ -103,8 +124,12 @@ class CalendarAvailabilityController extends Controller
             });
 
         return response()->json([
-            'data' => $availability->monthOverrides($data['month'] ?? $start->format('Y-m'))->values(),
+            'data' => $overrides,
             'events' => $events->values(),
+            'meta' => [
+                ...$versionMeta,
+                'changed' => true,
+            ],
         ]);
     }
 

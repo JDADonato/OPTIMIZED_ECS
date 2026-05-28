@@ -1,6 +1,7 @@
 import React from 'react';
 import { Link } from '@inertiajs/react';
 import NotificationBell from '../Components/common/NotificationBell';
+import useOnlineStatus from '../hooks/useOnlineStatus';
 
 const StaffWorkspaceLayout = ({
     brand = 'Eloquente',
@@ -14,6 +15,8 @@ const StaffWorkspaceLayout = ({
     onLogout,
     children,
 }) => {
+    const online = useOnlineStatus();
+
     return (
         <div className="staff-workspace">
             <aside className="staff-sidebar">
@@ -57,7 +60,14 @@ const StaffWorkspaceLayout = ({
                 <div className="staff-workspace-tools">
                     <NotificationBell variant="dark" placement="fixed-right" />
                 </div>
-                <main>{children}</main>
+                <main>
+                    {!online && (
+                        <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 px-5 py-3 text-sm font-bold text-amber-900 shadow-sm">
+                            Connection is unstable. Viewing saved data; sensitive actions may need a refresh.
+                        </div>
+                    )}
+                    {children}
+                </main>
             </div>
         </div>
     );

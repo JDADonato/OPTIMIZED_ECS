@@ -6,6 +6,8 @@ import ClientNavbar from '../../Components/common/ClientNavbar';
 import ConfirmModal from '../../Components/common/ConfirmModal';
 import CustomerAnnouncements from '../../Components/content/CustomerAnnouncements';
 import { customerBookingStatus, customerPaymentStatus, isSettledPaymentStatus, paymentTypeLabel, statusToneClasses } from '../../utils/statusLabels';
+import { fetchSmartResource, getUserScopedCacheKey, writeSmartCache } from '../../utils/smartResource';
+import useOnlineStatus from '../../hooks/useOnlineStatus';
 
 const ReceiptModal = lazy(() => import('../../Components/common/ReceiptModal'));
 
@@ -541,10 +543,12 @@ const SmartEventDetailsPanel = ({
 
 const ClientDashboard = () => {
     const { user, logout } = useAuth();
+    const online = useOnlineStatus();
     const dashboardStoragePrefix = `ecs_client_dashboard_${user?.id || 'guest'}`;
     const activeBookingStorageKey = `${dashboardStoragePrefix}_active_booking_id`;
     const activeSectionStorageKey = `${dashboardStoragePrefix}_active_section`;
     const dashboardDataStorageKey = `${dashboardStoragePrefix}_data`;
+    const dashboardSmartCacheKey = getUserScopedCacheKey(user, 'client:dashboard');
     const cachedDashboardData = readStoredDashboardJson(dashboardDataStorageKey);
     const [data, setData] = useState(cachedDashboardData || { bookings: [], historyBookings: [], tastings: [], payments: [] });
     const [loading, setLoading] = useState(!cachedDashboardData);
@@ -720,9 +724,13 @@ const ClientDashboard = () => {
 
     const fetchData = async () => {
         try {
-            const response = await fetch('/api/dashboard/client');
-            if (response.ok) {
-                const result = await response.json();
+            const smartResult = await fetchSmartResource('/api/dashboard/client', {
+                cacheKey: dashboardSmartCacheKey,
+                ttl: 30000,
+                force: false,
+            });
+            const result = smartResult.raw || smartResult.data || {};
+            if (result) {
                 const nextData = {
                     bookings: result.bookings || [],
                     historyBookings: result.historyBookings || [],
@@ -731,6 +739,7 @@ const ClientDashboard = () => {
                 };
                 setData(nextData);
                 writeStoredDashboardJson(dashboardDataStorageKey, nextData);
+                writeSmartCache(dashboardSmartCacheKey, result, result.meta || smartResult.meta || {});
                 setLoading(false);
 
                 const activeBookings = result.bookings || [];
@@ -1258,6 +1267,12 @@ const ClientDashboard = () => {
                         <div className="pointer-events-auto flex max-w-[360px] items-start gap-3 rounded-xl bg-[#fffaf3] px-4 py-3 text-sm shadow-[0_10px_30px_rgba(50,35,20,0.18)]">
                         <p className={`min-w-0 flex-1 font-semibold leading-5 ${toast.type === 'error' ? 'text-[#8b0000]' : 'text-[#374151]'}`}>{toast.message}</p>
                         </div>
+                    </div>
+                )}
+
+                {!online && (
+                    <div className="mb-6 rounded-2xl border border-amber-200 bg-amber-50 px-5 py-3 text-sm font-bold text-amber-900 shadow-sm">
+                        Connection is unstable. You can keep viewing saved dashboard data, but payments and event changes may need a refresh.
                     </div>
                 )}
 

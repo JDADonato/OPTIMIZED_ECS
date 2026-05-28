@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-
-const cache = new Map();
+import { usePage } from '@inertiajs/react';
+import { fetchSmartResource, getUserScopedCacheKey, readSmartCache } from '../utils/smartResource';
 
 const buildUrl = (url, params = {}) => {
     const query = new URLSearchParams();
@@ -21,6 +21,8 @@ export default function useStaffResource(url, {
     debounce = 0,
     initialData = null,
 } = {}) {
+    const { auth } = usePage().props;
+    const user = auth?.user || null;
     const [data, setData] = useState(initialData);
     const [loading, setLoading] = useState(Boolean(enabled && !initialData));
     const [refreshing, setRefreshing] = useState(false);
@@ -28,18 +30,37 @@ export default function useStaffResource(url, {
     const abortRef = useRef(null);
     const paramsKey = JSON.stringify(params);
     const requestUrl = useMemo(() => buildUrl(url, params), [url, paramsKey]);
+    const cacheKey = useMemo(() => getUserScopedCacheKey(user, requestUrl), [requestUrl, user?.id, user?.role]);
+    const cached = useMemo(() => readSmartCache(cacheKey), [cacheKey]);
+
+    useEffect(() => {
+        if (initialData || !cached?.data) return;
+        setData(cached.data);
+        setLoading(false);
+    }, [cached, initialData]);
 
     const load = useCallback(async ({ silent = false, bust = false } = {}) => {
         if (!enabled) return null;
 
-        const now = Date.now();
-        const cached = cache.get(requestUrl);
-        if (!bust && cached && now - cached.time < ttl) {
-            setData(cached.data);
+        const currentCached = readSmartCache(cacheKey);
+        if (!bust && currentCached && Date.now() - Number(currentCached.time || 0) < ttl) {
+            setData(currentCached.data);
             setLoading(false);
             setRefreshing(false);
             setError(null);
-            return cached.data;
+            return currentCached.data;
+        }
+
+        if (!bust && currentCached && data === null) {
+            setData(currentCached.data);
+        }
+
+        if (!bust && currentCached && navigator.onLine === false) {
+            setData(currentCached.data);
+            setLoading(false);
+            setRefreshing(false);
+            setError(null);
+            return currentCached.data;
         }
 
         abortRef.current?.abort();
@@ -51,15 +72,14 @@ export default function useStaffResource(url, {
         setError(null);
 
         try {
-            const response = await fetch(requestUrl, {
+            const result = await fetchSmartResource(requestUrl, {
+                cacheKey,
+                ttl,
+                force: bust,
                 signal: controller.signal,
-                headers: { Accept: 'application/json' },
             });
-            const payload = await response.json().catch(() => ({}));
-            if (!response.ok) throw payload;
-            cache.set(requestUrl, { data: payload, time: Date.now() });
-            setData(payload);
-            return payload;
+            setData(result.raw || result.data);
+            return result.raw || result.data;
         } catch (requestError) {
             if (requestError?.name !== 'AbortError') setError(requestError);
             return null;
@@ -69,7 +89,7 @@ export default function useStaffResource(url, {
                 setRefreshing(false);
             }
         }
-    }, [enabled, requestUrl, ttl]);
+    }, [cacheKey, data, enabled, requestUrl, ttl]);
 
     useEffect(() => {
         if (!enabled) return undefined;

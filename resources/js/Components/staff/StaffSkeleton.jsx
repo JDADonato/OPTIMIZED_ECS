@@ -83,10 +83,6 @@ const StaffSkeleton = ({ rows = 5, variant = 'table', className = '', label = 'P
     if (variant === 'panel') {
         return (
             <div className={`staff-skeleton staff-skeleton-panel ${className}`} aria-label={label}>
-                <div className="staff-loader-brand">
-                    <span>E</span>
-                    <i />
-                </div>
                 <div className="staff-skeleton-panel-lines">
                     {Array.from({ length: rows }).map((_, index) => <span key={index} />)}
                 </div>

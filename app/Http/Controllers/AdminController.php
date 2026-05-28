@@ -17,6 +17,7 @@ use App\Services\EmailDeliveryService;
 use App\Services\EventPreparationService;
 use App\Services\PostEventLifecycleService;
 use App\Support\ApiResponse;
+use App\Support\ResourceVersion;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Cache;
@@ -624,15 +625,23 @@ class AdminController extends Controller
             })
             ->orderBy('created_at', 'desc');
 
+        $versionMeta = ResourceVersion::fromQuery($query);
+        if (ResourceVersion::matches($request, $versionMeta)) {
+            return ResourceVersion::unchanged($versionMeta);
+        }
+
         if ($request->boolean('paginated')) {
             $perPage = min(max((int) $request->query('per_page', 25), 1), 100);
             $bookings = $query->paginate($perPage);
-            return ApiResponse::paginated($bookings, BookingSummaryResource::collection($bookings->getCollection())->resolve());
+            return ApiResponse::paginated($bookings, BookingSummaryResource::collection($bookings->getCollection())->resolve(), [
+                ...$versionMeta,
+                'changed' => true,
+            ]);
         }
 
         $bookings = BookingSummaryResource::collection($query->get())->resolve();
 
-        return response()->json($bookings);
+        return ResourceVersion::changed($bookings, $versionMeta);
     }
 
     public function updateBookingStatus(Request $request, int $id)

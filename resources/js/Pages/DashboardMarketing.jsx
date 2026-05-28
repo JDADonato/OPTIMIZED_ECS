@@ -34,6 +34,7 @@ const AnnouncementManager = lazy(() => import('../Components/content/Announcemen
 const PreparationBoard = lazy(() => import('../Components/operations/PreparationBoard'));
 import { getListData } from '../utils/apiResponses';
 import csrfFetch from '../utils/csrf';
+import { bustSmartCache, fetchSmartResource, getUserScopedCacheKey, readSmartCache } from '../utils/smartResource';
 
 const PACKAGE_CATEGORY_OPTIONS = [
     { value: 'premium', label: 'Weddings & Debuts' },
@@ -150,7 +151,7 @@ const DashboardMarketing = () => {
     const bookingRequestRef = useRef(0);
     const calendarRequestRef = useRef(0);
     const [marketingRemoteSummary, setMarketingRemoteSummary] = useState(null);
-    const [loading, setLoading] = useState(true);
+    const [loading, setLoading] = useState(() => !readSmartCache(getUserScopedCacheKey(user, 'marketing:bookings:page')));
     const [activeTab, setActiveTab] = useStaffWorkspaceState({
         storageKey: 'ecs:staff-workspace:marketing',
         defaultTab: 'today',
@@ -216,6 +217,7 @@ const DashboardMarketing = () => {
     const selectedMonthKey = useMemo(() => (
         `${selectedMonth.getFullYear()}-${String(selectedMonth.getMonth() + 1).padStart(2, '0')}`
     ), [selectedMonth]);
+    const smartCacheKey = (resourceKey) => getUserScopedCacheKey(user, resourceKey);
 
     useEffect(() => {
         setInquiryPage(1);
@@ -276,22 +278,27 @@ const DashboardMarketing = () => {
         },
     });
 
-    const fetchBookings = async ({ silent = false, scope = 'page' } = {}) => {
+    const fetchBookings = async ({ silent = false, scope = 'page', force = false } = {}) => {
         const requestId = bookingRequestRef.current + 1;
         bookingRequestRef.current = requestId;
         try {
             const params = scope === 'all' ? '' : '?paginated=1&per_page=25';
-            const response = await fetch(`${MARKETING_BOOKINGS_URL}${params}`, {
-                headers: {
-                    'Accept': 'application/json',
-                }
+            const cacheKey = smartCacheKey(`marketing:bookings:${scope}`);
+            const cached = readSmartCache(cacheKey);
+            if (cached?.data && bookings.length === 0) {
+                setBookings(getListData(cached.data));
+                setBookingsScope(scope);
+                setLoading(false);
+            }
+            const result = await fetchSmartResource(`${MARKETING_BOOKINGS_URL}${params}`, {
+                cacheKey,
+                ttl: 30000,
+                force,
             });
-            if (response.ok) {
-                const data = await response.json();
-                if (requestId === bookingRequestRef.current) {
-                    setBookings(getListData(data));
-                    setBookingsScope(scope);
-                }
+            const data = result.raw || result.data;
+            if (requestId === bookingRequestRef.current) {
+                setBookings(getListData(data));
+                setBookingsScope(scope);
             }
         } catch (error) {
             console.error("Error fetching bookings:", error);
@@ -309,12 +316,18 @@ const DashboardMarketing = () => {
             Object.entries(calendarFilters).forEach(([key, value]) => {
                 if (value) params.set(key, value);
             });
-            const response = await fetch(`/api/calendar-availability?${params.toString()}`, {
-                headers: { Accept: 'application/json' },
+            const cacheKey = smartCacheKey(`marketing:calendar:${params.toString()}`);
+            const cached = readSmartCache(cacheKey);
+            if (cached?.data && calendarBookings.length === 0) {
+                const cachedData = cached.data;
+                setCalendarBookings(Array.isArray(cachedData.events) ? cachedData.events.map(normalizeCalendarEvent) : []);
+                setLoading(false);
+            }
+            const result = await fetchSmartResource(`/api/calendar-availability?${params.toString()}`, {
+                cacheKey,
+                ttl: 30000,
             });
-
-            if (!response.ok) throw new Error('Calendar bookings load failed');
-            const data = await response.json();
+            const data = result.raw || result.data;
             if (requestId === calendarRequestRef.current) {
                 setCalendarBookings(Array.isArray(data.events) ? data.events.map(normalizeCalendarEvent) : []);
             }
@@ -511,7 +524,7 @@ const DashboardMarketing = () => {
                 if (data.booking) mergeUpdatedBooking(data.booking);
                 const label = newStatus === 'Confirmed' ? 'approved' : 'declined';
                 toast.success(`Booking #${id} has been ${label} successfully.`);
-                fetchBookings({ scope: activeTab === 'bookings' ? 'all' : 'page' }); // sync with server in background
+                fetchBookings({ scope: activeTab === 'bookings' ? 'all' : 'page', force: true }); // sync with server in background
             } else {
                 const data = await response.json().catch(() => ({}));
                 if (data.booking) mergeUpdatedBooking(data.booking);
@@ -530,6 +543,7 @@ const DashboardMarketing = () => {
 
     const mergeUpdatedBooking = (updatedBooking) => {
         if (!updatedBooking?.id) return;
+        bustSmartCache(smartCacheKey('marketing:bookings:page'), smartCacheKey('marketing:bookings:all'));
         setBookings(prev => prev.map(item => item.id === updatedBooking.id ? { ...item, ...updatedBooking } : item));
         setCalendarBookings(prev => prev.map(item => item.id === updatedBooking.id ? { ...item, ...updatedBooking } : item));
         setSelectedBooking(prev => prev?.id === updatedBooking.id ? { ...prev, ...updatedBooking } : prev);
@@ -537,6 +551,7 @@ const DashboardMarketing = () => {
 
     const addCreatedBooking = (createdBooking) => {
         if (!createdBooking?.id) return;
+        bustSmartCache(smartCacheKey('marketing:bookings:page'), smartCacheKey('marketing:bookings:all'));
         setBookings(prev => [createdBooking, ...prev.filter(item => item.id !== createdBooking.id)]);
         setCalendarBookings(prev => isActiveCalendarBooking(createdBooking)
             ? [createdBooking, ...prev.filter(item => item.id !== createdBooking.id)]
@@ -680,7 +695,7 @@ const DashboardMarketing = () => {
                 // Update local state to reflect change immediately without closing modal
                 if (data.booking) mergeUpdatedBooking(data.booking);
                 else setSelectedBooking({ ...selectedBooking, live_status: newLiveStatus });
-                fetchBookings({ scope: activeTab === 'bookings' ? 'all' : 'page' }); // Refresh background data
+                fetchBookings({ scope: activeTab === 'bookings' ? 'all' : 'page', force: true }); // Refresh background data
             } else {
                 if (data.booking) mergeUpdatedBooking(data.booking);
                 toast.error(data.error || 'Could not update live status.');

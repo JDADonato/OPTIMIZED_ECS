@@ -16,6 +16,7 @@ import NextActionPanel from '../Components/staff/NextActionPanel';
 import AssistedBookingWizard from '../Components/marketing/AssistedBookingWizard';
 import { getListData } from '../utils/apiResponses';
 import csrfFetch from '../utils/csrf';
+import { fetchSmartResource, getUserScopedCacheKey, readSmartCache } from '../utils/smartResource';
 import {
     formatBookingRef,
     formatCurrency,
@@ -428,6 +429,7 @@ const DashboardAdmin = () => {
     const [bookingPage, setBookingPage] = useState(1);
     const [auditPage, setAuditPage] = useState(1);
     const rowsPerPage = 8;
+    const smartCacheKey = (resourceKey) => getUserScopedCacheKey(user, resourceKey);
 
     useEffect(() => {
         setProfileForm(prev => ({
@@ -1539,9 +1541,21 @@ const DashboardAdmin = () => {
         try {
             const params = new URLSearchParams(Object.entries(filters).filter(([, value]) => value !== ''));
             const query = params.toString() ? `?${params.toString()}` : '';
-            const res = await fetch(`/api/admin/analytics/summary${query}`);
-            if (!res.ok) throw new Error('Analytics summary request failed');
-            const summary = await res.json();
+            const cacheKey = smartCacheKey(`/api/admin/analytics/summary${query}`);
+            const cached = readSmartCache(cacheKey);
+            if (cached?.data && !analytics?.summary) {
+                setAnalytics((current) => ({
+                    ...(current || {}),
+                    summary: cached.data.summary || {},
+                    businessSnapshot: cached.data.businessSnapshot || {},
+                }));
+                setAnalyticsLoading(false);
+            }
+            const result = await fetchSmartResource(`/api/admin/analytics/summary${query}`, {
+                cacheKey,
+                ttl: 30000,
+            });
+            const summary = result.raw || result.data;
 
             setAnalytics((current) => ({
                 ...(current || {}),

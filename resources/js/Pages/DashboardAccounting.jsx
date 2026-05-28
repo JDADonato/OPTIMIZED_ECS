@@ -19,6 +19,7 @@ import StaffStatusBadge from '../Components/staff/StaffStatusBadge';
 import StaffSkeleton, { StaffWorkspaceSkeleton } from '../Components/staff/StaffSkeleton';
 import { staffPaymentStatus } from '../utils/statusLabels';
 import csrfFetch from '../utils/csrf';
+import { clearSmartCacheForPrefix, fetchSmartResource, getUserScopedCacheKey, readSmartCache } from '../utils/smartResource';
 
 const PAYMENT_TYPE_LABELS = {
     Reservation: { label: 'Reservation Fee', pct: '10%', icon: 'R' },
@@ -82,6 +83,7 @@ const DashboardAccounting = () => {
     const [bookingPage, setBookingPage] = useState(1);
     const [bookingPagination, setBookingPagination] = useState(null);
     const debouncedBookingSearchQuery = useDebouncedValue(bookingSearchQuery, 250);
+    const smartCacheKey = (resourceKey) => getUserScopedCacheKey(user, resourceKey);
 
     useEffect(() => {
         if (activeTab === 'today') {
@@ -144,7 +146,7 @@ const DashboardAccounting = () => {
         },
     });
 
-    const fetchBookings = async ({ silent = false } = {}) => {
+    const fetchBookings = async ({ silent = false, force = false } = {}) => {
         if (!silent) setLoading(true);
         try {
             // Session auth - no token needed
@@ -156,10 +158,19 @@ const DashboardAccounting = () => {
                 payment_status: bookingPaymentFilter,
                 finance_segment: paymentSegment,
             }).toString();
-            const res = await fetch('/api/accounting/bookings?' + query, {
-                headers: { }
+            const cacheKey = smartCacheKey(`accounting:bookings:${query}`);
+            const cached = readSmartCache(cacheKey);
+            if (cached?.data && bookings.length === 0) {
+                setBookings(getListData(cached.data));
+                setBookingPagination(getPaginationMeta(cached.data));
+                setLoading(false);
+            }
+            const result = await fetchSmartResource('/api/accounting/bookings?' + query, {
+                cacheKey,
+                ttl: 30000,
+                force,
             });
-            const data = await res.json();
+            const data = result.raw || result.data;
             setBookings(getListData(data));
             setBookingPagination(getPaginationMeta(data));
         } catch (error) {
@@ -212,7 +223,8 @@ const DashboardAccounting = () => {
                 body: JSON.stringify({ action: action })
             });
             if (res.ok) {
-                fetchBookings();
+                clearSmartCacheForPrefix(smartCacheKey('accounting:bookings:'));
+                fetchBookings({ force: true });
                 fetchLedger({ silent: true });
                 fetchReconciliation({ silent: true });
                 fetchRefundQueue({ silent: true });
@@ -246,11 +258,17 @@ const DashboardAccounting = () => {
     const fetchAccountingSummary = async ({ silent = false } = {}) => {
         if (!silent) setLoading(true);
         try {
-            const res = await fetch('/api/accounting/summary', {
-                headers: { Accept: 'application/json' },
+            const cacheKey = smartCacheKey('accounting:summary');
+            const cached = readSmartCache(cacheKey);
+            if (cached?.data && !accountingSummary) {
+                setAccountingSummary(cached.data);
+                setLoading(false);
+            }
+            const result = await fetchSmartResource('/api/accounting/summary', {
+                cacheKey,
+                ttl: 30000,
             });
-            if (!res.ok) throw new Error('Summary load failed');
-            setAccountingSummary(await res.json());
+            setAccountingSummary(result.raw || result.data);
         } catch (error) {
             console.error('Error fetching accounting summary:', error);
         } finally {
@@ -339,8 +357,9 @@ const DashboardAccounting = () => {
             if (res.ok) {
                 setToast({ message: data?.message || 'Refund processed successfully!', type: 'success' });
                 setRefundConfirm({ isOpen: false, bookingId: null, refundAmount: 0 });
+                clearSmartCacheForPrefix(smartCacheKey('accounting:'));
                 fetchRefundQueue();
-                fetchBookings({ silent: true });
+                fetchBookings({ silent: true, force: true });
                 fetchLedger({ silent: true });
             } else {
                 let errorMsg = 'Failed to process refund.';
@@ -1783,7 +1802,8 @@ const DashboardAccounting = () => {
                 onSuccess={() => {
                     setEditPaymentModal({ isOpen: false, payment: null, booking: null });
                     setToast({ message: 'Payment terms updated successfully!', type: 'success' });
-                    fetchBookings(); // Refresh data
+                    clearSmartCacheForPrefix(smartCacheKey('accounting:'));
+                    fetchBookings({ force: true }); // Refresh data
                 }}
             />
 

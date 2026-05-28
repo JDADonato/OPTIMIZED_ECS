@@ -104,6 +104,65 @@ class WorkflowCleanupTest extends TestCase
         $this->assertSame('1900.00', (string) $pending->fresh()->amount);
     }
 
+    public function test_booking_resources_report_unchanged_when_version_matches(): void
+    {
+        $admin = $this->user('Admin');
+        $client = $this->user('Client');
+        $booking = $this->booking($client, ['status' => 'Confirmed']);
+        Payment::create(['booking_id' => $booking->id, 'amount' => 1000, 'payment_method' => 'Pending', 'status' => 'Pending', 'payment_type' => 'Reservation']);
+
+        $initial = $this->actingAs($admin)
+            ->getJson('/api/admin/bookings?paginated=1')
+            ->assertOk()
+            ->assertJsonPath('meta.changed', true);
+
+        $version = $initial->json('meta.resource_version');
+        $this->assertNotEmpty($version);
+
+        $this->actingAs($admin)
+            ->getJson('/api/admin/bookings?paginated=1&since_version=' . $version)
+            ->assertOk()
+            ->assertJsonPath('meta.changed', false)
+            ->assertJsonPath('data', null);
+    }
+
+    public function test_client_dashboard_resource_version_includes_payment_changes(): void
+    {
+        BusinessRule::create([
+            'minimum_lead_days' => 7,
+            'maximum_capacity_per_day' => 7,
+            'maximum_pax_per_event' => 1000,
+            'minimum_pax_per_event' => 1,
+            'is_active' => true,
+            'reservation_fee_percentage' => 10,
+            'downpayment_percentage' => 70,
+            'final_payment_percentage' => 20,
+        ]);
+        $client = $this->user('Client');
+        $booking = $this->booking($client, ['status' => 'Confirmed']);
+        $payment = Payment::create(['booking_id' => $booking->id, 'amount' => 1000, 'payment_method' => 'Pending', 'status' => 'Pending', 'payment_type' => 'Reservation']);
+
+        $initial = $this->actingAs($client)
+            ->getJson('/api/dashboard/client')
+            ->assertOk()
+            ->assertJsonPath('meta.changed', true);
+
+        $version = $initial->json('meta.resource_version');
+
+        $this->actingAs($client)
+            ->getJson('/api/dashboard/client?since_version=' . $version)
+            ->assertOk()
+            ->assertJsonPath('meta.changed', false);
+
+        $payment->forceFill(['status' => 'Verified', 'updated_at' => now()->addSecond()])->save();
+
+        $this->actingAs($client)
+            ->getJson('/api/dashboard/client?since_version=' . $version)
+            ->assertOk()
+            ->assertJsonPath('meta.changed', true)
+            ->assertJsonPath('payments.0.status', 'Verified');
+    }
+
     private function user(string $role, array $overrides = []): User
     {
         return User::create(array_merge([

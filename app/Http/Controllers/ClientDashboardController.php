@@ -7,7 +7,9 @@ use App\Models\FoodTasting;
 use App\Models\Payment;
 use App\Services\BookingManagementService;
 use App\Services\PaymentCalculationService;
+use App\Support\ResourceVersion;
 use Carbon\Carbon;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 
 /**
@@ -20,7 +22,7 @@ class ClientDashboardController extends Controller
      * JSON API endpoint — returns dashboard data for the original ClientDashboard.jsx
      * which fetches via fetch('/api/dashboard/client').
      */
-    public function apiData(PaymentCalculationService $paymentService, BookingManagementService $bookingService)
+    public function apiData(Request $request, PaymentCalculationService $paymentService, BookingManagementService $bookingService)
     {
         $userId = Auth::id();
 
@@ -31,6 +33,23 @@ class ClientDashboardController extends Controller
 
         $allBookings->each(fn ($booking) => $paymentService->syncPendingTranches($booking));
         $allBookings->load('payments');
+
+        $bookingIdsForVersion = $allBookings->pluck('id');
+        $latestUpdatedAt = collect([
+            $allBookings->max('updated_at'),
+            Payment::whereIn('booking_id', $bookingIdsForVersion)->max('updated_at'),
+            FoodTasting::where('user_id', $userId)->max('updated_at'),
+        ])->filter()->max();
+        $versionMeta = ResourceVersion::make(
+            $allBookings->count()
+                + Payment::whereIn('booking_id', $bookingIdsForVersion)->count()
+                + FoodTasting::where('user_id', $userId)->count(),
+            $latestUpdatedAt,
+            $bookingIdsForVersion->max()
+        );
+        if (ResourceVersion::matches($request, $versionMeta)) {
+            return ResourceVersion::unchanged($versionMeta);
+        }
 
         $allBookings = $allBookings
             ->map(function ($booking) use ($paymentService, $bookingService) {
@@ -88,6 +107,10 @@ class ClientDashboardController extends Controller
             'historyBookings' => $historyBookings,
             'tastings' => $tastings,
             'payments' => $payments,
+            'meta' => [
+                ...$versionMeta,
+                'changed' => true,
+            ],
         ]);
     }
 

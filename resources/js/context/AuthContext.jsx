@@ -5,6 +5,7 @@
  */
 import { usePage, router } from '@inertiajs/react';
 import { useState } from 'react';
+import { clearSensitiveAuthState } from '../utils/smartResource';
 
 export const useAuth = () => {
     const { auth } = usePage().props;
@@ -26,11 +27,7 @@ export const useAuth = () => {
     };
 
     const logout = () => {
-        localStorage.removeItem('ecs_booking_draft');
-        localStorage.removeItem('ecs_selected_booking_id');
-        localStorage.removeItem('ecs_home_journey_tracker_cache');
-        localStorage.removeItem('ecs_home_journey_tracker_collapsed');
-        sessionStorage.removeItem('ecs_booking_active');
+        clearSensitiveAuthState();
         router.post('/logout');
     };
 

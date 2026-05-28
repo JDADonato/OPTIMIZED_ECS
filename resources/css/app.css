@@ -3288,26 +3288,26 @@
 
   .staff-skeleton {
     display: grid;
-    gap: .7rem;
-    padding: 1rem;
+    gap: .65rem;
+    padding: .9rem;
   }
 
   .staff-skeleton-row {
     display: grid;
     grid-template-columns: 1.3fr .8fr .6fr;
     gap: .75rem;
-    border: 1px solid rgba(114,1,1,.06);
+    border: 1px solid rgba(15, 23, 42, .045);
     border-radius: .7rem;
-    background: #fff;
-    padding: .85rem;
+    background: rgba(255,255,255,.76);
+    padding: .78rem .85rem;
   }
 
   .staff-skeleton-row span {
-    height: .8rem;
+    height: .68rem;
     border-radius: 999px;
-    background: linear-gradient(90deg, #eee7df 0%, #faf7f2 42%, #eadfda 55%, #faf7f2 70%, #eee7df 100%);
+    background: linear-gradient(90deg, rgba(226, 218, 209, .62) 0%, rgba(250, 247, 242, .9) 45%, rgba(226, 218, 209, .5) 60%, rgba(250, 247, 242, .9) 78%, rgba(226, 218, 209, .62) 100%);
     background-size: 200% 100%;
-    animation: staffSkeletonPulse 1.3s ease-in-out infinite;
+    animation: staffSkeletonPulse 1.8s ease-in-out infinite;
   }
 
   .staff-skeleton-metrics {
@@ -3315,9 +3315,9 @@
   }
 
   .staff-skeleton-metric {
-    border: 1px solid rgba(114,1,1,.08);
+    border: 1px solid rgba(15, 23, 42, .045);
     border-radius: .8rem;
-    background: #fff;
+    background: rgba(255,255,255,.76);
     padding: .9rem;
   }
 
@@ -3327,9 +3327,9 @@
   .staff-skeleton-panel-lines span {
     display: block;
     border-radius: 999px;
-    background: linear-gradient(90deg, #eee7df 0%, #faf7f2 42%, #eadfda 55%, #faf7f2 70%, #eee7df 100%);
+    background: linear-gradient(90deg, rgba(226, 218, 209, .62) 0%, rgba(250, 247, 242, .9) 45%, rgba(226, 218, 209, .5) 60%, rgba(250, 247, 242, .9) 78%, rgba(226, 218, 209, .62) 100%);
     background-size: 200% 100%;
-    animation: staffSkeletonPulse 1.3s ease-in-out infinite;
+    animation: staffSkeletonPulse 1.8s ease-in-out infinite;
   }
 
   .staff-skeleton-metric span {
@@ -3350,13 +3350,10 @@
   }
 
   .staff-skeleton-panel {
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr);
-    align-items: center;
-    gap: 1rem;
-    border: 1px solid rgba(114,1,1,.08);
+    display: block;
+    border: 1px solid rgba(15, 23, 42, .045);
     border-radius: .9rem;
-    background: #fff;
+    background: rgba(255,255,255,.78);
     padding: 1.1rem;
   }
 
@@ -3397,9 +3394,11 @@
 
   .staff-skeleton-nav-item {
     pointer-events: none;
+    background: transparent;
+    box-shadow: none;
+    color: rgba(100, 116, 139, .88);
   }
 
-  .staff-skeleton-nav-item span,
   .staff-sidebar-user-actions span,
   .staff-workspace-skeleton-head span,
   .staff-workspace-skeleton-head strong,
@@ -3407,14 +3406,17 @@
   .staff-workspace-skeleton-surface .staff-filter-bar span {
     display: block;
     border-radius: 999px;
-    background: linear-gradient(90deg, #eee7df 0%, #faf7f2 42%, #eadfda 55%, #faf7f2 70%, #eee7df 100%);
+    background: linear-gradient(90deg, rgba(226, 218, 209, .62) 0%, rgba(250, 247, 242, .9) 45%, rgba(226, 218, 209, .5) 60%, rgba(250, 247, 242, .9) 78%, rgba(226, 218, 209, .62) 100%);
     background-size: 200% 100%;
-    animation: staffSkeletonPulse 1.3s ease-in-out infinite;
+    animation: staffSkeletonPulse 1.8s ease-in-out infinite;
   }
 
   .staff-skeleton-nav-item span {
-    width: min(8rem, 76%);
-    height: .8rem;
+    display: inline;
+    width: auto;
+    height: auto;
+    background: transparent;
+    animation: none;
   }
 
   .staff-sidebar-user-actions span {
@@ -3452,15 +3454,15 @@
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));
     overflow: hidden;
-    border: 1px solid rgba(114,1,1,.12);
+    border: 1px solid rgba(114,1,1,.08);
     border-radius: .85rem;
-    background: #fff;
+    background: rgba(255,255,255,.74);
   }
 
   .staff-workspace-skeleton-metrics i {
     height: 4rem;
     border-radius: 0;
-    border-right: 1px solid rgba(114,1,1,.08);
+    border-right: 1px solid rgba(114,1,1,.045);
   }
 
   .staff-workspace-skeleton-metrics i:last-child {
@@ -3472,10 +3474,10 @@
   }
 
   .staff-workspace-skeleton-surface .staff-filter-bar span {
-    height: 2.55rem;
+    height: 2.35rem;
     border-radius: .75rem;
-    border: 1px solid rgba(114,1,1,.06);
-    background-color: #fff;
+    border: 1px solid rgba(15, 23, 42, .045);
+    background-color: rgba(255,255,255,.72);
   }
 
   @keyframes staffSkeletonPulse {

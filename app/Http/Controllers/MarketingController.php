@@ -16,6 +16,7 @@ use App\Services\EventPreparationService;
 use App\Services\PaymentCalculationService;
 use App\Services\PostEventLifecycleService;
 use App\Support\ApiResponse;
+use App\Support\ResourceVersion;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -73,16 +74,24 @@ class MarketingController extends Controller
             default => $query->orderBy('event_date', 'asc'),
         };
 
+        $versionMeta = ResourceVersion::fromQuery($query);
+        if (ResourceVersion::matches($request, $versionMeta)) {
+            return ResourceVersion::unchanged($versionMeta);
+        }
+
         if ($request->boolean('paginated')) {
             $perPage = min(max((int) $request->query('per_page', 25), 1), 100);
             $bookings = $query->paginate($perPage);
 
-            return ApiResponse::paginated($bookings, BookingSummaryResource::collection($bookings->getCollection())->resolve());
+            return ApiResponse::paginated($bookings, BookingSummaryResource::collection($bookings->getCollection())->resolve(), [
+                ...$versionMeta,
+                'changed' => true,
+            ]);
         }
 
         $bookings = BookingSummaryResource::collection($query->get())->resolve();
 
-        return response()->json($bookings);
+        return ResourceVersion::changed($bookings, $versionMeta);
     }
 
     public function searchCustomers(Request $request)
