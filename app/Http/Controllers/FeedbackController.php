@@ -6,6 +6,7 @@ use App\Models\FeedbackRequest;
 use App\Models\FeedbackResponse;
 use App\Models\User;
 use App\Notifications\StaffOperationalNotification;
+use App\Services\ConversionEventService;
 use App\Services\PostEventLifecycleService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -93,7 +94,27 @@ class FeedbackController extends Controller
             'completed_at' => now(),
         ]);
 
+        ConversionEventService::record('feedback_submitted', [
+            'booking_id' => $feedbackRequest->booking_id,
+            'source' => 'customer_dashboard',
+            'metadata' => [
+                'rating' => (int) $response->rating,
+                'testimonial_permission' => (bool) $response->testimonial_permission,
+                'review_status' => $response->review_status,
+                'testimonial_status' => $response->testimonial_status,
+            ],
+        ]);
+
         if ((int) $response->rating <= 3 || $response->testimonial_status === 'Candidate') {
+            ConversionEventService::record((int) $response->rating <= 3 ? 'low_feedback_followup_created' : 'testimonial_candidate_created', [
+                'booking_id' => $feedbackRequest->booking_id,
+                'source' => 'post_event_feedback',
+                'metadata' => [
+                    'rating' => (int) $response->rating,
+                    'testimonial_status' => $response->testimonial_status,
+                ],
+            ]);
+
             $subject = (int) $response->rating <= 3 ? 'Low feedback rating needs follow-up' : 'New testimonial candidate';
             $body = (int) $response->rating <= 3
                 ? 'A completed event received a low rating and needs staff follow-up.'

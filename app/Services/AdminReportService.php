@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\Booking;
 use App\Models\Payment;
+use App\Services\ConversionEventService;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -90,8 +91,9 @@ class AdminReportService
                 'menuPerformance' => $menuPerformance['rows'],
                 'customerExperience' => [
                     'customerGrowth' => $customerGrowth['rows'],
-                    'feedbackSignals' => [],
+                    'feedbackSignals' => $this->memo('conversionFunnel', $filters, fn () => $this->conversionFunnel($filters))['feedbackSignals'],
                 ],
+                'conversionFunnel' => $this->memo('conversionFunnel', $filters, fn () => $this->conversionFunnel($filters)),
                 'operationsLoad' => $operationsLoad,
                 'alerts' => $operationalAlerts,
                 'operationalAlerts' => $operationalAlerts,
@@ -113,6 +115,7 @@ class AdminReportService
             return [
                 'summary' => $this->summary($filters, $summary),
                 'businessSnapshot' => $this->memo('businessSnapshot', $filters, fn () => $this->businessSnapshot($filters)),
+                'conversionFunnel' => $this->memo('conversionFunnel', $filters, fn () => $this->conversionFunnel($filters)),
                 'alerts' => $this->memo('operationalAlerts', $filters, fn () => $this->operationalAlerts($filters)),
             ];
         });
@@ -154,7 +157,8 @@ class AdminReportService
         return $this->cachedPart('customer', $filters, 300, function () use ($filters) {
             return [
                 'customerGrowth' => $this->memo('customerGrowth', $filters, fn () => $this->customerGrowth($filters))['rows'],
-                'feedbackSignals' => [],
+                'feedbackSignals' => $this->memo('conversionFunnel', $filters, fn () => $this->conversionFunnel($filters))['feedbackSignals'],
+                'conversionFunnel' => $this->memo('conversionFunnel', $filters, fn () => $this->conversionFunnel($filters)),
             ];
         });
     }
@@ -184,6 +188,8 @@ class AdminReportService
 
     private function summary(array $filters, array $summary): array
     {
+        $conversion = $this->memo('conversionFunnel', $filters, fn () => $this->conversionFunnel($filters));
+
         return [
             'settledRevenue' => $summary['settledRevenue'],
             'pendingRevenue' => $summary['pendingRevenue'],
@@ -195,6 +201,39 @@ class AdminReportService
             'activeBookings' => $this->memo('activeBookings', $filters, fn () => $this->countBookings($filters, ['Confirmed'])),
             'completedBookings' => $this->memo('completedBookings', $filters, fn () => $this->countBookings($filters, ['Completed'])),
             'totalPax' => $this->memo('totalPax', $filters, fn () => $this->bookingQuery($filters)->sum('pax') ?: 0),
+            'bookingCompletionRate' => $conversion['booking_completion_rate'],
+            'paymentCompletionRate' => $conversion['payment_completion_rate'],
+            'feedbackSubmissions' => $conversion['feedback_submissions'],
+        ];
+    }
+
+    private function conversionFunnel(array $filters): array
+    {
+        $window = $filters['snapshot_window'] ?? 'all';
+        $range = $this->snapshotFilters($window);
+        $from = isset($range['date_from']) ? Carbon::parse($range['date_from'])->startOfDay() : null;
+        $to = isset($range['date_to']) ? Carbon::parse($range['date_to'])->endOfDay() : null;
+        $summary = ConversionEventService::summarize($from, $to);
+
+        return [
+            ...$summary,
+            'feedbackSignals' => [
+                [
+                    'label' => 'Feedback submitted',
+                    'count' => $summary['feedback_submissions'],
+                    'action' => 'Review completed event responses.',
+                ],
+                [
+                    'label' => 'Testimonial candidates',
+                    'count' => $summary['testimonial_candidates'],
+                    'action' => 'Approve strong testimonials for public proof.',
+                ],
+                [
+                    'label' => 'Low-rating follow-ups',
+                    'count' => $summary['low_feedback_followups'],
+                    'action' => 'Resolve service concerns before they become churn.',
+                ],
+            ],
         ];
     }
 

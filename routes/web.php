@@ -7,6 +7,7 @@ use App\Http\Controllers\BookingController;
 use App\Http\Controllers\CalendarAvailabilityController;
 use App\Http\Controllers\ClientDashboardController;
 use App\Http\Controllers\ContactInquiryController;
+use App\Http\Controllers\ConversionEventController;
 use App\Http\Controllers\DocumentController;
 use App\Http\Controllers\EventTypeController;
 use App\Http\Controllers\FileUploadController;
@@ -122,6 +123,7 @@ Route::middleware('auth')->group(function () {
     Route::put('/api/notifications/{id}/read', [NotificationController::class, 'markAsRead']);
     Route::put('/api/notifications/read-all', [NotificationController::class, 'markAllAsRead']);
     Route::delete('/api/notifications/{id}', [NotificationController::class, 'destroy']);
+    Route::post('/api/conversion-events', [ConversionEventController::class, 'store'])->middleware('throttle:60,1');
 
     // ─── Legacy Messaging Routes (kept for backward compatibility) ───
     Route::get('/api/messages/conversations', [MessageController::class, 'conversations']);

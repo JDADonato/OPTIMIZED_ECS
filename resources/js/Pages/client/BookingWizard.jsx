@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Head, router, Link } from '@inertiajs/react';
 import axios from 'axios';
 import { useAuth } from '../../context/AuthContext';
@@ -14,6 +14,7 @@ import BlueprintPanel from '../../Components/client/BlueprintPanel';
 import Modal from '../../Components/common/Modal';
 import ClientNavbar from '../../Components/common/ClientNavbar';
 import { getCustomerSafeValidationMessage } from '../../utils/dashboardUtils';
+import csrfFetch from '../../utils/csrf';
 
 const totalSteps = 7;
 
@@ -43,6 +44,18 @@ const trackPublicFunnel = (event, payload = {}) => {
     if (typeof window === 'undefined') return;
     window.dispatchEvent(new CustomEvent('ecs:funnel', { detail: { event, ...payload } }));
     window.dataLayer?.push({ event: `ecs_${event}`, ...payload });
+};
+
+const logConversionEvent = (eventName, payload = {}) => {
+    csrfFetch('/api/conversion-events', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            event_name: eventName,
+            source: 'customer_booking_wizard',
+            ...payload,
+        }),
+    }).catch(() => {});
 };
 
 const summarizeBookingCosts = (data = {}) => {
@@ -115,6 +128,25 @@ const BookingWizard = () => {
     const [isSubmittingBooking, setIsSubmittingBooking] = useState(false);
     const [reviewData, setReviewData] = useState(null);
     const [showReviewModal, setShowReviewModal] = useState(false);
+
+    useEffect(() => {
+        logConversionEvent('booking_started', {
+            step: 'Vision',
+            metadata: { resume_available: Boolean(resumeStep) },
+        });
+    }, []);
+
+    useEffect(() => {
+        logConversionEvent('booking_step_viewed', {
+            step: stepLabels.find(item => item.step === currentStep)?.label || String(currentStep),
+            metadata: {
+                step_number: currentStep,
+                event_type: bookingData.eventType || null,
+                has_date: Boolean(bookingData.date),
+                pax: bookingData.pax || null,
+            },
+        });
+    }, [currentStep]);
 
     const showModal = (type, title, message, onConfirm = null, confirmText = null) => {
         setModal({ isOpen: true, type, title, message, onConfirm, confirmText });

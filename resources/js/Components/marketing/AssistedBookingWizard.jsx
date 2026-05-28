@@ -105,6 +105,18 @@ const selectedMenuPayload = (data = {}) => ({
     notes: data.dietaryNotes || null,
 });
 
+const logAssistedConversionEvent = (eventName, payload = {}) => {
+    csrfFetch('/api/conversion-events', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            event_name: eventName,
+            source: 'assisted_booking_wizard',
+            ...payload,
+        }),
+    }).catch(() => {});
+};
+
 const AssistedBookingWizard = ({ isOpen, onClose, onCreated, onOpenBooking, toast }) => {
     const [currentStep, setCurrentStep] = useState(0);
     const [customerState, setCustomerState] = useState(initialCustomerState);
@@ -128,7 +140,24 @@ const AssistedBookingWizard = ({ isOpen, onClose, onCreated, onOpenBooking, toas
         setCustomerSearchPage(1);
         setSummaryCollapsed(false);
         setResult(null);
+        logAssistedConversionEvent('assisted_booking_started', {
+            step: 'Customer',
+            metadata: { entry_point: 'marketing_workspace' },
+        });
     }, [isOpen]);
+
+    useEffect(() => {
+        if (!isOpen) return;
+        logAssistedConversionEvent('assisted_booking_step_viewed', {
+            step: steps.find(item => item.step === currentStep)?.label || String(currentStep),
+            metadata: {
+                step_number: currentStep,
+                customer_mode: customerState.mode,
+                event_type: bookingData.eventType || null,
+                pax: bookingData.pax || null,
+            },
+        });
+    }, [isOpen, currentStep]);
 
     useEffect(() => {
         setCustomerSearchPage(1);

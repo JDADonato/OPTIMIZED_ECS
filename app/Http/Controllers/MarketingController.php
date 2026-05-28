@@ -11,6 +11,7 @@ use App\Models\User;
 use App\Notifications\CustomerAssistedBookingInviteNotification;
 use App\Notifications\NewBookingNotification;
 use App\Services\BookingValidationService;
+use App\Services\ConversionEventService;
 use App\Services\EmailDeliveryService;
 use App\Services\EventPreparationService;
 use App\Services\PaymentCalculationService;
@@ -326,6 +327,21 @@ class MarketingController extends Controller
             return response()->json(['error' => $e->getMessage()], 422);
         }
 
+        ConversionEventService::record('assisted_booking_submitted', [
+            'user' => $actor,
+            'booking' => $booking,
+            'source' => $actor->role === 'Admin' ? 'admin_assisted' : 'marketing_assisted',
+            'step' => 'review',
+            'metadata' => [
+                'customer_mode' => $data['customer_mode'],
+                'created_new_customer' => $createdNewCustomer,
+                'send_invite' => $request->boolean('send_invite', true),
+                'event_type' => $booking->event_type,
+                'pax' => $booking->pax,
+                'total_cost' => (float) ($booking->total_cost ?? 0),
+            ],
+        ]);
+
         $inviteDelivery = ['status' => 'skipped_by_admin', 'message' => 'Customer invite was not requested.'];
         if ($request->boolean('send_invite', true)) {
             $inviteDelivery = $emailDelivery->sendToNotifiable(
@@ -496,6 +512,20 @@ class MarketingController extends Controller
             'reviewed_at' => in_array($request->status, ['Confirmed', 'Cancelled', 'Completed'], true) ? now() : $booking->reviewed_at,
         ]);
 
+        ConversionEventService::record(match ($request->status) {
+            'Confirmed' => 'booking_confirmed',
+            'Cancelled' => 'booking_rejected',
+            'Completed' => 'event_completed',
+            default => 'booking_status_updated',
+        }, [
+            'booking' => $booking,
+            'source' => Auth::user()?->role === 'Admin' ? 'admin_override' : 'marketing_workspace',
+            'metadata' => [
+                'status' => $request->status,
+                'review_status' => $reviewStatus,
+            ],
+        ]);
+
         if ($request->status === 'Confirmed') {
             EventPreparationService::ensureDefaultTasks($booking->fresh());
         }
@@ -565,6 +595,14 @@ class MarketingController extends Controller
                 'booking' => new BookingSummaryResource($booking->fresh(['user', 'assignee', 'transferRequestedTo', 'transferRequestedBy', 'reviewTasks', 'preparationTasks', 'historyNotes'])),
             ], 409);
         }
+
+        ConversionEventService::record('booking_claimed', [
+            'booking_id' => $booking->id,
+            'source' => Auth::user()?->role === 'Admin' ? 'admin_override' : 'marketing_workspace',
+            'metadata' => [
+                'claimed_by' => Auth::id(),
+            ],
+        ]);
 
         return response()->json([
             'success' => true,
@@ -770,6 +808,14 @@ class MarketingController extends Controller
             'status' => 'Needs Customer',
             'assigned_to' => Auth::id(),
             'customer_visible' => true,
+        ]);
+
+        ConversionEventService::record('clarification_requested', [
+            'booking' => $booking,
+            'source' => Auth::user()?->role === 'Admin' ? 'admin_override' : 'marketing_workspace',
+            'metadata' => [
+                'message_length' => mb_strlen($data['message']),
+            ],
         ]);
 
         try {

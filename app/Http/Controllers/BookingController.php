@@ -15,6 +15,7 @@ use App\Mail\BookingContinuationReminder;
 use App\Notifications\NewBookingNotification;
 use App\Services\BookingValidationService;
 use App\Services\CalendarAvailabilityService;
+use App\Services\ConversionEventService;
 use App\Services\PaymentEventService;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
@@ -130,6 +131,18 @@ class BookingController extends Controller
             'expires_at'           => now()->addHours(24), // Phase 1: Slot Expiration
         ]);
 
+        ConversionEventService::record('booking_submitted', [
+            'booking' => $booking,
+            'source' => 'customer_wizard',
+            'step' => 'review',
+            'metadata' => [
+                'event_type' => $booking->event_type,
+                'pax' => $booking->pax,
+                'total_cost' => (float) ($booking->total_cost ?? 0),
+                'has_menu' => !empty($selectedMenu),
+            ],
+        ]);
+
         foreach ([
             'Confirm date and capacity',
             'Review package and menu fit',
@@ -210,6 +223,15 @@ class BookingController extends Controller
             'review_status' => 'Clarification Received',
         ]);
 
+        ConversionEventService::record('clarification_responded', [
+            'booking' => $booking,
+            'source' => 'customer_dashboard',
+            'metadata' => [
+                'response_length' => mb_strlen($data['response']),
+                'review_status' => 'Clarification Received',
+            ],
+        ]);
+
         $booking->reviewTasks()
             ->where('task_type', 'clarification')
             ->whereRaw('customer_visible is true')
@@ -279,6 +301,16 @@ class BookingController extends Controller
         try {
             Mail::to($email)->send(new BookingContinuationReminder($user, $data));
             Cache::put($cacheKey, true, now()->addHours(6));
+            ConversionEventService::record('abandoned_booking_reminder_sent', [
+                'user' => $user,
+                'source' => 'booking_draft',
+                'step' => (string) $data['step'],
+                'metadata' => [
+                    'event_type' => $data['event_type'] ?? null,
+                    'has_event_date' => filled($data['event_date'] ?? null),
+                    'has_total' => isset($data['total_cost']),
+                ],
+            ]);
         } catch (\Throwable $e) {
             Log::warning('Booking continuation reminder failed.', [
                 'user_id' => $user->id,

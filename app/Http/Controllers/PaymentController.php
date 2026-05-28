@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Events\PaymentProcessed;
 use App\Models\Booking;
 use App\Models\Payment;
+use App\Services\ConversionEventService;
 use App\Services\PaymentCalculationService;
 use App\Services\PaymentEventService;
 use App\Services\PayMongoService;
@@ -112,6 +113,16 @@ class PaymentController extends Controller
             $checkout['id'] ?? null
         );
 
+        ConversionEventService::record('payment_checkout_started', [
+            'booking' => $booking,
+            'source' => 'customer_dashboard',
+            'metadata' => [
+                'payment_id' => $payment->id,
+                'payment_type' => $payment->payment_type,
+                'amount' => $amount,
+            ],
+        ]);
+
         Log::info('PayMongo checkout session created', [
             'booking_id' => $booking->id,
             'payment_id' => $payment->id,
@@ -187,6 +198,16 @@ class PaymentController extends Controller
                     });
 
                     broadcast(new PaymentProcessed($payment->fresh()))->toOthers();
+
+                    ConversionEventService::record('payment_confirmed', [
+                        'booking' => $payment->booking,
+                        'source' => 'paymongo_checkout',
+                        'metadata' => [
+                            'payment_id' => $payment->id,
+                            'payment_type' => $payment->payment_type,
+                            'status' => 'Paid',
+                        ],
+                    ]);
 
                     $syncStatus = 'Paid';
                     $syncMessage = 'Payment confirmed through PayMongo.';

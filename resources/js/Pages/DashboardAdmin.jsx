@@ -350,6 +350,7 @@ const DashboardAdmin = () => {
     const paxDemandSummary = paxDemandProjection.summary || {};
     const businessSnapshot = analytics?.businessSnapshot || {};
     const businessSnapshotCards = businessSnapshot.cards || [];
+    const conversionFunnel = analytics?.conversionFunnel || analyticsSummary.conversionFunnel || {};
     const visiblePackagePerformanceData = useMemo(() => {
         const minBookings = Number(packageViewFilters.minBookings || 0);
         const rows = packagePerformanceData
@@ -1934,6 +1935,11 @@ const DashboardAdmin = () => {
         const topAlerts = visibleOperationalAlerts.slice(0, 3);
         const topPackages = visiblePackagePerformanceData.slice(0, 5);
         const topDishes = visibleMenuPerformanceData.slice(0, 5);
+        const conversionCards = [
+            ['Booking completion', `${conversionFunnel.booking_completion_rate || 0}%`, `${conversionFunnel.booking_submissions || 0} submissions from ${conversionFunnel.booking_starts || 0} starts`],
+            ['Payment completion', `${conversionFunnel.payment_completion_rate || 0}%`, `${conversionFunnel.payment_confirmations || 0} confirmed from ${conversionFunnel.payment_checkout_starts || 0} checkout starts`],
+            ['Feedback captured', conversionFunnel.feedback_submissions || 0, `${conversionFunnel.testimonial_candidates || 0} testimonial candidates`],
+        ];
 
         return (
             <div className="admin-insight-workbench animate-fadeIn space-y-5">
@@ -1982,6 +1988,31 @@ const DashboardAdmin = () => {
                                     <button type="button" onClick={card.onClick} className="mt-4 text-xs font-black uppercase tracking-widest text-[#720101]">{card.action}</button>
                                 </article>
                             ))}
+                        </div>
+                    )}
+                </section>
+
+                <section className="admin-panel overflow-hidden">
+                    <div className="flex flex-col gap-2 border-b border-gray-100 bg-white p-5 md:flex-row md:items-end md:justify-between">
+                        <div>
+                            <p className="admin-kicker">Conversion roadmap</p>
+                            <h3 className="mt-1 text-xl font-black text-gray-950">Completed booking signals</h3>
+                            <p className="mt-1 text-sm font-semibold text-gray-500">Tracks the funnel signals from `PLANS.md`: booking completion, payment movement, and post-event trust.</p>
+                        </div>
+                        <button type="button" onClick={() => setActiveTab('bookings-intake')} className="text-xs font-black uppercase tracking-widest text-[#720101]">Open booking work</button>
+                    </div>
+                    <div className="grid gap-3 p-5 md:grid-cols-3">
+                        {conversionCards.map(([label, value, context]) => (
+                            <article key={label} className="rounded-xl border border-[#720101]/10 bg-[#fffaf3] p-4">
+                                <p className="text-xs font-black uppercase tracking-widest text-[#9f6500]">{label}</p>
+                                <p className="mt-3 text-3xl font-black text-gray-950">{value}</p>
+                                <p className="mt-2 text-sm font-semibold leading-6 text-gray-500">{context}</p>
+                            </article>
+                        ))}
+                    </div>
+                    {(conversionFunnel.low_feedback_followups || 0) > 0 && (
+                        <div className="border-t border-[#720101]/10 bg-[#fff7e8] px-5 py-3 text-sm font-bold text-[#720101]">
+                            {conversionFunnel.low_feedback_followups} low-rating follow-up{conversionFunnel.low_feedback_followups === 1 ? '' : 's'} need retention attention.
                         </div>
                     )}
                 </section>
