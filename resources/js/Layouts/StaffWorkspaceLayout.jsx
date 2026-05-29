@@ -1,6 +1,5 @@
 import React from 'react';
 import { Link } from '@inertiajs/react';
-import NotificationBell from '../Components/common/NotificationBell';
 import useOnlineStatus from '../hooks/useOnlineStatus';
 
 const StaffWorkspaceLayout = ({
@@ -57,9 +56,6 @@ const StaffWorkspaceLayout = ({
             </aside>
 
             <div className="staff-workspace-main">
-                <div className="staff-workspace-tools">
-                    <NotificationBell variant="dark" placement="fixed-right" />
-                </div>
                 <main>
                     {!online && (
                         <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 px-5 py-3 text-sm font-bold text-amber-900 shadow-sm">

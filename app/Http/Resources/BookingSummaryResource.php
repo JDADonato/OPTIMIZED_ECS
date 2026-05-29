@@ -92,6 +92,7 @@ class BookingSummaryResource extends JsonResource
             'preparation_tasks' => $this->whenLoaded('preparationTasks', fn () => $this->preparationTasks->map(fn ($task) => [
                 'id' => $task->id,
                 'department' => $task->department,
+                'responsible_area' => $this->responsibleArea($task->department),
                 'label' => $task->label,
                 'status' => $task->status,
                 'due_at' => $task->due_at,
@@ -154,5 +155,13 @@ class BookingSummaryResource extends JsonResource
     private function normalizedBookingStatus(): ?string
     {
         return $this->status === 'Reserved' ? 'Confirmed' : $this->status;
+    }
+
+    private function responsibleArea(?string $department): string
+    {
+        return match ($department) {
+            'Operations', 'Admin', 'Service prep', null, '' => 'Service prep',
+            default => $department,
+        };
     }
 }

@@ -24,12 +24,16 @@ const sortMessagesOldestFirst = (items = []) => [...items].sort((a, b) => {
     return left - right;
 });
 
-const StaffMessaging = () => {
+const StaffMessaging = ({ variant = 'staff', refreshToken = 0, onMetricsChange = null }) => {
     const { user } = useAuth();
     const hasRealtime = typeof window !== 'undefined' && Boolean(window.Echo);
-    const [sidebarTab, setSidebarTab] = useState('unassigned'); // 'unassigned' | 'my-chats'
+    const isAdminOversight = variant === 'admin-oversight' && user?.role === 'Admin';
+    const [sidebarTab, setSidebarTab] = useState(isAdminOversight ? 'needs-attention' : 'unassigned');
     const [unassigned, setUnassigned] = useState([]);
     const [myChats, setMyChats] = useState([]);
+    const [adminNeedsAttention, setAdminNeedsAttention] = useState([]);
+    const [adminAllActive, setAdminAllActive] = useState([]);
+    const [adminResolved, setAdminResolved] = useState([]);
     const [selectedConv, setSelectedConv] = useState(null);
     const [messages, setMessages] = useState([]);
     const [newMessage, setNewMessage] = useState('');
@@ -46,6 +50,7 @@ const StaffMessaging = () => {
     const [editingMessageId, setEditingMessageId] = useState(null);
     const [editingText, setEditingText] = useState('');
     const [openActionMessageId, setOpenActionMessageId] = useState(null);
+    const [showAdminActions, setShowAdminActions] = useState(false);
     const messagesEndRef = useRef(null);
     const shouldScrollToBottomRef = useRef(false);
     const echoChannelsRef = useRef({});
@@ -53,6 +58,10 @@ const StaffMessaging = () => {
 
     // Keep ref in sync for use in Echo callbacks
     useEffect(() => { selectedConvRef.current = selectedConv; }, [selectedConv]);
+
+    useEffect(() => {
+        setSidebarTab(isAdminOversight ? 'needs-attention' : 'unassigned');
+    }, [isAdminOversight]);
 
     // ─── Data Fetching ───
 
@@ -63,10 +72,21 @@ const StaffMessaging = () => {
                 const d = await res.json();
                 setUnassigned(d.unassigned || []);
                 setMyChats(d.my_chats || []);
+                setAdminNeedsAttention(d.needs_attention || []);
+                setAdminAllActive(d.all_active || d.all_chats || []);
+                setAdminResolved(d.resolved || []);
+                if (typeof onMetricsChange === 'function') {
+                    onMetricsChange({
+                        open: d.summary?.open_conversations ?? (d.all_active || d.all_chats || []).length,
+                        needsAttention: d.summary?.needs_attention ?? (d.needs_attention || []).length,
+                        unassigned: d.summary?.unassigned ?? (d.unassigned || []).length,
+                        resolvedToday: d.summary?.resolved_today ?? (d.resolved || []).length,
+                    });
+                }
             }
         } catch (e) { /* silent */ }
         finally { setLoading(false); }
-    }, []);
+    }, [onMetricsChange]);
 
     const normalizeMessagesResponse = (payload) => {
         if (Array.isArray(payload)) {
@@ -136,6 +156,12 @@ const StaffMessaging = () => {
         refresh: fetchConversations,
     });
 
+    useEffect(() => {
+        if (refreshToken > 0) {
+            fetchConversations();
+        }
+    }, [refreshToken, fetchConversations]);
+
     // ─── Subscribe to Conversation Channel When Selected ───
 
     useEffect(() => {
@@ -187,6 +213,8 @@ const StaffMessaging = () => {
     const selectConversation = (conv) => {
         setSelectedConv(conv);
         setHasOlderMessages(false);
+        setShowAdminActions(false);
+        setShowTransfer(false);
         fetchMessages(conv.id);
     };
 
@@ -201,7 +229,7 @@ const StaffMessaging = () => {
             if (res.ok) {
                 const d = await res.json();
                 setSelectedConv({ ...selectedConv, ...d.conversation });
-                setSidebarTab('my-chats');
+                setSidebarTab(isAdminOversight ? 'all-active' : 'my-chats');
                 fetchConversations();
             } else {
                 const err = await res.json();
@@ -212,6 +240,25 @@ const StaffMessaging = () => {
             setErrorModal({ isOpen: true, message: 'Failed to claim conversation.' });
         }
         finally { setClaiming(false); }
+    };
+
+    const handleAdminJoin = async () => {
+        if (!selectedConv || claiming) return;
+        setClaiming(true);
+        try {
+            const res = await csrfFetch(`/api/chat/conversations/${selectedConv.id}/join`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+            });
+            const payload = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(payload.error || 'Failed to join conversation.');
+            setSelectedConv(payload.conversation || selectedConv);
+            fetchConversations();
+        } catch (e) {
+            setErrorModal({ isOpen: true, message: e.message || 'Failed to join conversation.' });
+        } finally {
+            setClaiming(false);
+        }
     };
 
     const handleResolve = async () => {
@@ -257,6 +304,7 @@ const StaffMessaging = () => {
             });
             if (res.ok) {
                 setShowTransfer(false);
+                setShowAdminActions(false);
                 setSelectedConv(null);
                 setMessages([]);
                 fetchConversations();
@@ -283,6 +331,7 @@ const StaffMessaging = () => {
             const payload = await res.json().catch(() => ({}));
             if (!res.ok) throw new Error(payload.error || 'Failed to invite staff.');
             setShowTransfer(false);
+            setShowAdminActions(false);
             setSelectedConv(payload.conversation || selectedConv);
             fetchConversations();
         } catch (e) {
@@ -391,6 +440,26 @@ const StaffMessaging = () => {
         setEditingText(msg.message);
     };
 
+    const handleInternalNote = async () => {
+        if (!selectedConv) return;
+        const note = window.prompt('Internal note for staff only', selectedConv.internal_notes || '');
+        if (note === null) return;
+
+        try {
+            const res = await csrfFetch(`/api/chat/conversations/${selectedConv.id}/internal-notes`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+                body: JSON.stringify({ internal_notes: note }),
+            });
+            const payload = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(payload.error || 'Failed to save internal note.');
+            setSelectedConv(prev => prev ? { ...prev, internal_notes: payload.internal_notes || note } : prev);
+            fetchConversations();
+        } catch (e) {
+            setErrorModal({ isOpen: true, message: e.message || 'Failed to save internal note.' });
+        }
+    };
+
     const cancelEditMessage = () => {
         setOpenActionMessageId(null);
         setEditingMessageId(null);
@@ -437,16 +506,391 @@ const StaffMessaging = () => {
 
     // ─── Sidebar Helpers ───
 
-    const currentList = sidebarTab === 'unassigned' ? unassigned : myChats;
-    const totalUnread = [...unassigned, ...myChats].reduce((sum, c) => sum + (c.unread_count || 0), 0);
+    const adminLists = {
+        'needs-attention': adminNeedsAttention,
+        'all-active': adminAllActive,
+        unassigned,
+        resolved: adminResolved,
+    };
+    const currentList = isAdminOversight
+        ? (adminLists[sidebarTab] || adminNeedsAttention)
+        : (sidebarTab === 'unassigned' ? unassigned : myChats);
+    const allVisibleConversations = isAdminOversight
+        ? [...adminNeedsAttention, ...adminAllActive, ...unassigned, ...adminResolved]
+        : [...unassigned, ...myChats];
+    const totalUnread = Array.from(new Map(allVisibleConversations.map((conv) => [conv.id, conv])).values())
+        .reduce((sum, c) => sum + (c.unread_count || 0), 0);
     const canReply = Boolean(selectedConv?.can_reply);
     const canTransfer = Boolean(selectedConv?.can_transfer);
     const canResolve = Boolean(selectedConv?.can_resolve);
     const canInvite = Boolean(selectedConv?.can_invite);
     const isCollaborator = Boolean(selectedConv?.collaborators?.some((member) => member.id === user?.id));
+    const adminJoined = Boolean(selectedConv?.admin_observers?.some((member) => member.id === user?.id));
     const isClaimedByMe = canReply;
+    const selectedOwnerName = selectedConv?.owner?.name || selectedConv?.staff_name;
+    const getDisplayOwnerName = (conv) => conv?.owner?.name || conv?.staff_name || null;
+    const getConversationOwnerLabel = (conv) => {
+        if (conv.status === 'resolved') return 'Resolved';
+        if (conv.admin_observers?.length) return 'Admin joined';
+        if (conv.owner?.name || conv.staff_name) return `Handled by ${conv.owner?.name || conv.staff_name}`;
+        return 'Unassigned';
+    };
+    const getAdminConversationChips = (conv) => {
+        const chips = [];
+        if (!conv) return chips;
+        if (conv.status === 'resolved') {
+            chips.push(['Resolved', 'bg-emerald-50 text-emerald-700 border-emerald-100']);
+        } else if (!conv.staff_id) {
+            chips.push(['Unassigned', 'bg-amber-50 text-amber-700 border-amber-100']);
+        } else {
+            chips.push([conv.admin_observers?.length ? 'Admin joined' : 'Marketing owned', conv.admin_observers?.length ? 'bg-primary-50 text-primary-700 border-primary-100' : 'bg-slate-50 text-slate-600 border-slate-200']);
+        }
+        if ((conv.unread_count || 0) > 0) {
+            chips.push(['Needs attention', 'bg-red-50 text-red-700 border-red-100']);
+        }
+        return chips;
+    };
+    const getEmptyText = () => {
+        if (!isAdminOversight) {
+            return sidebarTab === 'unassigned'
+                ? ['No unassigned inquiries', 'New client messages will appear here']
+                : ['No active chats', 'Claim an inquiry to start chatting'];
+        }
+        const messages = {
+            'needs-attention': ['No conversations need Admin attention', 'Unread, overdue, and escalated chats will appear here.'],
+            'all-active': ['No active conversations', 'Current customer conversations will appear here.'],
+            unassigned: ['No unassigned conversations', 'New conversations waiting for staff assignment will appear here.'],
+            resolved: ['No recently resolved conversations', 'Closed conversations will appear here for review.'],
+        };
+        return messages[sidebarTab] || messages['needs-attention'];
+    };
+    const emptyText = getEmptyText();
 
     // ─── Render ───
+
+    if (isAdminOversight) {
+        const adminFilterOptions = [
+            ['needs-attention', 'Needs attention', adminNeedsAttention.length],
+            ['all-active', 'Active', adminAllActive.length],
+            ['unassigned', 'Unassigned', unassigned.length],
+            ['resolved', 'Resolved', adminResolved.length],
+        ];
+        const selectedChips = getAdminConversationChips(selectedConv);
+        const selectedOwnerLabel = selectedConv?.status === 'resolved'
+            ? 'Resolved'
+            : selectedOwnerName
+                ? `Handled by ${selectedOwnerName}`
+                : 'Unassigned';
+
+        return (
+            <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm" style={{ height: '640px' }}>
+                <div className="flex h-full">
+                    <aside className="w-[19rem] flex-shrink-0 border-r border-gray-200 bg-white">
+                        <div className="border-b border-gray-100 bg-gray-50/80 px-4 py-3">
+                            <div className="flex items-center justify-between gap-3">
+                                <h3 className="text-sm font-black text-gray-950">Conversation oversight</h3>
+                                {totalUnread > 0 && (
+                                    <span className="rounded-full bg-primary-600 px-2 py-0.5 text-[10px] font-black text-white">{totalUnread} new</span>
+                                )}
+                            </div>
+                            <div className="mt-3 grid grid-cols-2 gap-2">
+                                {adminFilterOptions.map(([id, label, count]) => (
+                                    <button
+                                        key={id}
+                                        type="button"
+                                        onClick={() => setSidebarTab(id)}
+                                        className={`flex items-center justify-between rounded-xl border px-3 py-2 text-left text-[11px] font-black transition ${sidebarTab === id ? 'border-amber-200 bg-white text-primary-700 shadow-sm' : 'border-transparent bg-transparent text-slate-500 hover:bg-white hover:text-slate-700'}`}
+                                    >
+                                        <span className="truncate">{label}</span>
+                                        {count > 0 && <span className="ml-2 flex h-5 min-w-5 items-center justify-center rounded-full bg-amber-100 px-1.5 text-[10px] text-amber-700">{count}</span>}
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+
+                        <div className="h-[calc(100%-5.75rem)] overflow-y-auto">
+                            {loading ? (
+                                <div className="p-4">
+                                    <StaffSkeleton rows={5} label="Loading conversations" />
+                                </div>
+                            ) : currentList.length === 0 ? (
+                                <div className="px-5 py-10 text-center">
+                                    <svg className="mx-auto mb-3 h-10 w-10 text-gray-200" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" /></svg>
+                                    <p className="text-sm font-bold text-slate-400">{emptyText[0]}</p>
+                                    <p className="mt-1 text-xs text-slate-300">{emptyText[1]}</p>
+                                </div>
+                            ) : (
+                                <div className="divide-y divide-gray-100">
+                                    {currentList.map(conv => (
+                                        <button
+                                            key={conv.id}
+                                            type="button"
+                                            onClick={() => selectConversation(conv)}
+                                            className={`w-full px-4 py-3 text-left transition ${selectedConv?.id === conv.id ? 'bg-[#fff8e8]' : 'hover:bg-gray-50'}`}
+                                        >
+                                            <div className="flex items-start gap-3">
+                                                <div className={`mt-0.5 flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full text-sm font-black ${conv.unread_count > 0 ? 'bg-primary-100 text-primary-700' : 'bg-gray-100 text-slate-500'}`}>
+                                                    {conv.client_name?.charAt(0).toUpperCase()}
+                                                </div>
+                                                <div className="min-w-0 flex-1">
+                                                    <div className="flex items-start justify-between gap-2">
+                                                        <p className={`truncate text-sm ${conv.unread_count > 0 ? 'font-black text-gray-950' : 'font-bold text-gray-800'}`}>{conv.client_name}</p>
+                                                        <span className="flex-shrink-0 text-[10px] font-semibold text-slate-400">{conv.last_message_time}</span>
+                                                    </div>
+                                                    <p className="truncate text-[11px] font-semibold text-slate-400">{conv.client_email || conv.booking_label || 'No email on file'}</p>
+                                                    <div className="mt-1.5 flex flex-wrap gap-1">
+                                                        {getAdminConversationChips(conv).slice(0, 2).map(([label, className]) => (
+                                                            <span key={label} className={`rounded-full border px-2 py-0.5 text-[9px] font-black uppercase tracking-wide ${className}`}>{label}</span>
+                                                        ))}
+                                                    </div>
+                                                    <p className="mt-1 truncate text-xs text-slate-500">{conv.last_message || 'No messages yet'}</p>
+                                                </div>
+                                            </div>
+                                        </button>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    </aside>
+
+                    <main className="flex min-w-0 flex-1 flex-col bg-gray-50/30">
+                        {!selectedConv ? (
+                            <div className="flex flex-1 items-center justify-center p-8">
+                                <div className="max-w-md rounded-2xl border border-gray-200 bg-white p-6 text-center shadow-sm">
+                                    <svg className="mx-auto mb-4 h-12 w-12 text-gray-200" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" /></svg>
+                                    <p className="text-base font-black text-gray-900">Select a conversation to monitor</p>
+                                    <p className="mt-2 text-sm font-semibold leading-relaxed text-slate-500">Review ownership, read the thread, and step in only when escalation is needed.</p>
+                                </div>
+                            </div>
+                        ) : (
+                            <>
+                                <div className="flex items-center justify-between gap-4 border-b border-gray-200 bg-white px-5 py-3">
+                                    <div className="flex min-w-0 items-center gap-3">
+                                        <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-primary-100 text-sm font-black text-primary-700">{selectedConv.client_name?.charAt(0).toUpperCase()}</div>
+                                        <div className="min-w-0">
+                                            <p className="truncate text-base font-black text-gray-950">{selectedConv.client_name}</p>
+                                            <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                                                {selectedChips.map(([label, className]) => (
+                                                    <span key={label} className={`rounded-full border px-2 py-0.5 text-[10px] font-black uppercase tracking-wide ${className}`}>{label}</span>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div className="flex flex-shrink-0 items-center gap-2">
+                                        {!canReply && selectedConv.status !== 'resolved' && selectedConv.staff_id && (
+                                            <button onClick={handleAdminJoin} disabled={claiming}
+                                                className="rounded-xl border border-primary-200 bg-primary-50 px-4 py-2 text-xs font-black text-primary-700 transition hover:bg-primary-100 disabled:opacity-60">
+                                                {claiming ? 'Joining...' : 'Join conversation'}
+                                            </button>
+                                        )}
+                                        {!selectedConv.staff_id && selectedConv.status !== 'resolved' && (
+                                            <button onClick={handleClaim} disabled={claiming}
+                                                className="rounded-xl bg-primary-600 px-4 py-2 text-xs font-black text-white transition hover:bg-primary-700 disabled:opacity-60">
+                                                {claiming ? 'Taking over...' : 'Take over'}
+                                            </button>
+                                        )}
+                                    </div>
+                                </div>
+
+                                <div className="flex min-h-0 flex-1">
+                                    <section className="flex min-w-0 flex-1 flex-col">
+                                        <div className="flex-1 space-y-3 overflow-y-auto p-5">
+                                            {hasOlderMessages && (
+                                                <div className="flex justify-center">
+                                                    <button
+                                                        type="button"
+                                                        onClick={loadOlderMessages}
+                                                        disabled={loadingOlderMessages}
+                                                        className="rounded-full border border-gray-200 bg-white px-3 py-1.5 text-xs font-bold text-primary-700 transition-colors hover:bg-primary-50 disabled:text-gray-400"
+                                                    >
+                                                        {loadingOlderMessages ? 'Loading...' : 'Load earlier messages'}
+                                                    </button>
+                                                </div>
+                                            )}
+
+                                            {messages.length === 0 ? (
+                                                <div className="py-12 text-center">
+                                                    <p className="text-sm font-semibold text-gray-400">No messages yet</p>
+                                                </div>
+                                            ) : (
+                                                messages.map(msg => (
+                                                    <div key={msg.id} className={`group flex ${msg.is_mine ? 'justify-end' : 'justify-start'}`}>
+                                                        <div className={`relative max-w-[70%] rounded-2xl px-4 py-2.5 ${msg.is_mine ? 'bg-primary-600 text-white rounded-br-md' : 'bg-white text-gray-800 rounded-bl-md shadow-sm border border-gray-100'}`}>
+                                                            {!msg.is_mine && <p className="mb-0.5 text-[10px] font-bold text-primary-600">{msg.sender_name}</p>}
+                                                            {editingMessageId === msg.id ? (
+                                                                <div className="space-y-2">
+                                                                    <textarea value={editingText} onChange={(event) => setEditingText(event.target.value)} rows={3} className="w-72 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900 outline-none" />
+                                                                    <div className="flex justify-end gap-2">
+                                                                        <button type="button" onClick={cancelEditMessage} className={`text-[11px] font-black ${msg.is_mine ? 'text-white/70' : 'text-slate-500'}`}>Cancel</button>
+                                                                        <button type="button" onClick={() => saveEditedMessage(msg)} className="rounded-full bg-white px-3 py-1 text-[11px] font-black text-primary-700 shadow-sm">Save</button>
+                                                                    </div>
+                                                                </div>
+                                                            ) : isBookingCard(msg.message) ? renderBookingCard(msg.message, msg.is_mine) : (
+                                                                <p className="whitespace-pre-wrap break-words text-sm leading-relaxed">{msg.message}</p>
+                                                            )}
+                                                            <p className={`mt-1 text-[10px] ${msg.is_mine ? 'text-white/50' : 'text-gray-400'}`}>
+                                                                {msg.time}{msg.edited_at && !msg.deleted_at ? ' / edited' : ''}{msg.is_mine && msg.read_at && ' / Read'}
+                                                            </p>
+                                                            {(canEditMessage(msg) || canDeleteMessage(msg)) && editingMessageId !== msg.id && (
+                                                                <div className={`absolute top-2 z-30 ${msg.is_mine ? '-left-10' : '-right-10'} ${openActionMessageId === msg.id ? 'block' : 'hidden group-hover:block group-focus-within:block'}`}>
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={(event) => {
+                                                                            event.stopPropagation();
+                                                                            setOpenActionMessageId(openActionMessageId === msg.id ? null : msg.id);
+                                                                        }}
+                                                                        className="flex h-7 w-7 items-center justify-center rounded-full border border-slate-200 bg-white text-xs font-black leading-none text-slate-600 shadow-md shadow-slate-950/10 transition hover:border-primary-300 hover:text-primary-700"
+                                                                        aria-label="Message actions"
+                                                                        aria-expanded={openActionMessageId === msg.id}
+                                                                    >
+                                                                        ...
+                                                                    </button>
+                                                                    {openActionMessageId === msg.id && (
+                                                                        <div className={`absolute top-9 min-w-[8.75rem] overflow-hidden rounded-xl border border-slate-200 bg-white py-1 text-left shadow-xl shadow-slate-950/15 ${msg.is_mine ? 'right-0' : 'left-0'}`}>
+                                                                            {canEditMessage(msg) && (
+                                                                                <button type="button" onClick={() => startEditMessage(msg)} className="block w-full px-3 py-2 text-left text-xs font-black text-slate-700 transition hover:bg-slate-50">
+                                                                                    Edit message
+                                                                                </button>
+                                                                            )}
+                                                                            {canDeleteMessage(msg) && (
+                                                                                <button type="button" onClick={() => deleteMessage(msg)} className="block w-full px-3 py-2 text-left text-xs font-black text-red-700 transition hover:bg-red-50">
+                                                                                    Delete message
+                                                                                </button>
+                                                                            )}
+                                                                        </div>
+                                                                    )}
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    </div>
+                                                ))
+                                            )}
+                                            <div ref={messagesEndRef} />
+                                        </div>
+
+                                        {canReply ? (
+                                            <form onSubmit={handleSend} className="flex items-center gap-3 border-t border-gray-200 bg-white px-4 py-3">
+                                                <input type="text" value={newMessage} onChange={(e) => setNewMessage(e.target.value)}
+                                                    placeholder="Type your reply..." maxLength={2000} autoFocus
+                                                    className="flex-1 rounded-xl border border-gray-200 bg-gray-100 px-4 py-2.5 text-sm outline-none transition-all focus:border-primary-300 focus:bg-white focus:ring-2 focus:ring-primary-500/20" />
+                                                <button type="submit" disabled={!newMessage.trim() || sending}
+                                                    className="flex items-center gap-2 rounded-xl bg-primary-600 px-5 py-2.5 text-sm font-bold text-white transition-colors hover:bg-primary-700 disabled:bg-gray-300">
+                                                    Send
+                                                </button>
+                                            </form>
+                                        ) : (
+                                            <div className="border-t border-gray-200 bg-white px-4 py-3">
+                                                <div className="flex items-center justify-between gap-3 rounded-xl border border-amber-100 bg-amber-50 px-4 py-3">
+                                                    <p className="text-sm font-bold text-amber-800">Monitoring only. Join to reply.</p>
+                                                    {selectedConv?.staff_id ? (
+                                                        <button onClick={handleAdminJoin} disabled={claiming || selectedConv?.status === 'resolved'}
+                                                            className="rounded-lg bg-primary-600 px-4 py-2 text-xs font-black text-white transition hover:bg-primary-700 disabled:bg-gray-300">
+                                                            {claiming ? 'Joining...' : 'Join'}
+                                                        </button>
+                                                    ) : (
+                                                        <button onClick={handleClaim} disabled={claiming || selectedConv?.status === 'resolved'}
+                                                            className="rounded-lg bg-primary-600 px-4 py-2 text-xs font-black text-white transition hover:bg-primary-700 disabled:bg-gray-300">
+                                                            {claiming ? 'Taking over...' : 'Take over'}
+                                                        </button>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        )}
+                                    </section>
+
+                                    <aside className="w-72 flex-shrink-0 border-l border-gray-200 bg-white p-4">
+                                        <div className="flex items-start justify-between gap-3">
+                                            <div>
+                                                <p className="text-[10px] font-black uppercase tracking-widest text-amber-700">Admin context</p>
+                                                <h4 className="mt-1 text-sm font-black text-gray-950">{selectedOwnerLabel}</h4>
+                                            </div>
+                                            <div className="relative">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setShowAdminActions(!showAdminActions)}
+                                                    className="flex h-9 w-9 items-center justify-center rounded-xl border border-gray-200 bg-white text-sm font-black text-slate-600 transition hover:border-primary-200 hover:text-primary-700"
+                                                    aria-label="More conversation actions"
+                                                >
+                                                    ...
+                                                </button>
+                                                {showAdminActions && (
+                                                    <div className="absolute right-0 z-20 mt-2 w-56 overflow-hidden rounded-xl border border-gray-200 bg-white py-1 shadow-xl shadow-slate-950/15">
+                                                        {(canTransfer || canInvite) && (
+                                                            <button type="button" onClick={() => { setShowTransfer(!showTransfer); if (!showTransfer) fetchAvailableStaff(); }} className="block w-full px-3 py-2 text-left text-xs font-black text-slate-700 transition hover:bg-slate-50">
+                                                                Assign staff
+                                                            </button>
+                                                        )}
+                                                        <button type="button" onClick={handleInternalNote} className="block w-full px-3 py-2 text-left text-xs font-black text-slate-700 transition hover:bg-slate-50">
+                                                            Internal note
+                                                        </button>
+                                                        {canResolve && selectedConv.status !== 'resolved' && (
+                                                            <button type="button" onClick={handleResolve} className="block w-full px-3 py-2 text-left text-xs font-black text-red-700 transition hover:bg-red-50">
+                                                                Resolve conversation
+                                                            </button>
+                                                        )}
+                                                        {showTransfer && (
+                                                            <div className="border-t border-gray-100 py-1">
+                                                                {availableStaff.length === 0 ? (
+                                                                    <div className="px-3 py-2 text-xs text-gray-400">No staff available</div>
+                                                                ) : (
+                                                                    availableStaff.map(staff => (
+                                                                        <button key={staff.id} type="button" onClick={() => handleTransfer(staff.id)} disabled={transferring} className="block w-full px-3 py-2 text-left text-xs font-bold text-gray-700 transition hover:bg-primary-50">
+                                                                            {staff.username}
+                                                                            <span className="ml-2 text-[10px] font-semibold text-gray-400">{staff.role}</span>
+                                                                        </button>
+                                                                    ))
+                                                                )}
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
+
+                                        <div className="mt-4 space-y-3">
+                                            <div className="rounded-xl border border-gray-100 bg-gray-50 px-3 py-3">
+                                                <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Conversation</p>
+                                                <p className="mt-1 text-sm font-black text-gray-900">{selectedConv.status === 'resolved' ? 'Resolved' : selectedConv.conversation_context || 'Active'}</p>
+                                                <p className="mt-1 text-xs font-semibold text-slate-500">{selectedConv.last_message_time}</p>
+                                            </div>
+                                            <div className="rounded-xl border border-gray-100 bg-gray-50 px-3 py-3">
+                                                <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Customer</p>
+                                                <p className="mt-1 truncate text-sm font-black text-gray-900">{selectedConv.client_name}</p>
+                                                <p className="mt-1 truncate text-xs font-semibold text-slate-500">{selectedConv.client_email || 'No email on file'}</p>
+                                            </div>
+                                            <div className="rounded-xl border border-gray-100 bg-gray-50 px-3 py-3">
+                                                <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Booking context</p>
+                                                <p className="mt-1 text-sm font-black text-gray-900">{selectedConv.booking_label || 'General inquiry'}</p>
+                                                <p className="mt-1 text-xs font-semibold text-slate-500">{selectedConv.booking_status || 'No booking status'}</p>
+                                            </div>
+                                            <div className="rounded-xl border border-gray-100 bg-gray-50 px-3 py-3">
+                                                <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Internal note</p>
+                                                <p className="mt-1 text-xs font-semibold leading-relaxed text-slate-500">{selectedConv.internal_notes || 'No internal note yet.'}</p>
+                                            </div>
+                                        </div>
+                                    </aside>
+                                </div>
+                            </>
+                        )}
+                    </main>
+                </div>
+                <ConfirmModal
+                    isOpen={resolveConfirmOpen}
+                    title="Resolve conversation?"
+                    message="This will close the conversation and remove it from active support queues."
+                    confirmText="Resolve"
+                    onCancel={() => setResolveConfirmOpen(false)}
+                    onConfirm={confirmResolve}
+                />
+                <ErrorModal
+                    isOpen={errorModal.isOpen}
+                    title="Chat action failed"
+                    message={errorModal.message}
+                    onClose={() => setErrorModal({ isOpen: false, message: '' })}
+                />
+            </div>
+        );
+    }
 
     return (
         <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden" style={{ height: '600px' }}>
@@ -456,31 +900,36 @@ const StaffMessaging = () => {
                     {/* Sidebar Header */}
                     <div className="px-4 py-3 border-b border-gray-100 bg-gray-50">
                         <div className="flex items-center justify-between mb-2">
-                            <h3 className="text-sm font-bold text-gray-900">Client Messages</h3>
+                            <h3 className="text-sm font-bold text-gray-900">{isAdminOversight ? 'Conversation Oversight' : 'Client Messages'}</h3>
                             {totalUnread > 0 && (
                                 <span className="bg-primary-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-full">{totalUnread} new</span>
                             )}
                         </div>
                         {/* Tab Switcher */}
-                        <div className="flex bg-gray-100 rounded-lg p-0.5">
-                            <button
-                                onClick={() => setSidebarTab('unassigned')}
-                                className={`flex-1 py-1.5 text-[11px] font-semibold rounded-md transition-all ${sidebarTab === 'unassigned' ? 'bg-white text-primary-700 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
-                            >
-                                Unassigned
-                                {unassigned.length > 0 && (
-                                    <span className="ml-1 bg-amber-100 text-amber-700 text-[9px] font-bold px-1.5 py-0.5 rounded-full">{unassigned.length}</span>
-                                )}
-                            </button>
-                            <button
-                                onClick={() => setSidebarTab('my-chats')}
-                                className={`flex-1 py-1.5 text-[11px] font-semibold rounded-md transition-all ${sidebarTab === 'my-chats' ? 'bg-white text-primary-700 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
-                            >
-                                My Chats
-                                {myChats.length > 0 && (
-                                    <span className="ml-1 bg-green-100 text-green-700 text-[9px] font-bold px-1.5 py-0.5 rounded-full">{myChats.length}</span>
-                                )}
-                            </button>
+                        <div className={`grid gap-1 bg-gray-100 rounded-lg p-0.5 ${isAdminOversight ? 'grid-cols-2' : 'grid-cols-2'}`}>
+                            {(isAdminOversight
+                                ? [
+                                    ['needs-attention', 'Needs', adminNeedsAttention.length],
+                                    ['all-active', 'Active', adminAllActive.length],
+                                    ['unassigned', 'Unassigned', unassigned.length],
+                                    ['resolved', 'Resolved', adminResolved.length],
+                                ]
+                                : [
+                                    ['unassigned', 'Unassigned', unassigned.length],
+                                    ['my-chats', 'My Chats', myChats.length],
+                                ]
+                            ).map(([id, label, count]) => (
+                                <button
+                                    key={id}
+                                    onClick={() => setSidebarTab(id)}
+                                    className={`py-1.5 text-[11px] font-semibold rounded-md transition-all ${sidebarTab === id ? 'bg-white text-primary-700 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+                                >
+                                    {label}
+                                    {count > 0 && (
+                                        <span className="ml-1 bg-amber-100 text-amber-700 text-[9px] font-bold px-1.5 py-0.5 rounded-full">{count}</span>
+                                    )}
+                                </button>
+                            ))}
                         </div>
                     </div>
 
@@ -493,12 +942,8 @@ const StaffMessaging = () => {
                         ) : currentList.length === 0 ? (
                             <div className="p-8 text-center">
                                 <svg className="w-12 h-12 text-gray-200 mx-auto mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" /></svg>
-                                <p className="text-sm text-gray-400">
-                                    {sidebarTab === 'unassigned' ? 'No unassigned inquiries' : 'No active chats'}
-                                </p>
-                                <p className="text-xs text-gray-300 mt-1">
-                                    {sidebarTab === 'unassigned' ? 'New client messages will appear here' : 'Claim an inquiry to start chatting'}
-                                </p>
+                                <p className="text-sm text-gray-400">{emptyText[0]}</p>
+                                <p className="text-xs text-gray-300 mt-1">{emptyText[1]}</p>
                             </div>
                         ) : (
                             <div className="divide-y divide-gray-50">
@@ -514,6 +959,9 @@ const StaffMessaging = () => {
                                                 <span className="text-[10px] text-gray-400 ml-2 flex-shrink-0">{conv.last_message_time}</span>
                                             </div>
                                             {conv.client_email && <p className="text-[10px] text-gray-400 truncate">{conv.client_email}</p>}
+                                            {isAdminOversight && (
+                                                <p className="mt-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-700 truncate">{getConversationOwnerLabel(conv)}</p>
+                                            )}
                                             <p className="text-xs text-gray-400 truncate mt-0.5">{conv.last_message || 'No messages'}</p>
                                         </div>
                                         {conv.unread_count > 0 && (
@@ -532,8 +980,8 @@ const StaffMessaging = () => {
                         <div className="flex-1 flex items-center justify-center">
                             <div className="text-center">
                                 <svg className="w-16 h-16 text-gray-200 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" /></svg>
-                                <p className="text-gray-400 font-medium">Select a conversation</p>
-                                <p className="text-xs text-gray-300 mt-1">Choose a client from the left panel to start messaging</p>
+                                <p className="text-gray-400 font-medium">{isAdminOversight ? 'Select a conversation to monitor' : 'Select a conversation'}</p>
+                                <p className="text-xs text-gray-300 mt-1">{isAdminOversight ? 'Open a thread to review status, join only when needed, or assign staff.' : 'Choose a client from the left panel to start messaging'}</p>
                             </div>
                         </div>
                     ) : (
@@ -544,7 +992,18 @@ const StaffMessaging = () => {
                                     <div className="w-9 h-9 rounded-full bg-primary-100 text-primary-700 flex items-center justify-center font-bold text-sm">{selectedConv.client_name?.charAt(0).toUpperCase()}</div>
                                     <div>
                                         <p className="text-sm font-bold text-gray-900">{selectedConv.client_name}</p>
-                                        <p className="text-[11px] text-gray-400">
+                                        {isAdminOversight && (
+                                            <p className="text-[11px] text-gray-400">
+                                                {selectedConv.status === 'resolved'
+                                                    ? <span className="font-medium text-emerald-600">Resolved</span>
+                                                    : adminJoined
+                                                        ? <span className="font-medium text-primary-700">Admin joined</span>
+                                                        : selectedOwnerName
+                                                            ? <span className="font-medium text-slate-500">Monitoring - handled by {selectedOwnerName}</span>
+                                                            : <span className="font-medium text-amber-600">Unassigned - take over or assign staff</span>}
+                                            </p>
+                                        )}
+                                        <p className={`text-[11px] text-gray-400 ${isAdminOversight ? 'hidden' : ''}`}>
                                             {isClaimedByMe ? 'Claimed by you' : (
                                                 <span className="text-amber-600 font-medium">⏳ Unassigned — Claim to reply</span>
                                             )}
@@ -552,7 +1011,52 @@ const StaffMessaging = () => {
                                     </div>
                                 </div>
                                 {/* Actions (only when claimed) */}
-                                {isClaimedByMe && (
+                                {isAdminOversight && selectedConv && (
+                                    <div className="flex items-center gap-2">
+                                        {!canReply && selectedConv.status !== 'resolved' && selectedConv.staff_id && (
+                                            <button onClick={handleAdminJoin} disabled={claiming}
+                                                className="rounded-lg border border-primary-200 bg-primary-50 px-3 py-1.5 text-xs font-bold text-primary-700 transition-colors hover:bg-primary-100">
+                                                {claiming ? 'Joining...' : 'Join conversation'}
+                                            </button>
+                                        )}
+                                        {!selectedConv.staff_id && selectedConv.status !== 'resolved' && (
+                                            <button onClick={handleClaim} disabled={claiming}
+                                                className="rounded-lg border border-primary-200 bg-primary-600 px-3 py-1.5 text-xs font-bold text-white transition-colors hover:bg-primary-700">
+                                                {claiming ? 'Taking over...' : 'Take over'}
+                                            </button>
+                                        )}
+                                        {(canTransfer || canInvite) && <div className="relative">
+                                            <button onClick={() => { setShowTransfer(!showTransfer); if (!showTransfer) fetchAvailableStaff(); }}
+                                                className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-bold text-gray-600 transition-colors hover:border-primary-200 hover:bg-primary-50 hover:text-primary-700">
+                                                Assign
+                                            </button>
+                                            {showTransfer && (
+                                                <div className="absolute right-0 mt-2 w-56 bg-white border border-gray-200 rounded-xl shadow-lg z-10 py-1">
+                                                    <div className="px-3 py-2 border-b border-gray-100"><p className="text-xs font-bold text-gray-500">Assign staff</p></div>
+                                                    {availableStaff.length === 0 ? (
+                                                        <div className="px-3 py-2 text-xs text-gray-400">No staff available</div>
+                                                    ) : (
+                                                        availableStaff.map(staff => (
+                                                            <button key={staff.id} type="button" onClick={() => handleTransfer(staff.id)} disabled={transferring} className="block w-full px-3 py-2 text-left text-sm font-bold text-gray-700 transition hover:bg-primary-50">
+                                                                {staff.username}
+                                                                <span className="ml-2 text-[10px] font-semibold text-gray-400">{staff.role}</span>
+                                                            </button>
+                                                        ))
+                                                    )}
+                                                </div>
+                                            )}
+                                        </div>}
+                                        <button onClick={handleInternalNote}
+                                            className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-bold text-gray-600 transition-colors hover:border-amber-200 hover:bg-amber-50 hover:text-amber-700">
+                                            Note
+                                        </button>
+                                        {canResolve && selectedConv.status !== 'resolved' && <button onClick={handleResolve}
+                                            className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-bold text-gray-600 transition-colors hover:border-red-200 hover:bg-red-50 hover:text-red-600">
+                                            Resolve
+                                        </button>}
+                                    </div>
+                                )}
+                                {!isAdminOversight && isClaimedByMe && (
                                     <div className="flex items-center gap-2">
                                         {(canTransfer || canInvite) && <div className="relative">
                                             <button onClick={() => { setShowTransfer(!showTransfer); if (!showTransfer) fetchAvailableStaff(); }}
@@ -684,21 +1188,33 @@ const StaffMessaging = () => {
                                 </form>
                             ) : (
                                 <div className="border-t border-gray-200 px-4 py-4 bg-amber-50/50">
-                                    <button onClick={handleClaim} disabled={claiming}
-                                        className="w-full flex items-center justify-center gap-2 bg-primary-600 hover:bg-primary-700 disabled:bg-gray-300 text-white py-3 rounded-lg font-bold text-sm transition-colors shadow-sm">
-                                        {claiming ? (
-                                            <>
-                                                <div className="animate-spin w-4 h-4 border-2 border-white border-t-transparent rounded-full"></div>
-                                                Claiming...
-                                            </>
-                                        ) : (
-                                            <>
-                                                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
-                                                Claim This Conversation
-                                            </>
-                                        )}
-                                    </button>
-                                    <p className="text-center text-[11px] text-amber-700/60 mt-2">You must claim this conversation before you can reply</p>
+                                    {isAdminOversight && selectedConv?.staff_id ? (
+                                        <>
+                                            <button onClick={handleAdminJoin} disabled={claiming || selectedConv?.status === 'resolved'}
+                                                className="w-full flex items-center justify-center gap-2 bg-primary-600 hover:bg-primary-700 disabled:bg-gray-300 text-white py-3 rounded-lg font-bold text-sm transition-colors shadow-sm">
+                                                {claiming ? 'Joining...' : 'Join conversation to reply'}
+                                            </button>
+                                            <p className="text-center text-[11px] text-amber-700/60 mt-2">Admin is monitoring only until joining this thread.</p>
+                                        </>
+                                    ) : (
+                                        <>
+                                            <button onClick={handleClaim} disabled={claiming || selectedConv?.status === 'resolved'}
+                                                className="w-full flex items-center justify-center gap-2 bg-primary-600 hover:bg-primary-700 disabled:bg-gray-300 text-white py-3 rounded-lg font-bold text-sm transition-colors shadow-sm">
+                                                {claiming ? (
+                                                    <>
+                                                        <div className="animate-spin w-4 h-4 border-2 border-white border-t-transparent rounded-full"></div>
+                                                        {isAdminOversight ? 'Taking over...' : 'Claiming...'}
+                                                    </>
+                                                ) : (
+                                                    <>
+                                                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
+                                                        {isAdminOversight ? 'Take Over Conversation' : 'Claim This Conversation'}
+                                                    </>
+                                                )}
+                                            </button>
+                                            <p className="text-center text-[11px] text-amber-700/60 mt-2">{isAdminOversight ? 'Take over only when staff escalation is needed.' : 'You must claim this conversation before you can reply'}</p>
+                                        </>
+                                    )}
                                 </div>
                             )}
                         </>

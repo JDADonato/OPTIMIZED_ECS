@@ -56,7 +56,8 @@ class ChatController extends Controller
         ];
 
         if ($user->role === 'Admin') {
-            $payload['all_chats'] = $this->getAllStaffChats($user, $limit);
+            $adminLists = $this->getAdminOversightChats($user, $limit);
+            $payload = array_merge($payload, $adminLists);
         }
 
         return response()->json($payload);
@@ -115,11 +116,13 @@ class ChatController extends Controller
             ->values()
             ->map(fn ($msg) => $this->formatMessage($msg, $user));
 
-        // Mark unread messages from the other party as read
-        $conversation->messages()
-            ->where('sender_id', '!=', $user->id)
-            ->whereNull('read_at')
-            ->update(['read_at' => now()]);
+        // Monitoring should not steal unread state from the assigned owner.
+        if ($user->role === 'Client' || $this->canReplyToConversation($user, $conversation)) {
+            $conversation->messages()
+                ->where('sender_id', '!=', $user->id)
+                ->whereNull('read_at')
+                ->update(['read_at' => now()]);
+        }
 
         return response()->json([
             'data' => $messages,
@@ -301,16 +304,7 @@ class ChatController extends Controller
 
         return response()->json([
             'success' => true,
-            'conversation' => [
-                'id' => $conversation->id,
-                'client_id' => $conversation->client_id,
-                'client_name' => $conversation->client->username,
-                'staff_id' => $conversation->staff_id,
-                'staff_name' => $conversation->staff->username,
-                'status' => $conversation->status,
-                'owner' => $this->participantUser($conversation->staff, 'owner'),
-                'collaborators' => $this->participantUsers($conversation, 'collaborator'),
-            ],
+            'conversation' => $this->formatConversation($conversation->fresh(['client', 'staff', 'booking', 'latestMessage', 'participants.user']), $user),
         ]);
     }
 
@@ -879,6 +873,60 @@ class ChatController extends Controller
             ->toArray();
     }
 
+    private function getAdminOversightChats($user, int $limit = 25): array
+    {
+        $baseRelations = ['client:id,username,email', 'staff:id,username,full_name,role', 'booking:id,event_name,event_type,event_date,status', 'latestMessage.sender:id,username', 'participants.user:id,username,full_name,role'];
+        $unreadCount = function ($q) use ($user) {
+            $q->where('sender_id', '!=', $user->id)->whereNull('read_at');
+        };
+
+        $allActive = Conversation::query()
+            ->where('status', 'active')
+            ->with($baseRelations)
+            ->withCount(['messages as unread_count' => $unreadCount])
+            ->latest()
+            ->limit($limit)
+            ->get();
+
+        $needsAttention = $allActive
+            ->filter(fn ($conv) => is_null($conv->staff_id) || (int) ($conv->unread_count ?? 0) > 0)
+            ->values();
+
+        $resolved = Conversation::query()
+            ->where('status', 'resolved')
+            ->with($baseRelations)
+            ->withCount(['messages as unread_count' => $unreadCount])
+            ->latest('updated_at')
+            ->limit($limit)
+            ->get();
+
+        $resolvedToday = Conversation::query()
+            ->where('status', 'resolved')
+            ->whereDate('updated_at', now()->toDateString())
+            ->count();
+
+        return [
+            'needs_attention' => $needsAttention
+                ->map(fn ($conv) => $this->formatConversation($conv, $user))
+                ->toArray(),
+            'all_active' => $allActive
+                ->map(fn ($conv) => $this->formatConversation($conv, $user))
+                ->toArray(),
+            'resolved' => $resolved
+                ->map(fn ($conv) => $this->formatConversation($conv, $user))
+                ->toArray(),
+            'all_chats' => $allActive
+                ->map(fn ($conv) => $this->formatConversation($conv, $user))
+                ->toArray(),
+            'summary' => [
+                'open_conversations' => $allActive->count(),
+                'needs_attention' => $needsAttention->count(),
+                'unassigned' => $allActive->whereNull('staff_id')->count(),
+                'resolved_today' => $resolvedToday,
+            ],
+        ];
+    }
+
     private function upsertParticipant(Conversation $conversation, int $userId, string $role, ?int $joinedBy): ConversationParticipant
     {
         return ConversationParticipant::updateOrCreate(
@@ -901,8 +949,7 @@ class ChatController extends Controller
             return false;
         }
 
-        return $user->role === 'Admin'
-            || (int) $conversation->staff_id === (int) $user->id
+        return (int) $conversation->staff_id === (int) $user->id
             || $conversation->participants()
                 ->where('user_id', $user->id)
                 ->whereIn('role', ['collaborator', 'admin_observer', 'owner'])

@@ -94,7 +94,15 @@ class OperationsController extends Controller
         }
 
         if ($request->filled('department') && $request->query('department') !== 'all') {
-            $query->whereHas('preparationTasks', fn ($taskQuery) => $taskQuery->where('department', $request->query('department')));
+            $department = (string) $request->query('department');
+            $query->whereHas('preparationTasks', function ($taskQuery) use ($department) {
+                if ($department === 'Service prep') {
+                    $taskQuery->whereIn('department', ['Service prep', 'Admin', 'Operations']);
+                    return;
+                }
+
+                $taskQuery->where('department', $department);
+            });
         }
 
         return $query;
@@ -138,7 +146,9 @@ class OperationsController extends Controller
             ])->values(),
             'tasks' => $tasks->map(fn (EventPreparationTask $task) => [
                 'id' => $task->id,
-                'department' => $task->department,
+                'department' => $this->responsibleArea($task->department),
+                'responsible_area' => $this->responsibleArea($task->department),
+                'raw_department' => $task->department,
                 'label' => $task->label,
                 'status' => $task->status,
                 'due_at' => $task->due_at,
@@ -276,7 +286,7 @@ class OperationsController extends Controller
         $labels = [
             'payment' => 'Accounting: payment clearance pending',
             'menu' => 'Customer: final menu needed',
-            'venue' => 'Operations: venue access not ready',
+            'venue' => 'Service prep: venue access not ready',
             'headcount' => 'Customer: final headcount needed',
             'tasting' => 'Marketing: tasting outcome not recorded',
             'customer_messages' => 'Marketing: customer messages open',
@@ -315,7 +325,7 @@ class OperationsController extends Controller
     {
         return match ($key) {
             'payment' => 'Accounting',
-            'venue' => 'Operations',
+            'venue' => 'Service prep',
             'menu', 'headcount' => 'Customer',
             default => 'Marketing',
         };
@@ -335,7 +345,7 @@ class OperationsController extends Controller
         return match ($key) {
             'payment' => 'Accounting clears this after payment verification.',
             'menu' => 'Ask the customer to complete or confirm their menu.',
-            'venue' => 'Operations confirms venue access and logistics.',
+            'venue' => 'Service prep needs venue/logistics confirmation. Admin can step in if this blocks the event.',
             'headcount' => 'Ask the customer to confirm final pax.',
             'tasting' => 'Record or confirm the tasting outcome.',
             'customer_messages' => 'Resolve or reply to the linked customer conversation.',
@@ -345,10 +355,19 @@ class OperationsController extends Controller
 
     private function taskActionHint(EventPreparationTask $task): string
     {
-        return match ($task->department) {
+        return match ($this->responsibleArea($task->department)) {
             'Accounting' => 'Accounting owns this task.',
-            'Operations' => 'Operations owns this handoff task.',
+            'Service prep' => 'Service prep needs confirmation. Admin override is available when needed.',
+            'Customer' => 'Customer needs to provide or confirm this detail.',
             default => 'Marketing can update this task.',
+        };
+    }
+
+    private function responsibleArea(?string $department): string
+    {
+        return match ($department) {
+            'Operations', 'Admin', 'Service prep', null, '' => 'Service prep',
+            default => $department,
         };
     }
 

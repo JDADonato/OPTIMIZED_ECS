@@ -41,20 +41,54 @@ class AdminReportService
             ->all();
     }
 
+    public function executiveSummary(array $widgets): array
+    {
+        $insights = collect($widgets)
+            ->map(fn ($widget) => $widget['data']['insight'] ?? null)
+            ->filter()
+            ->values();
+
+        $critical = $insights->first(fn ($insight) => in_array($insight['severity'] ?? '', ['critical', 'warning'], true));
+        $opportunity = $insights->first(fn ($insight) => ($insight['severity'] ?? '') === 'watch') ?: $insights->first();
+        $nextAction = $critical ?: $opportunity;
+
+        return [
+            'headline' => $critical['headline'] ?? ($opportunity['headline'] ?? 'Business report is ready for review.'),
+            'takeaways' => $insights
+                ->take(5)
+                ->map(fn ($insight) => [
+                    'headline' => $insight['headline'] ?? 'Review this section.',
+                    'meaning' => $insight['meaning'] ?? '',
+                    'recommended_action' => $insight['recommended_action'] ?? '',
+                    'severity' => $insight['severity'] ?? 'good',
+                ])
+                ->values()
+                ->all(),
+            'recommended_action' => $nextAction['recommended_action'] ?? 'Review the selected report blocks and follow up on any active queues.',
+        ];
+    }
+
     public function widgetData(string $id, array $filters = []): array
     {
-        return $this->cachedPart('report-widget.' . $id, $filters, 120, fn () => match ($id) {
-            'revenue_summary' => $this->revenueSummary($filters),
-            'payment_breakdown' => $this->paymentBreakdown($filters),
-            'payment_aging' => ['rows' => $this->paymentAging($filters), 'action' => 'Oldest unpaid balances should be followed up first.'],
-            'booking_pipeline' => $this->bookingPipeline($filters),
-            'upcoming_workload' => $this->upcomingWorkload($filters),
-            'package_performance' => $this->packagePerformance($filters),
-            'menu_performance' => $this->menuPerformance($filters),
-            'customer_growth' => $this->customerGrowth($filters),
-            'refunds_cancellations' => $this->refundsAndCancellations($filters),
-            'operational_alerts' => ['rows' => $this->operationalAlerts($filters), 'action' => 'Resolve danger and warning items before daily operations start.'],
-            default => ['message' => 'Unknown widget.'],
+        return $this->cachedPart('report-widget.' . $id, $filters, 120, function () use ($id, $filters) {
+            $data = match ($id) {
+                'revenue_summary' => $this->revenueSummary($filters),
+                'payment_breakdown' => $this->paymentBreakdown($filters),
+                'payment_aging' => ['rows' => $this->paymentAging($filters), 'action' => 'Oldest unpaid balances should be followed up first.'],
+                'booking_pipeline' => $this->bookingPipeline($filters),
+                'upcoming_workload' => $this->upcomingWorkload($filters),
+                'package_performance' => $this->packagePerformance($filters),
+                'menu_performance' => $this->menuPerformance($filters),
+                'customer_growth' => $this->customerGrowth($filters),
+                'refunds_cancellations' => $this->refundsAndCancellations($filters),
+                'operational_alerts' => ['rows' => $this->operationalAlerts($filters), 'action' => 'Resolve warning items before daily operations start.'],
+                default => ['message' => 'Unknown widget.'],
+            };
+
+            return [
+                ...$data,
+                'insight' => $data['insight'] ?? $this->insightForWidget($id, $data),
+            ];
         });
     }
 
@@ -99,6 +133,18 @@ class AdminReportService
                 'operationalAlerts' => $operationalAlerts,
                 'revenueForecast' => $revenueForecast,
                 'paxDemandProjection' => $paxDemandProjection,
+                'insights' => $this->analyticsInsights($filters, [
+                    'summary' => $summary,
+                    'conversion' => $this->memo('conversionFunnel', $filters, fn () => $this->conversionFunnel($filters)),
+                    'paymentBreakdown' => $paymentBreakdown,
+                    'paymentAging' => $paymentAging,
+                    'bookingPipeline' => $bookingPipeline,
+                    'packagePerformance' => $packagePerformance,
+                    'menuPerformance' => $menuPerformance,
+                    'operationalAlerts' => $operationalAlerts,
+                    'revenueForecast' => $revenueForecast,
+                    'paxDemandProjection' => $paxDemandProjection,
+                ]),
                 'projectedPaxDemand' => $paxDemandProjection['rows'],
                 'salesFrequency' => $this->legacySalesFrequency($filters),
                 'topSellers' => $packagePerformance['rows'],
@@ -117,6 +163,11 @@ class AdminReportService
                 'businessSnapshot' => $this->memo('businessSnapshot', $filters, fn () => $this->businessSnapshot($filters)),
                 'conversionFunnel' => $this->memo('conversionFunnel', $filters, fn () => $this->conversionFunnel($filters)),
                 'alerts' => $this->memo('operationalAlerts', $filters, fn () => $this->operationalAlerts($filters)),
+                'insights' => $this->analyticsInsights($filters, [
+                    'summary' => $summary,
+                    'conversion' => $this->memo('conversionFunnel', $filters, fn () => $this->conversionFunnel($filters)),
+                    'operationalAlerts' => $this->memo('operationalAlerts', $filters, fn () => $this->operationalAlerts($filters)),
+                ]),
             ];
         });
     }
@@ -128,6 +179,7 @@ class AdminReportService
                 'settledRevenueOverTime' => $this->memo('settledRevenueTrend', $filters, fn () => $this->settledRevenueTrend($filters)),
                 'paymentStatusBreakdown' => $this->memo('paymentBreakdown', $filters, fn () => $this->paymentBreakdown($filters))['rows'],
                 'paymentAging' => $this->memo('paymentAging', $filters, fn () => $this->paymentAging($filters)),
+                'insight' => $this->insightForWidget('revenue_summary', $this->memo('revenueSummary', $filters, fn () => $this->revenueSummary($filters))),
             ];
         });
     }
@@ -138,6 +190,7 @@ class AdminReportService
             return [
                 'bookingPipeline' => $this->memo('bookingPipeline', $filters, fn () => $this->bookingPipeline($filters))['rows'],
                 'upcomingWorkload' => $this->memo('upcomingWorkload', $filters, fn () => $this->upcomingWorkload($filters))['rows'],
+                'insight' => $this->insightForWidget('booking_pipeline', $this->memo('bookingPipeline', $filters, fn () => $this->bookingPipeline($filters))),
             ];
         });
     }
@@ -148,6 +201,7 @@ class AdminReportService
             return [
                 'packagePerformance' => $this->memo('packagePerformance', $filters, fn () => $this->packagePerformance($filters))['rows'],
                 'menuPerformance' => $this->memo('menuPerformance', $filters, fn () => $this->menuPerformance($filters))['rows'],
+                'insight' => $this->insightForWidget('package_performance', $this->memo('packagePerformance', $filters, fn () => $this->packagePerformance($filters))),
             ];
         });
     }
@@ -159,6 +213,7 @@ class AdminReportService
                 'customerGrowth' => $this->memo('customerGrowth', $filters, fn () => $this->customerGrowth($filters))['rows'],
                 'feedbackSignals' => $this->memo('conversionFunnel', $filters, fn () => $this->conversionFunnel($filters))['feedbackSignals'],
                 'conversionFunnel' => $this->memo('conversionFunnel', $filters, fn () => $this->conversionFunnel($filters)),
+                'insight' => $this->insightForConversion($this->memo('conversionFunnel', $filters, fn () => $this->conversionFunnel($filters))),
             ];
         });
     }
@@ -169,6 +224,7 @@ class AdminReportService
             return [
                 'operationsLoad' => $this->memo('operationsLoad', $filters, fn () => $this->operationsLoad($filters)),
                 'alerts' => $this->memo('operationalAlerts', $filters, fn () => $this->operationalAlerts($filters)),
+                'insight' => $this->insightForWidget('operational_alerts', ['rows' => $this->memo('operationalAlerts', $filters, fn () => $this->operationalAlerts($filters))]),
             ];
         });
     }
@@ -182,6 +238,7 @@ class AdminReportService
                 'revenueForecast' => $this->memo('revenueForecast', $filters, fn () => $this->revenueForecast($filters)),
                 'paxDemandProjection' => $paxDemandProjection,
                 'projectedPaxDemand' => $paxDemandProjection['rows'],
+                'insight' => $this->insightForForecasts($this->memo('revenueForecast', $filters, fn () => $this->revenueForecast($filters)), $paxDemandProjection),
             ];
         });
     }
@@ -234,6 +291,183 @@ class AdminReportService
                     'action' => 'Resolve service concerns before they become churn.',
                 ],
             ],
+        ];
+    }
+
+    private function analyticsInsights(array $filters, array $parts): array
+    {
+        $summaryInsight = $this->insightForWidget('revenue_summary', $parts['summary'] ?? []);
+        $conversionInsight = $this->insightForConversion($parts['conversion'] ?? []);
+        $operationsInsight = $this->insightForWidget('operational_alerts', ['rows' => $parts['operationalAlerts'] ?? []]);
+        $forecastInsight = isset($parts['revenueForecast'], $parts['paxDemandProjection'])
+            ? $this->insightForForecasts($parts['revenueForecast'], $parts['paxDemandProjection'])
+            : null;
+
+        $all = collect([
+            'revenue' => $summaryInsight,
+            'conversion' => $conversionInsight,
+            'operations' => $operationsInsight,
+            'forecast' => $forecastInsight,
+            'payments' => isset($parts['paymentBreakdown']) ? $this->insightForWidget('payment_breakdown', $parts['paymentBreakdown']) : null,
+            'pipeline' => isset($parts['bookingPipeline']) ? $this->insightForWidget('booking_pipeline', $parts['bookingPipeline']) : null,
+            'menu' => isset($parts['packagePerformance']) ? $this->insightForWidget('package_performance', $parts['packagePerformance']) : null,
+        ])->filter();
+
+        $priority = ['critical' => 4, 'warning' => 3, 'watch' => 2, 'good' => 1];
+
+        return [
+            'items' => $all->all(),
+            'takeaways' => $all
+                ->sortByDesc(fn ($insight) => $priority[$insight['severity'] ?? 'good'] ?? 1)
+                ->take(3)
+                ->values()
+                ->all(),
+            'generated_at' => now()->toISOString(),
+        ];
+    }
+
+    private function insightForWidget(string $id, array $data): array
+    {
+        return match ($id) {
+            'revenue_summary' => $this->insight(
+                ($data['overdueRevenue'] ?? 0) > 0 ? 'Collection risk needs attention.' : 'Collections look current for this view.',
+                ($data['overdueRevenue'] ?? 0) > 0
+                    ? 'Some expected revenue is already overdue, so cash collection is the main finance risk.'
+                    : 'No overdue revenue is visible in this filter, so the team can focus on upcoming milestones.',
+                ($data['overdueRevenue'] ?? 0) > 0 ? 'Open Finance and follow up overdue payment milestones.' : 'Keep monitoring pending balances as event dates approach.',
+                ($data['overdueRevenue'] ?? 0) > 0 ? 'warning' : 'good'
+            ),
+            'payment_breakdown' => $this->paymentBreakdownInsight($data['rows'] ?? []),
+            'payment_aging' => $this->paymentAgingInsight($data['rows'] ?? []),
+            'booking_pipeline' => $this->bookingPipelineInsight($data['rows'] ?? []),
+            'upcoming_workload' => $this->insight(
+                empty($data['rows'] ?? []) ? 'No near-term workload is queued.' : 'Upcoming events are ready for daily review.',
+                empty($data['rows'] ?? []) ? 'There are no upcoming pending or confirmed events in this report view.' : 'The report contains near-term events that may need logistics and customer follow-up.',
+                empty($data['rows'] ?? []) ? 'Use this section as a quiet-period confirmation.' : 'Review upcoming events with missing details first.',
+                empty($data['rows'] ?? []) ? 'good' : 'watch'
+            ),
+            'package_performance' => $this->rankedRowsInsight($data['rows'] ?? [], 'Package demand is concentrated.', 'Use top packages in recommendations and promotions.'),
+            'menu_performance' => $this->rankedRowsInsight($data['rows'] ?? [], 'Menu demand has clear leaders.', 'Use top dishes for package defaults and purchasing preparation.'),
+            'customer_growth' => $this->rankedRowsInsight($data['rows'] ?? [], 'Customer growth is visible in the selected period.', 'Compare low-growth months with marketing activity.'),
+            'refunds_cancellations' => $this->insight(
+                (($data['cancelledValue'] ?? 0) + ($data['refundedAmount'] ?? 0)) > 0 ? 'Cancellation and refund exposure exists.' : 'No refund exposure is visible.',
+                (($data['cancelledValue'] ?? 0) + ($data['refundedAmount'] ?? 0)) > 0 ? 'Cancelled value and refunds can reduce realized revenue if not reviewed.' : 'This report view has no visible cancellation/refund pressure.',
+                (($data['cancelledValue'] ?? 0) + ($data['refundedAmount'] ?? 0)) > 0 ? 'Review cancellation reasons and refund cases.' : 'Keep refund checks in the normal finance review.',
+                (($data['cancelledValue'] ?? 0) + ($data['refundedAmount'] ?? 0)) > 0 ? 'watch' : 'good'
+            ),
+            'operational_alerts' => $this->operationalAlertsInsight($data['rows'] ?? []),
+            default => $this->insight('Report block is ready.', 'This section has data for the selected filters.', 'Review the values and compare them with current operations.', 'good'),
+        };
+    }
+
+    private function insightForConversion(array $conversion): array
+    {
+        $bookingRate = (float) ($conversion['booking_completion_rate'] ?? 0);
+        $paymentRate = (float) ($conversion['payment_completion_rate'] ?? 0);
+        $lowFollowUps = (int) ($conversion['low_feedback_followups'] ?? 0);
+
+        if ($lowFollowUps > 0) {
+            return $this->insight('Feedback needs follow-up.', 'Some completed events produced low ratings, which can affect trust and referrals.', 'Open Event History and resolve low-rating follow-ups.', 'warning');
+        }
+
+        if ($bookingRate > 0 && $bookingRate < 45) {
+            return $this->insight('Booking completion is dropping.', 'Many customers start the booking flow but do not reach submission.', 'Review booking steps, validation messages, and abandoned draft recovery.', 'warning');
+        }
+
+        if ($paymentRate > 0 && $paymentRate < 60) {
+            return $this->insight('Payment completion needs support.', 'Customers may need clearer payment reminders or easier next-payment actions.', 'Open Finance and review reminders for pending balances.', 'watch');
+        }
+
+        return $this->insight('Conversion signals are stable.', 'Booking, payment, and feedback signals do not show an urgent conversion risk.', 'Keep monitoring the funnel after each demo/test flow.', 'good');
+    }
+
+    private function insightForForecasts(array $revenueForecast, array $paxProjection): array
+    {
+        $revenueChange = (float) ($revenueForecast['summary']['changePercent'] ?? 0);
+        $forecastPax = (int) ($paxProjection['summary']['forecastPax'] ?? 0);
+
+        if ($revenueChange < -15) {
+            return $this->insight('Revenue forecast is trending down.', 'The moving average suggests the next period may collect less than the last actual period.', 'Check upcoming confirmed bookings and payment schedules before planning expenses.', 'warning');
+        }
+
+        if ($forecastPax > 0) {
+            return $this->insight('Guest demand forecast is usable for preparation.', 'Projected pax gives the team an early signal for staffing, purchasing, and service planning.', 'Share demand projection with handoff and operations planning.', 'watch');
+        }
+
+        return $this->insight('Forecast needs more history.', 'There is not enough visible demand to make this projection very useful yet.', 'Use actual booking queues until more history is available.', 'good');
+    }
+
+    private function paymentBreakdownInsight(array $rows): array
+    {
+        $pending = collect($rows)
+            ->filter(fn ($row) => !in_array(strtolower((string) ($row['label'] ?? '')), ['paid', 'verified', 'refunded'], true))
+            ->sum('total');
+
+        return $this->insight(
+            $pending > 0 ? 'Some payments still need action.' : 'Payment records look settled.',
+            $pending > 0 ? 'There are unpaid or unverified payment records in this view.' : 'No pending payment amount is visible in this breakdown.',
+            $pending > 0 ? 'Open Finance and prioritize pending, overdue, or unverified payments.' : 'Use this as a settled-payment confirmation.',
+            $pending > 0 ? 'watch' : 'good'
+        );
+    }
+
+    private function paymentAgingInsight(array $rows): array
+    {
+        $oldest = collect($rows)->firstWhere('label', '15+ days');
+        $oldValue = (float) ($oldest['value'] ?? 0);
+
+        return $this->insight(
+            $oldValue > 0 ? 'Old unpaid balances need escalation.' : 'No long-aged unpaid balance is visible.',
+            $oldValue > 0 ? 'Balances older than 15 days are the highest collection risk in this view.' : 'The oldest unpaid-balance bucket is clear for this report.',
+            $oldValue > 0 ? 'Send reminders or review payment terms for oldest unpaid balances.' : 'Continue normal due-date monitoring.',
+            $oldValue > 0 ? 'critical' : 'good'
+        );
+    }
+
+    private function bookingPipelineInsight(array $rows): array
+    {
+        $pending = collect($rows)->first(fn ($row) => strtolower((string) ($row['label'] ?? '')) === 'pending');
+        $pendingCount = (int) ($pending['count'] ?? 0);
+
+        return $this->insight(
+            $pendingCount > 0 ? 'Pending bookings are waiting.' : 'No pending booking queue is visible.',
+            $pendingCount > 0 ? 'Pending bookings are the clearest conversion opportunity because customers already submitted interest.' : 'The selected pipeline has no visible intake backlog.',
+            $pendingCount > 0 ? 'Open Bookings & Intake and resolve pending requests.' : 'Use the pipeline for monitoring rather than urgent action.',
+            $pendingCount > 0 ? 'watch' : 'good'
+        );
+    }
+
+    private function rankedRowsInsight(array $rows, string $headline, string $action): array
+    {
+        $top = collect($rows)->first();
+
+        return $this->insight(
+            $top ? $headline : 'No demand pattern is visible yet.',
+            $top ? (($top['label'] ?? $top['name'] ?? 'The top item') . ' is leading this report view.') : 'The selected filters did not return enough rows for a useful ranking.',
+            $top ? $action : 'Broaden the filters or wait for more booking activity.',
+            $top ? 'watch' : 'good'
+        );
+    }
+
+    private function operationalAlertsInsight(array $rows): array
+    {
+        $urgent = collect($rows)->first(fn ($row) => in_array($row['severity'] ?? '', ['danger', 'warning'], true) && (int) ($row['count'] ?? 0) > 0);
+
+        return $this->insight(
+            $urgent ? 'Operations has an active blocker.' : 'No operational blockers are visible.',
+            $urgent ? (($urgent['label'] ?? 'An operational alert') . ' needs attention before it affects customer experience.') : 'The alert queue does not show an active blocker for this view.',
+            $urgent ? 'Open the related queue and resolve the blocker first.' : 'Keep this as a daily health check.',
+            $urgent ? (($urgent['severity'] ?? '') === 'danger' ? 'critical' : 'warning') : 'good'
+        );
+    }
+
+    private function insight(string $headline, string $meaning, string $recommendedAction, string $severity = 'good'): array
+    {
+        return [
+            'headline' => $headline,
+            'meaning' => $meaning,
+            'recommended_action' => $recommendedAction,
+            'severity' => in_array($severity, ['good', 'watch', 'warning', 'critical'], true) ? $severity : 'good',
         ];
     }
 

@@ -64,7 +64,7 @@ class DocumentExportTest extends TestCase
         $response->assertOk();
         $this->assertSame('application/pdf', $response->headers->get('content-type'));
         $this->assertStringStartsWith('%PDF', $response->getContent());
-        $this->assertStringContainsString('Event Preparation List', $response->getContent());
+        $this->assertStringContainsString('Event Preparation Checklist', $response->getContent());
     }
 
     private function user(string $role): User

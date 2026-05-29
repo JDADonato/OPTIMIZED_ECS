@@ -25,6 +25,11 @@ const formatTime = (value) => {
 
 const formatMoney = (value) => `PHP ${Number(value || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
+const responsibleArea = (task) => {
+    const area = task?.responsible_area || task?.department || task?.raw_department;
+    return ['Operations', 'Admin', 'Service prep', undefined, null, ''].includes(area) ? 'Service prep' : area;
+};
+
 const fullAddress = (booking) => [
     booking?.venue_address_line,
     booking?.venue_barangay,
@@ -168,7 +173,7 @@ const EventDetailDrawer = ({
                                 return (
                                     <div key={task.id} className="rounded-lg border border-slate-100 bg-white p-3">
                                         <p className="text-sm font-black text-slate-900">{task.label}</p>
-                                        <p className="mt-1 text-xs font-bold text-slate-400">{task.department || 'Team'} / {taskStatus.label}</p>
+                                        <p className="mt-1 text-xs font-bold text-slate-400">{responsibleArea(task)} / {taskStatus.label}</p>
                                     </div>
                                 );
                             })}

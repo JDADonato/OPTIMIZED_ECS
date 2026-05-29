@@ -32,8 +32,11 @@ class ReportController extends Controller
             'filters' => 'nullable|array',
         ]);
 
+        $widgets = $this->reports->preview($payload['widgets'] ?? [], $payload['filters'] ?? []);
+
         return response()->json([
-            'widgets' => $this->reports->preview($payload['widgets'] ?? [], $payload['filters'] ?? []),
+            'widgets' => $widgets,
+            'executive_summary' => $this->reports->executiveSummary($widgets),
         ]);
     }
 
@@ -90,7 +93,10 @@ class ReportController extends Controller
             'created_by' => Auth::id(),
             'status' => 'completed',
             'parameters_json' => ['filters' => $filters, 'widgets' => $widgets],
-            'result_snapshot_json' => $snapshot,
+            'result_snapshot_json' => [
+                'executive_summary' => $this->reports->executiveSummary($snapshot),
+                'widgets' => $snapshot,
+            ],
         ]);
 
         return response()->json((new ReportRunResource($run))->resolve(), 201);
@@ -108,16 +114,24 @@ class ReportController extends Controller
         }
 
         $filename = 'eloquente-report-' . $run->id . '.csv';
-        $snapshot = $run->result_snapshot_json ?? [];
+        $snapshot = $this->normalizedSnapshot($run);
         $widgetNames = collect($this->reports->widgetDefinitions())->pluck('name', 'id');
 
         return response()->streamDownload(function () use ($snapshot, $widgetNames) {
             $handle = fopen('php://output', 'w');
             fputcsv($handle, ['Report Section', 'Item', 'Detail', 'Value']);
 
-            foreach ($snapshot as $widget) {
+            foreach ($snapshot['executive_summary']['takeaways'] ?? [] as $index => $takeaway) {
+                fputcsv($handle, ['Executive Summary', 'Takeaway ' . ($index + 1), $takeaway['headline'] ?? '', $takeaway['recommended_action'] ?? '']);
+            }
+
+            foreach ($snapshot['widgets'] as $widget) {
                 $title = $widgetNames[$widget['id'] ?? ''] ?? $this->humanLabel($widget['id'] ?? 'Report Section');
                 $data = $widget['data'] ?? [];
+
+                if (!empty($data['insight'])) {
+                    fputcsv($handle, [$title, 'Interpretation', $data['insight']['headline'] ?? '', $data['insight']['recommended_action'] ?? '']);
+                }
 
                 foreach ($this->flattenWidgetRows($data) as $row) {
                     fputcsv($handle, [$title, $row['item'], $row['detail'], $row['value']]);
@@ -132,10 +146,27 @@ class ReportController extends Controller
     {
         $widgetNames = collect($this->reports->widgetDefinitions())->pluck('name', 'id');
         $lines = [];
+        $snapshot = $this->normalizedSnapshot($run);
 
-        foreach ($run->result_snapshot_json ?? [] as $widget) {
+        if (!empty($snapshot['executive_summary'])) {
+            $lines[] = 'EXECUTIVE SUMMARY';
+            $lines[] = $snapshot['executive_summary']['headline'] ?? 'Report ready for review.';
+            foreach ($snapshot['executive_summary']['takeaways'] ?? [] as $takeaway) {
+                $lines[] = '- ' . ($takeaway['headline'] ?? 'Review this takeaway.');
+                if (!empty($takeaway['recommended_action'])) {
+                    $lines[] = '  Action: ' . $takeaway['recommended_action'];
+                }
+            }
+            $lines[] = '';
+        }
+
+        foreach ($snapshot['widgets'] as $widget) {
             $title = $widgetNames[$widget['id'] ?? ''] ?? $this->humanLabel($widget['id'] ?? 'Report Section');
             $lines[] = strtoupper($title);
+            if (!empty($widget['data']['insight'])) {
+                $lines[] = 'Interpretation: ' . ($widget['data']['insight']['headline'] ?? '');
+                $lines[] = 'Recommended action: ' . ($widget['data']['insight']['recommended_action'] ?? '');
+            }
             foreach ($this->flattenWidgetRows($widget['data'] ?? []) as $row) {
                 $detail = $row['detail'] ? ' - ' . $row['detail'] : '';
                 $lines[] = $row['item'] . $detail . ': ' . $row['value'];
@@ -154,6 +185,25 @@ class ReportController extends Controller
             'layout_json' => 'required|array|min:1',
             'filters_json' => 'nullable|array',
         ]);
+    }
+
+    private function normalizedSnapshot(ReportRun $run): array
+    {
+        $snapshot = $run->result_snapshot_json ?? [];
+
+        if (isset($snapshot['widgets']) && is_array($snapshot['widgets'])) {
+            return [
+                'executive_summary' => $snapshot['executive_summary'] ?? $this->reports->executiveSummary($snapshot['widgets']),
+                'widgets' => $snapshot['widgets'],
+            ];
+        }
+
+        $widgets = is_array($snapshot) ? $snapshot : [];
+
+        return [
+            'executive_summary' => $this->reports->executiveSummary($widgets),
+            'widgets' => $widgets,
+        ];
     }
 
     private function flattenWidgetRows(array $data): array
@@ -177,7 +227,7 @@ class ReportController extends Controller
         }
 
         return collect($data)
-            ->reject(fn ($value, $key) => is_array($value) || $key === 'action')
+            ->reject(fn ($value, $key) => is_array($value) || in_array($key, ['action', 'insight'], true))
             ->map(fn ($value, $key) => [
                 'item' => $this->humanLabel((string) $key),
                 'detail' => '',

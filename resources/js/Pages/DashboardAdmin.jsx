@@ -2,7 +2,7 @@ import React, { Suspense, lazy, useState, useEffect, useMemo, useRef } from 'rea
 import { useAuth } from '../context/AuthContext';
 import { router } from '@inertiajs/react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, LineChart, Line } from '../Components/charts/LazyRecharts';
-import { CalendarDays, CheckCircle2, ChevronDown, ClipboardList, CreditCard, Filter, Package, RefreshCw, Users } from 'lucide-react';
+import { CalendarDays, CheckCircle2, ChevronDown, ClipboardList, CreditCard, Filter, Loader2, Maximize2, Package, RefreshCw, Users, X } from 'lucide-react';
 import useCachedJson from '../hooks/useCachedJson';
 import useSmartRefresh from '../hooks/useSmartRefresh';
 import useStaffWorkspaceState from '../hooks/useStaffWorkspaceState';
@@ -99,15 +99,16 @@ const DEFAULT_ANALYTICS_FILTERS = {
 const ADMIN_EMPLOYEES_URL = '/api/admin/employees?paginated=1&per_page=25';
 const ADMIN_CUSTOMERS_URL = '/api/admin/customers?paginated=1&per_page=25';
 const ADMIN_BOOKINGS_URL = '/api/admin/bookings?paginated=1&per_page=25';
-const ADMIN_WORKSPACE_TABS = ['today', 'bookings-intake', 'calendar-handoff', 'finance', 'messages-inquiries', 'public-content', 'availability', 'accounts', 'analytics-reports', 'system-audit', 'history', 'profile'];
+const ADMIN_WORKSPACE_TABS = ['today', 'bookings-intake', 'calendar', 'handoff', 'finance', 'messages-inquiries', 'public-content', 'availability', 'accounts', 'analytics', 'reports', 'system-audit', 'history', 'profile'];
 const ADMIN_TAB_ALIASES = {
     dashboard: 'today',
     overview: 'today',
     bookings: 'bookings-intake',
     intake: 'bookings-intake',
-    preparation: 'calendar-handoff',
-    calendar: 'calendar-handoff',
-    handoff: 'calendar-handoff',
+    preparation: 'handoff',
+    'calendar-handoff': 'calendar',
+    calendar: 'calendar',
+    handoff: 'handoff',
     refunds: 'finance',
     accounting: 'finance',
     ledger: 'finance',
@@ -118,11 +119,15 @@ const ADMIN_TAB_ALIASES = {
     settings: 'public-content',
     users: 'accounts',
     people: 'accounts',
-    reports: 'analytics-reports',
-    analytics: 'analytics-reports',
+    'analytics-reports': 'analytics',
+    reports: 'reports',
+    analytics: 'analytics',
     audits: 'system-audit',
     system: 'system-audit',
 };
+const handoffResponsibleArea = (department) => (
+    ['Operations', 'Admin', 'Service prep', undefined, null, ''].includes(department) ? 'Service prep' : department
+);
 const adminEmployeesUrl = (filters = {}) => {
     const params = new URLSearchParams({ paginated: '1', per_page: '100' });
     Object.entries(filters).forEach(([key, value]) => {
@@ -175,6 +180,19 @@ const formatMonthLabel = (value) => {
     if (!value) return 'Selected month';
     const [year, month] = value.split('-').map(Number);
     return new Date(year, month - 1, 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+};
+const toMonthKey = (date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+const getMonthGridDays = (date) => {
+    const firstWeekday = new Date(date.getFullYear(), date.getMonth(), 1).getDay();
+    const daysInMonth = new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();
+    return [
+        ...Array.from({ length: firstWeekday }, (_, index) => ({ key: `blank-${index}`, blank: true })),
+        ...Array.from({ length: daysInMonth }, (_, index) => {
+            const day = index + 1;
+            const dateKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+            return { key: dateKey, day, dateKey };
+        }),
+    ];
 };
 const shiftMonthValue = (value, offset) => {
     const [year, month] = value.split('-').map(Number);
@@ -249,6 +267,9 @@ const DashboardAdmin = () => {
     const [bookingStatusFilter, setBookingStatusFilter] = useState('All');
     const [bookingSourceFilter, setBookingSourceFilter] = useState('all');
     const [bookingSort, setBookingSort] = useState('latest');
+    const [adminCalendarMonth, setAdminCalendarMonth] = useState(() => new Date(new Date().getFullYear(), new Date().getMonth(), 1));
+    const [adminCalendarView, setAdminCalendarView] = useState('month');
+    const [adminCalendarSearch, setAdminCalendarSearch] = useState('');
     const [approvingBookingId, setApprovingBookingId] = useState(null);
     const [assistedBookingOpen, setAssistedBookingOpen] = useState(false);
     const [discountModal, setDiscountModal] = useState({ open: false, data: null });
@@ -257,6 +278,14 @@ const DashboardAdmin = () => {
     const [refundQueue, setRefundQueue] = useState([]);
     const [refundLoading, setRefundLoading] = useState(false);
     const [processingRefundId, setProcessingRefundId] = useState(null);
+    const [activeFinanceSegment, setActiveFinanceSegment] = useState('payments');
+    const [messageRefreshToken, setMessageRefreshToken] = useState(0);
+    const [adminMessageMetrics, setAdminMessageMetrics] = useState({
+        open: 0,
+        needsAttention: 0,
+        unassigned: 0,
+        resolvedToday: 0,
+    });
 
     const [eventDetailsModal, setEventDetailsModal] = useState({ open: false, data: null });
     const [editPaymentModal, setEditPaymentModal] = useState({ isOpen: false, payment: null, booking: null });
@@ -266,6 +295,8 @@ const DashboardAdmin = () => {
     // ==========================================
     const [analytics, setAnalytics] = useState(null);
     const [analyticsLoading, setAnalyticsLoading] = useState(false);
+    const [expandedAnalyticsPanel, setExpandedAnalyticsPanel] = useState(null);
+    const [analyticsSlowLoading, setAnalyticsSlowLoading] = useState(false);
     const [analyticsFilters, setAnalyticsFilters] = useState(DEFAULT_ANALYTICS_FILTERS);
     const [activeAnalyticsFilterPanel, setActiveAnalyticsFilterPanel] = useState(null);
     const [packageViewFilters, setPackageViewFilters] = useState({
@@ -292,6 +323,7 @@ const DashboardAdmin = () => {
     const [activeDashboardFilterPanel, setActiveDashboardFilterPanel] = useState(null);
     const [reportWidgets, setReportWidgets] = useState([]);
     const [reportTemplates, setReportTemplates] = useState([]);
+    const [reportExecutiveSummary, setReportExecutiveSummary] = useState(null);
     const [reportTemplateId, setReportTemplateId] = useState('');
     const [reportBuilder, setReportBuilder] = useState({
         name: 'Management Snapshot',
@@ -351,6 +383,9 @@ const DashboardAdmin = () => {
     const businessSnapshot = analytics?.businessSnapshot || {};
     const businessSnapshotCards = businessSnapshot.cards || [];
     const conversionFunnel = analytics?.conversionFunnel || analyticsSummary.conversionFunnel || {};
+    const analyticsInsights = analytics?.insights || {};
+    const analyticsInsightItems = analyticsInsights.items || {};
+    const analyticsTakeaways = analyticsInsights.takeaways || [];
     const visiblePackagePerformanceData = useMemo(() => {
         const minBookings = Number(packageViewFilters.minBookings || 0);
         const rows = packagePerformanceData
@@ -440,6 +475,29 @@ const DashboardAdmin = () => {
             phone: user?.phone || '',
         }));
     }, [user?.username, user?.email, user?.phone]);
+
+    useEffect(() => {
+        if (!analyticsLoading) {
+            setAnalyticsSlowLoading(false);
+            return undefined;
+        }
+
+        const timer = window.setTimeout(() => setAnalyticsSlowLoading(true), 2500);
+        return () => window.clearTimeout(timer);
+    }, [analyticsLoading]);
+
+    useEffect(() => {
+        if (!expandedAnalyticsPanel) return undefined;
+
+        const handleKeyDown = (event) => {
+            if (event.key === 'Escape') {
+                setExpandedAnalyticsPanel(null);
+            }
+        };
+
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [expandedAnalyticsPanel]);
 
     useEffect(() => {
         setCustomerPage(1);
@@ -616,7 +674,7 @@ const DashboardAdmin = () => {
         } else if (activeTab === 'today') {
             bustAdminCache('/api/admin/analytics/summary');
             fetchAnalyticsSummary({ silent });
-        } else if (activeTab === 'analytics-reports') {
+        } else if (activeTab === 'analytics' || activeTab === 'reports') {
             bustAdminCache('/api/admin/analytics');
             fetchAnalytics({ silent });
             fetchReportBuilder({ silent });
@@ -646,10 +704,15 @@ const DashboardAdmin = () => {
             title: 'Owner Today',
             description: 'Priority bookings, finance blockers, account issues, and system activity that need attention.',
         },
-        'analytics-reports': {
+        analytics: {
             eyebrow: 'Business insight',
-            title: 'Analytics & Reports',
-            description: 'Understand performance, preview reports, and export business-ready summaries.',
+            title: 'Analytics',
+            description: 'Understand performance signals, chart trends, and owner-level business takeaways.',
+        },
+        reports: {
+            eyebrow: 'Business insight',
+            title: 'Reports',
+            description: 'Build, preview, and export business-ready summaries with interpretations.',
         },
         profile: {
             eyebrow: 'Admin profile',
@@ -681,10 +744,15 @@ const DashboardAdmin = () => {
             title: 'Finance',
             description: 'Review payment exposure, process refunds, and open finance records from one place.',
         },
-        'calendar-handoff': {
-            eyebrow: 'Operations handoff',
-            title: 'Calendar & Handoff',
-            description: 'Track upcoming confirmed events, readiness, and preparation tasks.',
+        calendar: {
+            eyebrow: 'Event calendar',
+            title: 'Calendar',
+            description: 'Review confirmed event dates and open event details without handoff clutter.',
+        },
+        handoff: {
+            eyebrow: 'Event handoff',
+            title: 'Handoff',
+            description: 'Track readiness, blockers, and preparation tasks for upcoming confirmed events.',
         },
         'messages-inquiries': {
             eyebrow: 'Support desk',
@@ -708,7 +776,8 @@ const DashboardAdmin = () => {
             items: [
                 { id: 'today', label: 'Today' },
                 { id: 'bookings-intake', label: 'Bookings & Intake' },
-                { id: 'calendar-handoff', label: 'Calendar & Handoff' },
+                { id: 'calendar', label: 'Calendar' },
+                { id: 'handoff', label: 'Handoff' },
                 { id: 'finance', label: 'Finance' },
                 { id: 'messages-inquiries', label: 'Messages & Inquiries' },
             ],
@@ -724,7 +793,8 @@ const DashboardAdmin = () => {
         {
             label: 'Insight & Governance',
             items: [
-                { id: 'analytics-reports', label: 'Analytics & Reports' },
+                { id: 'analytics', label: 'Analytics' },
+                { id: 'reports', label: 'Reports' },
                 { id: 'system-audit', label: 'System & Audit' },
                 { id: 'history', label: 'Event History' },
             ],
@@ -768,9 +838,40 @@ const DashboardAdmin = () => {
             stats.paid += paid;
             stats.remaining += Math.max(bookingTotal - paid, 0);
             stats.pendingPayments += payments.filter(payment => ['pending', 'submitted', 'for review'].includes(String(payment.status || '').toLowerCase())).length;
-            stats.overdue += payments.filter(payment => String(payment.status || '').toLowerCase() === 'overdue').length;
+            stats.overdue += payments.filter(payment => staffPaymentStatus(payment.status, payment.due_date).label.toLowerCase().includes('overdue')).length;
             return stats;
         }, { totalExposure: 0, paid: 0, remaining: 0, pendingPayments: 0, overdue: 0 });
+    }, [bookings]);
+
+    const financePaymentRows = useMemo(() => {
+        const unsettledStatuses = ['pending', 'submitted', 'for review', 'unverified', 'overdue', 'rejected', 'failed'];
+
+        return bookings.flatMap((booking) => {
+            const payments = Array.isArray(booking.payments) ? booking.payments : [];
+
+            return payments.map((payment) => {
+                const rawStatus = String(payment.status || '').toLowerCase();
+                const readableStatus = staffPaymentStatus(payment.status, payment.due_date).label;
+                const readableStatusLower = readableStatus.toLowerCase();
+                const isSettled = ['paid', 'verified', 'refunded'].includes(rawStatus) || ['paid', 'verified', 'refunded'].includes(readableStatusLower);
+                const isException = ['rejected', 'failed'].includes(rawStatus) || ['rejected', 'failed'].includes(readableStatusLower);
+                const isOverdue = rawStatus === 'overdue' || readableStatusLower.includes('overdue');
+                const isPending = unsettledStatuses.includes(rawStatus) || readableStatusLower.includes('pending') || readableStatusLower.includes('review');
+
+                if (isSettled || (!isException && !isOverdue && !isPending)) {
+                    return null;
+                }
+
+                return {
+                    booking,
+                    payment,
+                    statusLabel: readableStatus,
+                    queueLabel: isException ? 'Exception' : isOverdue ? 'Overdue' : 'Needs review',
+                    priority: isException ? 0 : isOverdue ? 1 : 2,
+                    dueTime: payment.due_date ? new Date(payment.due_date).getTime() : Number.MAX_SAFE_INTEGER,
+                };
+            }).filter(Boolean);
+        }).sort((a, b) => a.priority - b.priority || a.dueTime - b.dueTime || Number(b.booking?.id || 0) - Number(a.booking?.id || 0));
     }, [bookings]);
 
     const upcomingConfirmedEvents = useMemo(() => {
@@ -783,6 +884,43 @@ const DashboardAdmin = () => {
             .sort((a, b) => new Date(a.event_date) - new Date(b.event_date))
             .slice(0, 6);
     }, [bookings]);
+
+    const adminCalendarMonthKey = useMemo(() => toMonthKey(adminCalendarMonth), [adminCalendarMonth]);
+    const adminCalendarEvents = useMemo(() => {
+        const search = adminCalendarSearch.trim().toLowerCase();
+
+        return bookings
+            .filter((booking) => normalizeStatus(booking.status) === 'confirmed' && booking.event_date)
+            .filter((booking) => String(booking.event_date).substring(0, 7) === adminCalendarMonthKey)
+            .filter((booking) => {
+                if (!search) return true;
+                return [
+                    formatBookingRef(booking.id),
+                    eventDisplayName(booking),
+                    booking.event_type,
+                    booking.client_full_name,
+                    booking.client_name,
+                    booking.username,
+                    booking.client_email,
+                    booking.client_phone,
+                    booking.venue_name,
+                    booking.venue_address,
+                ].filter(Boolean).some((value) => String(value).toLowerCase().includes(search));
+            })
+            .sort((a, b) => `${a.event_date || ''} ${a.event_time || ''}`.localeCompare(`${b.event_date || ''} ${b.event_time || ''}`));
+    }, [bookings, adminCalendarMonthKey, adminCalendarSearch]);
+    const adminCalendarEventsByDate = useMemo(() => {
+        return adminCalendarEvents.reduce((map, booking) => {
+            const dateKey = String(booking.event_date || '').substring(0, 10);
+            if (!map.has(dateKey)) map.set(dateKey, []);
+            map.get(dateKey).push(booking);
+            return map;
+        }, new Map());
+    }, [adminCalendarEvents]);
+    const adminCalendarDays = useMemo(() => getMonthGridDays(adminCalendarMonth), [adminCalendarMonth]);
+    const changeAdminCalendarMonth = (offset) => {
+        setAdminCalendarMonth((current) => new Date(current.getFullYear(), current.getMonth() + offset, 1));
+    };
 
     const adminNextActions = useMemo(() => {
         const failedAudits = audits.filter((audit) => Number(audit.status_code || 0) >= 400).length;
@@ -1041,7 +1179,7 @@ const DashboardAdmin = () => {
             fetchPackages();
         } else if (activeTab === 'today') {
             fetchAnalyticsSummary();
-        } else if (activeTab === 'analytics-reports') {
+        } else if (activeTab === 'analytics' || activeTab === 'reports') {
             if (!packages.length || !eventTypes.length) fetchPackages();
             fetchAnalytics();
             fetchReportBuilder();
@@ -1051,6 +1189,8 @@ const DashboardAdmin = () => {
         } else if (activeTab === 'finance') {
             fetchBookings();
             fetchRefundQueue();
+        } else if (activeTab === 'calendar' || activeTab === 'handoff') {
+            fetchBookings();
         } else if (activeTab === 'availability') {
             fetchAvailabilityOverrides();
         } else if (activeTab === 'system-audit') {
@@ -1060,8 +1200,8 @@ const DashboardAdmin = () => {
     }, [activeTab, availabilityMonth, customerStatusFilter, employeeFilters, customerFilters]);
 
     useSmartRefresh({
-        enabled: ['today', 'analytics-reports', 'bookings-intake', 'calendar-handoff', 'finance', 'accounts', 'public-content', 'availability', 'system-audit'].includes(activeTab),
-        interval: activeTab === 'today' || activeTab === 'analytics-reports' ? 120000 : 90000,
+        enabled: ['today', 'analytics', 'reports', 'bookings-intake', 'calendar', 'handoff', 'finance', 'accounts', 'public-content', 'availability', 'system-audit'].includes(activeTab),
+        interval: activeTab === 'today' || activeTab === 'analytics' || activeTab === 'reports' ? 120000 : 90000,
         idleAfter: 180000,
         refresh: refreshCurrentTab,
     });
@@ -1562,9 +1702,12 @@ const DashboardAdmin = () => {
                 ...(current || {}),
                 summary: summary.summary || {},
                 businessSnapshot: summary.businessSnapshot || {},
+                conversionFunnel: summary.conversionFunnel || current?.conversionFunnel || {},
+                insights: summary.insights || current?.insights || {},
             }));
         } catch (error) {
             console.error(error);
+            if (!silent) showToast('We could not load the latest data. Showing saved data if available.', 'error');
         } finally {
             if (!silent) setAnalyticsLoading(false);
         }
@@ -1593,6 +1736,7 @@ const DashboardAdmin = () => {
             setAnalytics({
                 summary: summary.summary || {},
                 businessSnapshot: summary.businessSnapshot || {},
+                conversionFunnel: summary.conversionFunnel || {},
                 revenueTrends: revenueHealth.settledRevenueOverTime || [],
                 revenueHealth,
                 paymentAging: revenueHealth.paymentAging || [],
@@ -1606,12 +1750,14 @@ const DashboardAdmin = () => {
                 operationalAlerts: operations.alerts || [],
                 revenueForecast: forecasts.revenueForecast || {},
                 paxDemandProjection: forecasts.paxDemandProjection || {},
+                insights: summary.insights || {},
                 projectedPaxDemand: forecasts.projectedPaxDemand || [],
                 topSellers: menu.packagePerformance || [],
                 peakSeasons: operations.operationsLoad || [],
             });
         } catch (error) {
             console.error(error);
+            if (!silent) showToast('We could not load the latest analytics. Showing saved data if available.', 'error');
         } finally {
             if (!silent) setAnalyticsLoading(false);
         }
@@ -1648,6 +1794,7 @@ const DashboardAdmin = () => {
             });
             const data = await res.json();
             setReportPreview(data.widgets || []);
+            setReportExecutiveSummary(data.executive_summary || null);
         } catch (error) {
             console.error(error);
             showToast('Could not preview report', 'error');
@@ -1897,6 +2044,210 @@ const DashboardAdmin = () => {
         </button>
     );
 
+    const insightToneClass = (severity = 'good') => ({
+        critical: 'border-red-100 bg-red-50 text-red-800',
+        warning: 'border-amber-100 bg-amber-50 text-amber-900',
+        watch: 'border-[#f0aa0b]/20 bg-[#fff7e8] text-[#720101]',
+        good: 'border-emerald-100 bg-emerald-50 text-emerald-800',
+    }[severity] || 'border-slate-100 bg-slate-50 text-slate-700');
+
+    const LoadingFeedback = ({ label = 'Loading your dashboard data...', compact = false }) => (
+        <div className={`admin-loading-note ${compact ? 'is-compact' : ''}`} role="status" aria-live="polite">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            <span>{analyticsSlowLoading ? 'Still working. Your connection may be slow, but we are checking.' : label}</span>
+        </div>
+    );
+
+    const normalizeInsight = (insight, fallbackHeadline = 'Review this chart for context.') => {
+        if (!insight) return null;
+        if (typeof insight === 'string') {
+            return {
+                headline: fallbackHeadline,
+                meaning: insight,
+                recommended_action: 'Use this trend alongside current queues before making decisions.',
+                severity: 'watch',
+            };
+        }
+        return insight;
+    };
+
+    const InsightLine = ({ insight, compact = true }) => {
+        const normalized = normalizeInsight(insight);
+        if (!normalized) return null;
+
+        return (
+            <div className={`admin-insight-line ${insightToneClass(normalized.severity)} ${compact ? 'is-compact' : ''}`}>
+                <strong>{normalized.headline}</strong>
+                {!compact && (
+                    <>
+                        <p>{normalized.meaning}</p>
+                        {normalized.recommended_action && <span>{normalized.recommended_action}</span>}
+                    </>
+                )}
+            </div>
+        );
+    };
+
+    const AnalyticsPanel = ({ id, kicker, title, description, insight, actions, children, loading = false, className = '', chartHeight = 'h-64' }) => (
+        <section className={`admin-panel admin-analytics-panel overflow-hidden ${className}`}>
+            <div className="admin-analytics-panel-head">
+                <div>
+                    {kicker && <p className="admin-kicker">{kicker}</p>}
+                    <h3>{title}</h3>
+                    {description && <p>{description}</p>}
+                </div>
+                <div className="admin-analytics-panel-actions">
+                    {actions}
+                    <button type="button" onClick={() => setExpandedAnalyticsPanel(id)} className="admin-mini-button inline-flex items-center gap-2">
+                        <Maximize2 className="h-3.5 w-3.5" />
+                        Expand
+                    </button>
+                </div>
+            </div>
+            <div className="admin-analytics-panel-body">
+                {loading && <LoadingFeedback label="Preparing analytics..." compact />}
+                <div className={chartHeight}>{children}</div>
+                <InsightLine insight={insight} />
+            </div>
+        </section>
+    );
+
+    const renderExpandedAnalyticsContent = (panelId) => {
+        if (panelId === 'revenue-trend') {
+            return revenueTrendData.length ? (
+                <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={revenueTrendData}>
+                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E5E7EB" />
+                        <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#6B7280' }} />
+                        <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#6B7280' }} tickFormatter={(value) => `PHP ${Math.round(value / 1000)}k`} />
+                        <RechartsTooltip formatter={(value) => formatCurrency(value)} />
+                        <Bar dataKey="revenue" fill="#720101" radius={[6, 6, 0, 0]} name="Revenue" />
+                    </BarChart>
+                </ResponsiveContainer>
+            ) : null;
+        }
+
+        if (panelId === 'payment-breakdown') {
+            return visiblePaymentStatusBreakdown.length ? (
+                <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={visiblePaymentStatusBreakdown}>
+                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E5E7EB" />
+                        <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#6B7280' }} />
+                        <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#6B7280' }} tickFormatter={(value) => `PHP ${Math.round(value / 1000)}k`} />
+                        <RechartsTooltip formatter={(value) => formatCurrency(value)} />
+                        <Bar dataKey="total" fill="#720101" radius={[6, 6, 0, 0]} name="Amount" />
+                    </BarChart>
+                </ResponsiveContainer>
+            ) : null;
+        }
+
+        if (panelId === 'booking-pipeline') {
+            return bookingPipelineData.length ? (
+                <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={bookingPipelineData}>
+                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E5E7EB" />
+                        <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#6B7280' }} />
+                        <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#6B7280' }} />
+                        <RechartsTooltip />
+                        <Bar dataKey="count" fill="#720101" radius={[6, 6, 0, 0]} name="Bookings" />
+                    </BarChart>
+                </ResponsiveContainer>
+            ) : null;
+        }
+
+        if (panelId === 'conversion-funnel') {
+            const data = [
+                { label: 'Booking starts', value: conversionFunnel.booking_starts || 0 },
+                { label: 'Submissions', value: conversionFunnel.booking_submissions || 0 },
+                { label: 'Payment starts', value: conversionFunnel.payment_checkout_starts || 0 },
+                { label: 'Payments', value: conversionFunnel.payment_confirmations || 0 },
+                { label: 'Feedback', value: conversionFunnel.feedback_submissions || 0 },
+            ];
+            return (
+                <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={data}>
+                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E5E7EB" />
+                        <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#6B7280' }} />
+                        <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#6B7280' }} />
+                        <RechartsTooltip />
+                        <Bar dataKey="value" fill="#720101" radius={[6, 6, 0, 0]} name="Events" />
+                    </BarChart>
+                </ResponsiveContainer>
+            );
+        }
+
+        if (panelId === 'package-performance') {
+            return visiblePackagePerformanceData.length ? (
+                <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={visiblePackagePerformanceData} layout="vertical" margin={{ left: 24, right: 24 }}>
+                        <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#E5E7EB" />
+                        <XAxis type="number" axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#6B7280' }} tickFormatter={(value) => `PHP ${Math.round(value / 1000)}k`} />
+                        <YAxis type="category" dataKey="label" width={160} axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#374151', fontWeight: 700 }} />
+                        <RechartsTooltip formatter={(value) => formatCurrency(value)} />
+                        <Bar dataKey="revenue" fill="#720101" radius={[0, 6, 6, 0]} name="Revenue" />
+                    </BarChart>
+                </ResponsiveContainer>
+            ) : null;
+        }
+
+        if (panelId === 'menu-performance') {
+            return visibleMenuPerformanceData.length ? (
+                <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={visibleMenuPerformanceData} layout="vertical" margin={{ left: 24, right: 24 }}>
+                        <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#E5E7EB" />
+                        <XAxis type="number" axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#6B7280' }} />
+                        <YAxis type="category" dataKey="label" width={160} axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#374151', fontWeight: 700 }} />
+                        <RechartsTooltip />
+                        <Bar dataKey={menuViewFilters.sort === 'pax' ? 'paxServed' : 'selections'} fill="#720101" radius={[0, 6, 6, 0]} name={menuViewFilters.sort === 'pax' ? 'Guests served' : 'Selections'} />
+                    </BarChart>
+                </ResponsiveContainer>
+            ) : null;
+        }
+
+        if (panelId === 'revenue-forecast') {
+            return revenueForecastData.length ? (
+                <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={revenueForecastData}>
+                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E5E7EB" />
+                        <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#6B7280' }} />
+                        <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#6B7280' }} tickFormatter={(value) => `PHP ${Math.round(value / 1000)}k`} />
+                        <RechartsTooltip formatter={(value) => formatCurrency(value)} />
+                        <Bar dataKey="revenue" fill="#720101" radius={[6, 6, 0, 0]} name="Actual collected" />
+                        <Bar dataKey="forecast" fill="#f0aa0b" radius={[6, 6, 0, 0]} name="SMA forecast" />
+                    </BarChart>
+                </ResponsiveContainer>
+            ) : null;
+        }
+
+        if (panelId === 'pax-forecast') {
+            return paxDemandData.length ? (
+                <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={paxDemandData}>
+                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E5E7EB" />
+                        <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#6B7280' }} />
+                        <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#6B7280' }} />
+                        <RechartsTooltip />
+                        <Bar dataKey="pax" fill="#720101" radius={[6, 6, 0, 0]} name="Actual guests" />
+                        <Bar dataKey="forecast" fill="#f0aa0b" radius={[6, 6, 0, 0]} name="SMA forecast" />
+                    </BarChart>
+                </ResponsiveContainer>
+            ) : null;
+        }
+
+        return null;
+    };
+
+    const expandedPanelMeta = {
+        'revenue-trend': ['Revenue trend', analyticsInsightItems.revenue],
+        'payment-breakdown': ['Payment breakdown', analyticsInsightItems.payments],
+        'booking-pipeline': ['Booking pipeline', analyticsInsightItems.pipeline],
+        'conversion-funnel': ['Conversion funnel', analyticsInsightItems.conversion],
+        'package-performance': ['Package performance', analyticsInsightItems.menu],
+        'menu-performance': ['Menu performance', analyticsInsightItems.menu],
+        'revenue-forecast': ['Revenue forecast', analyticsInsightItems.forecast || normalizeInsight(revenueForecast.insight, 'Forecast gives planning context.')],
+        'pax-forecast': ['Guest demand forecast', analyticsInsightItems.forecast || normalizeInsight(paxDemandProjection.insight, 'Demand forecast gives planning context.')],
+    };
+
     const renderAnalyticsWorkbench = () => {
         const insightCards = [
             {
@@ -2017,7 +2368,210 @@ const DashboardAdmin = () => {
                     )}
                 </section>
 
-                <div className="grid gap-5 xl:grid-cols-[minmax(0,1.25fr)_minmax(20rem,.75fr)]">
+                <section className="admin-key-takeaways">
+                    <div>
+                        <p className="admin-kicker">Key takeaways</p>
+                        <h3>What Admin should notice first</h3>
+                    </div>
+                    <div className="admin-key-takeaway-grid">
+                        {(analyticsTakeaways.length ? analyticsTakeaways : [
+                            analyticsInsightItems.revenue,
+                            analyticsInsightItems.conversion,
+                            analyticsInsightItems.operations,
+                        ].filter(Boolean)).slice(0, 3).map((insight, index) => (
+                            <InsightLine key={`${insight.headline}-${index}`} insight={insight} compact={false} />
+                        ))}
+                        {!analyticsTakeaways.length && !analyticsInsightItems.revenue && (
+                            <div className="admin-loading-note is-compact">
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                                <span>Checking for the latest updates...</span>
+                            </div>
+                        )}
+                    </div>
+                </section>
+
+                <div className="admin-analytics-grid">
+                    <AnalyticsPanel
+                        id="revenue-trend"
+                        kicker="Revenue"
+                        title="Revenue trend"
+                        description="Verified collections over the selected window."
+                        insight={analyticsInsightItems.revenue}
+                        loading={analyticsLoading && !!analytics}
+                        actions={renderAnalyticsFilterButton('revenueTrend', `Last ${analyticsFilters.trend_months} months`)}
+                    >
+                        {revenueTrendData.length ? (
+                            <ResponsiveContainer width="100%" height="100%">
+                                <BarChart data={revenueTrendData}>
+                                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E5E7EB" />
+                                    <XAxis dataKey="month" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#6B7280' }} />
+                                    <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#6B7280' }} />
+                                    <RechartsTooltip formatter={(value) => formatCurrency(value)} />
+                                    <Bar dataKey="revenue" fill="#720101" radius={[6, 6, 0, 0]} name="Revenue" />
+                                </BarChart>
+                            </ResponsiveContainer>
+                        ) : <div className="admin-chart-empty">No collected revenue for this window.</div>}
+                    </AnalyticsPanel>
+
+                    <AnalyticsPanel
+                        id="payment-breakdown"
+                        kicker="Finance"
+                        title="Payment breakdown"
+                        description="Shows payment exposure by current status."
+                        insight={analyticsInsightItems.payments}
+                        loading={analyticsLoading && !!analytics}
+                        actions={renderAnalyticsFilterButton('dashboardPayment', paymentRiskFilters.status === 'all' ? 'Payment status' : paymentRiskFilters.status)}
+                    >
+                        {visiblePaymentStatusBreakdown.length ? (
+                            <ResponsiveContainer width="100%" height="100%">
+                                <BarChart data={visiblePaymentStatusBreakdown}>
+                                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E5E7EB" />
+                                    <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#6B7280' }} />
+                                    <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#6B7280' }} tickFormatter={(value) => `PHP ${Math.round(value / 1000)}k`} />
+                                    <RechartsTooltip formatter={(value) => formatCurrency(value)} />
+                                    <Bar dataKey="total" fill="#720101" radius={[6, 6, 0, 0]} name="Amount" />
+                                </BarChart>
+                            </ResponsiveContainer>
+                        ) : <div className="admin-chart-empty">No payment rows for this filter.</div>}
+                    </AnalyticsPanel>
+
+                    <AnalyticsPanel
+                        id="booking-pipeline"
+                        kicker="Bookings"
+                        title="Booking pipeline"
+                        description="Counts requests and confirmed work by status."
+                        insight={analyticsInsightItems.pipeline}
+                        loading={analyticsLoading && !!analytics}
+                    >
+                        {bookingPipelineData.length ? (
+                            <ResponsiveContainer width="100%" height="100%">
+                                <BarChart data={bookingPipelineData}>
+                                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E5E7EB" />
+                                    <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#6B7280' }} />
+                                    <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#6B7280' }} />
+                                    <RechartsTooltip />
+                                    <Bar dataKey="count" fill="#720101" radius={[6, 6, 0, 0]} name="Bookings" />
+                                </BarChart>
+                            </ResponsiveContainer>
+                        ) : <div className="admin-chart-empty">No booking pipeline data yet.</div>}
+                    </AnalyticsPanel>
+
+                    <AnalyticsPanel
+                        id="conversion-funnel"
+                        kicker="Conversion"
+                        title="Booking completion funnel"
+                        description="Tracks starts, submissions, payment movement, and feedback."
+                        insight={analyticsInsightItems.conversion}
+                        loading={analyticsLoading && !!analytics}
+                    >
+                        <ResponsiveContainer width="100%" height="100%">
+                            <BarChart data={[
+                                { label: 'Starts', value: conversionFunnel.booking_starts || 0 },
+                                { label: 'Bookings', value: conversionFunnel.booking_submissions || 0 },
+                                { label: 'Payments', value: conversionFunnel.payment_confirmations || 0 },
+                                { label: 'Feedback', value: conversionFunnel.feedback_submissions || 0 },
+                            ]}>
+                                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E5E7EB" />
+                                <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#6B7280' }} />
+                                <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#6B7280' }} />
+                                <RechartsTooltip />
+                                <Bar dataKey="value" fill="#720101" radius={[6, 6, 0, 0]} name="Events" />
+                            </BarChart>
+                        </ResponsiveContainer>
+                    </AnalyticsPanel>
+
+                    <AnalyticsPanel
+                        id="package-performance"
+                        kicker="Menu demand"
+                        title="Package performance"
+                        description="Top package choices by revenue."
+                        insight={analyticsInsightItems.menu}
+                        loading={analyticsLoading && !!analytics}
+                        actions={renderAnalyticsFilterButton('packagePerformance', `Top ${packageViewFilters.limit}`)}
+                    >
+                        {visiblePackagePerformanceData.length ? (
+                            <ResponsiveContainer width="100%" height="100%">
+                                <BarChart data={visiblePackagePerformanceData} layout="vertical" margin={{ left: 24, right: 12 }}>
+                                    <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#E5E7EB" />
+                                    <XAxis type="number" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#6B7280' }} tickFormatter={(value) => `PHP ${Math.round(value / 1000)}k`} />
+                                    <YAxis type="category" dataKey="label" width={130} axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#374151', fontWeight: 700 }} />
+                                    <RechartsTooltip formatter={(value) => formatCurrency(value)} />
+                                    <Bar dataKey="revenue" fill="#720101" radius={[0, 6, 6, 0]} name="Revenue" />
+                                </BarChart>
+                            </ResponsiveContainer>
+                        ) : <div className="admin-chart-empty">No package data for this filter.</div>}
+                    </AnalyticsPanel>
+
+                    <AnalyticsPanel
+                        id="menu-performance"
+                        kicker="Kitchen signal"
+                        title="Menu performance"
+                        description="Most selected dishes from actual bookings."
+                        insight={analyticsInsightItems.menu}
+                        loading={analyticsLoading && !!analytics}
+                        actions={renderAnalyticsFilterButton('menuPerformance', MENU_CATEGORY_OPTIONS.find(option => option.value === menuViewFilters.category)?.label || 'Dish type')}
+                    >
+                        {visibleMenuPerformanceData.length ? (
+                            <ResponsiveContainer width="100%" height="100%">
+                                <BarChart data={visibleMenuPerformanceData} layout="vertical" margin={{ left: 24, right: 12 }}>
+                                    <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#E5E7EB" />
+                                    <XAxis type="number" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#6B7280' }} />
+                                    <YAxis type="category" dataKey="label" width={130} axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#374151', fontWeight: 700 }} />
+                                    <RechartsTooltip />
+                                    <Bar dataKey={menuViewFilters.sort === 'pax' ? 'paxServed' : 'selections'} fill="#720101" radius={[0, 6, 6, 0]} name={menuViewFilters.sort === 'pax' ? 'Guests served' : 'Selections'} />
+                                </BarChart>
+                            </ResponsiveContainer>
+                        ) : <div className="admin-chart-empty">No menu selections for this filter.</div>}
+                    </AnalyticsPanel>
+
+                    <AnalyticsPanel
+                        id="revenue-forecast"
+                        kicker="Forecast"
+                        title="Revenue forecast"
+                        description="Moving average forecast for collected revenue."
+                        insight={analyticsInsightItems.forecast || normalizeInsight(revenueForecast.insight, 'Forecast gives planning context.')}
+                        loading={analyticsLoading && !!analytics}
+                        actions={renderAnalyticsFilterButton('revenueForecast', `${analyticsFilters.revenue_forecast_period} forecast`)}
+                    >
+                        {revenueForecastData.length ? (
+                            <ResponsiveContainer width="100%" height="100%">
+                                <BarChart data={revenueForecastData}>
+                                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E5E7EB" />
+                                    <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#6B7280' }} />
+                                    <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#6B7280' }} tickFormatter={(value) => `PHP ${Math.round(value / 1000)}k`} />
+                                    <RechartsTooltip formatter={(value) => formatCurrency(value)} />
+                                    <Bar dataKey="revenue" fill="#720101" radius={[6, 6, 0, 0]} name="Actual collected" />
+                                    <Bar dataKey="forecast" fill="#f0aa0b" radius={[6, 6, 0, 0]} name="SMA forecast" />
+                                </BarChart>
+                            </ResponsiveContainer>
+                        ) : <div className="admin-chart-empty">No revenue forecast data yet.</div>}
+                    </AnalyticsPanel>
+
+                    <AnalyticsPanel
+                        id="pax-forecast"
+                        kicker="Operations forecast"
+                        title="Guest demand forecast"
+                        description="Projected pax for staffing and preparation planning."
+                        insight={analyticsInsightItems.forecast || normalizeInsight(paxDemandProjection.insight, 'Demand forecast gives planning context.')}
+                        loading={analyticsLoading && !!analytics}
+                        actions={renderAnalyticsFilterButton('paxForecast', `${analyticsFilters.pax_projection_period} demand`)}
+                    >
+                        {paxDemandData.length ? (
+                            <ResponsiveContainer width="100%" height="100%">
+                                <BarChart data={paxDemandData}>
+                                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E5E7EB" />
+                                    <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#6B7280' }} />
+                                    <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#6B7280' }} />
+                                    <RechartsTooltip />
+                                    <Bar dataKey="pax" fill="#720101" radius={[6, 6, 0, 0]} name="Actual guests" />
+                                    <Bar dataKey="forecast" fill="#f0aa0b" radius={[6, 6, 0, 0]} name="SMA forecast" />
+                                </BarChart>
+                            </ResponsiveContainer>
+                        ) : <div className="admin-chart-empty">No guest demand forecast data yet.</div>}
+                    </AnalyticsPanel>
+                </div>
+
+                <div className="hidden grid gap-5 xl:grid-cols-[minmax(0,1.25fr)_minmax(20rem,.75fr)]">
                     <section className="admin-panel overflow-hidden">
                         <div className="border-b border-gray-100 bg-white p-5">
                             <p className="admin-kicker">Revenue and pipeline</p>
@@ -2090,7 +2644,7 @@ const DashboardAdmin = () => {
                     </section>
                 </div>
 
-                <div className="grid gap-5 xl:grid-cols-2">
+                <div className="hidden grid gap-5 xl:grid-cols-2">
                     <section className="admin-panel overflow-hidden">
                         <div className="flex items-center justify-between border-b border-gray-100 bg-white p-5">
                             <div>
@@ -2728,9 +3282,9 @@ const DashboardAdmin = () => {
                 roleLabel="Owner operations"
                 label="Preparing admin console"
                 navGroups={[
-                    { label: 'Owner Workbench', items: ['Today', 'Bookings & Intake', 'Calendar & Handoff', 'Finance', 'Messages & Inquiries'] },
+                    { label: 'Owner Workbench', items: ['Today', 'Bookings & Intake', 'Calendar', 'Handoff', 'Finance', 'Messages & Inquiries'] },
                     { label: 'Business Control', items: ['Public Content', 'Availability', 'Accounts'] },
-                    { label: 'Insight & Governance', items: ['Analytics & Reports', 'System & Audit', 'Event History'] },
+                    { label: 'Insight & Governance', items: ['Analytics', 'Reports', 'System & Audit', 'Event History'] },
                 ]}
             />
         );
@@ -2762,26 +3316,41 @@ const DashboardAdmin = () => {
                     {activeTab === 'today' && (
                         <div className="animate-fadeIn">
                             <div className="space-y-6">
-                                <section className="admin-panel overflow-hidden">
-                                    <div className="flex flex-col gap-4 border-b border-gray-100 bg-[#fffaf3] p-6 xl:flex-row xl:items-center xl:justify-between">
+                                <section className="admin-panel admin-today-command overflow-hidden">
+                                    <div className="admin-compact-command border-0 bg-[#fffaf3]">
                                         <div>
                                             <p className="admin-kicker">Daily work</p>
-                                            <h3 className="mt-1 text-2xl font-black text-gray-950">What needs attention today</h3>
-                                            <p className="mt-2 max-w-3xl text-sm font-semibold leading-6 text-gray-500">A focused view of bookings, collections, refunds, and activity that may need staff action.</p>
+                                            <h3>What needs attention today</h3>
+                                            <p>A focused view of bookings, collections, refunds, and activity that may need staff action.</p>
                                         </div>
-                                        <div className="flex flex-wrap gap-2">
-                                            <button onClick={() => setAssistedBookingOpen(true)} className="admin-button-primary inline-flex items-center justify-center gap-2 px-5 py-2.5 text-sm font-black">
-                                                Create assisted booking
-                                            </button>
-                                            {renderDashboardFilterButton('dashboardSnapshot', businessSnapshot.label || 'Timeframe')}
-                                            <button onClick={() => fetchAnalytics()} disabled={analyticsLoading} className="admin-button-primary inline-flex items-center justify-center gap-2 px-5 py-2.5 text-sm font-black">
-                                                <RefreshCw className={`h-4 w-4 ${analyticsLoading ? 'animate-spin' : ''}`} />
-                                                {analyticsLoading ? 'Refreshing...' : 'Refresh'}
-                                            </button>
+                                        <div className="admin-command-actions">
+                                            <div className="admin-primary-actions">
+                                                <button onClick={() => setAssistedBookingOpen(true)} className="admin-button-primary inline-flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-black">
+                                                    Create booking
+                                                </button>
+                                                <button onClick={() => setActiveTab('handoff')} className="admin-button-secondary inline-flex items-center justify-center px-3 py-2.5 text-sm font-black">
+                                                    Handoff
+                                                </button>
+                                                <button onClick={() => setActiveTab('reports')} className="admin-button-secondary inline-flex items-center justify-center px-3 py-2.5 text-sm font-black">
+                                                    Reports
+                                                </button>
+                                            </div>
+                                            <div className="admin-utility-actions">
+                                                {renderDashboardFilterButton('dashboardSnapshot', businessSnapshot.label || 'Timeframe')}
+                                                <button
+                                                    onClick={() => fetchAnalytics()}
+                                                    disabled={analyticsLoading}
+                                                    className="admin-icon-action"
+                                                    title={analyticsLoading ? 'Refreshing dashboard data' : 'Refresh dashboard data'}
+                                                    aria-label={analyticsLoading ? 'Refreshing dashboard data' : 'Refresh dashboard data'}
+                                                >
+                                                    <RefreshCw className={`h-4 w-4 ${analyticsLoading ? 'animate-spin' : ''}`} />
+                                                </button>
+                                            </div>
                                         </div>
                                     </div>
                                     {activeDashboardFilterPanel === 'dashboardSnapshot' && (
-                                        <div className="border-b border-gray-100 bg-white p-5">
+                                        <div className="border-t border-gray-100 bg-white px-4 py-3">
                                             <label className="block max-w-xs text-[11px] font-black uppercase tracking-widest text-gray-400">
                                                 <span className="flex items-center gap-2"><CalendarDays className="h-3.5 w-3.5" /> Overview timeframe</span>
                                                 <select
@@ -2798,18 +3367,18 @@ const DashboardAdmin = () => {
                                             </label>
                                         </div>
                                     )}
-                                    <div className="grid grid-cols-1 gap-3 p-5 sm:grid-cols-2 xl:grid-cols-4">
+                                    <div className="admin-stat-strip border-t border-gray-100 bg-white px-4 py-3">
                                         {[
                                             ['Total revenue', formatCurrency(analyticsSummary.totalRevenue || 0), `Collected ${formatCurrency(analyticsSummary.settledRevenue || 0)}`],
                                             ['Collection rate', `${analyticsSummary.collectionRate || 0}%`, `Pending ${formatCurrency(analyticsSummary.pendingRevenue || 0)}`],
                                             ['Active bookings', analyticsSummary.activeBookings || 0, `${analyticsSummary.pendingBookings || 0} pending requests`],
                                             ['Total guests', Number(analyticsSummary.totalPax || 0).toLocaleString(), `Avg booking ${formatCurrency(analyticsSummary.averageBookingValue || 0)}`],
                                         ].map(([label, value, hint]) => (
-                                            <div key={label} className="rounded-xl border border-gray-100 bg-white p-4 shadow-sm">
-                                                <p className="text-[11px] font-black uppercase tracking-widest text-gray-400">{label}</p>
-                                                <p className="mt-2 text-2xl font-black text-gray-950">{value}</p>
-                                                <p className="mt-1 text-xs font-semibold text-gray-500">{hint}</p>
-                                            </div>
+                                            <span key={label} className="admin-stat-chip admin-stat-chip-wide">
+                                                <strong>{value}</strong>
+                                                <em>{label}</em>
+                                                <small>{hint}</small>
+                                            </span>
                                         ))}
                                     </div>
                                 </section>
@@ -3097,6 +3666,20 @@ const DashboardAdmin = () => {
                                                 );
                                             })}
                                         </div>
+                                        <div className="admin-heatmap-legend mt-5">
+                                            {[
+                                                ['bg-green-100', 'Low', '0-3 events'],
+                                                ['bg-yellow-200', 'Moderate', '4-6 events'],
+                                                ['bg-orange-300', 'High', '7-8 events'],
+                                                ['bg-red-500', 'Peak', '9+ events'],
+                                            ].map(([color, label, range]) => (
+                                                <span key={label}>
+                                                    <i className={color} />
+                                                    <strong>{label}</strong>
+                                                    <em>{range}</em>
+                                                </span>
+                                            ))}
+                                        </div>
                                     </section>
                                 </div>
                             </div>
@@ -3247,7 +3830,7 @@ const DashboardAdmin = () => {
                             </div>
                         </div>
                     )}
-                    {activeTab === 'analytics-reports' && (
+                    {activeTab === 'analytics' && (
                         <>
                         {renderAnalyticsWorkbench()}
                         <div className="hidden">
@@ -4032,7 +4615,7 @@ const DashboardAdmin = () => {
                         </div>
                     )}
                     {
-                        activeTab === 'analytics-reports' && (
+                        activeTab === 'reports' && (
                             <div className="animate-fadeIn admin-report-page">
                                 <section className="admin-report-setup admin-report-setup-compact">
                                     <div className="admin-report-setup-summary">
@@ -4117,7 +4700,7 @@ const DashboardAdmin = () => {
                                 <div className="admin-report-actions">
                                     <div className="admin-report-view-toggle">
                                         <button type="button" onClick={() => setReportView('build')} className={reportView === 'build' ? 'is-active' : ''}>Build</button>
-                                        <button type="button" onClick={previewReport} className={reportView === 'preview' ? 'is-active' : ''}>Preview</button>
+                                        <button type="button" onClick={previewReport} className={reportView === 'preview' ? 'is-active' : ''}>{reportLoading ? 'Generating preview...' : 'Preview'}</button>
                                     </div>
                                     <button onClick={saveReportTemplate} disabled={reportSaving} className="admin-button-secondary px-5 py-2.5 text-sm font-black">{reportSaving ? 'Saving...' : 'Save Report'}</button>
                                     <button onClick={() => runReportExport('csv')} className="admin-button-secondary px-5 py-2.5 text-sm font-black">Download Spreadsheet</button>
@@ -4298,6 +4881,21 @@ const DashboardAdmin = () => {
                                         ) : (
                                         <div className="admin-report-preview-canvas">
                                             <div className="space-y-4">
+                                                {reportLoading && <LoadingFeedback label="Fetching report details..." compact />}
+                                                {reportExecutiveSummary && (
+                                                    <section className="admin-report-executive">
+                                                        <div>
+                                                            <p className="admin-kicker">Executive summary</p>
+                                                            <h3>{reportExecutiveSummary.headline || 'Report ready for review.'}</h3>
+                                                            <p>{reportExecutiveSummary.recommended_action || 'Review the selected report blocks and follow up on any active queues.'}</p>
+                                                        </div>
+                                                        <div className="admin-report-executive-grid">
+                                                            {(reportExecutiveSummary.takeaways || []).slice(0, 5).map((takeaway, index) => (
+                                                                <InsightLine key={`${takeaway.headline}-${index}`} insight={takeaway} compact={false} />
+                                                            ))}
+                                                        </div>
+                                                    </section>
+                                                )}
                                                 {reportPreview.map(widget => {
                                                     const meta = reportWidgets.find(item => item.id === widget.id) || { name: widget.id };
                                                     const data = widget.data || {};
@@ -4312,6 +4910,7 @@ const DashboardAdmin = () => {
                                                                 </div>
                                                                 {!!rows.length && <span className="text-xs font-black uppercase tracking-wider text-[#9f6500]">{summarizeReportWidget(widget)}</span>}
                                                             </div>
+                                                            <InsightLine insight={data.insight} compact={false} />
                                                             {summaryMetrics.length > 0 && (
                                                                 <div className="admin-report-metric-grid">
                                                                     {summaryMetrics.map(metric => (
@@ -4346,15 +4945,34 @@ const DashboardAdmin = () => {
                     }
                     {activeTab === 'messages-inquiries' && (
                         <div className="animate-fadeIn space-y-5">
-                            <div className="rounded-2xl border border-[#720101]/10 bg-white p-5 shadow-sm">
-                                <p className="admin-kicker">Support override</p>
-                                <h3 className="mt-1 text-xl font-black text-gray-950">Messages and guest inquiries</h3>
-                                <p className="mt-2 max-w-3xl text-sm font-semibold leading-6 text-slate-500">
-                                    Admin can monitor staff chat conversations here. Booking-specific questions can still be opened from the event drawer.
-                                </p>
+                            <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-[#720101]/10 bg-white px-4 py-3 shadow-sm">
+                                {[
+                                    ['Open conversations', adminMessageMetrics.open],
+                                    ['Needs admin attention', adminMessageMetrics.needsAttention],
+                                    ['Unassigned', adminMessageMetrics.unassigned],
+                                    ['Resolved today', adminMessageMetrics.resolvedToday],
+                                ].map(([label, value]) => (
+                                    <div key={label} className="rounded-xl border border-[#720101]/10 bg-[#faf7f2] px-3 py-2">
+                                        <span className="text-lg font-black text-gray-950">{value}</span>
+                                        <span className="ml-2 text-[11px] font-black uppercase tracking-wider text-slate-400">{label}</span>
+                                    </div>
+                                ))}
+                                <button
+                                    type="button"
+                                    onClick={() => setMessageRefreshToken((value) => value + 1)}
+                                    className="ml-auto inline-flex h-11 w-11 items-center justify-center rounded-xl border border-[#720101]/15 bg-white text-[#720101] transition hover:bg-[#fff7ed]"
+                                    aria-label="Refresh conversations"
+                                    title="Refresh conversations"
+                                >
+                                    <RefreshCw className="h-4 w-4" aria-hidden="true" />
+                                </button>
                             </div>
                             <Suspense fallback={<StaffSkeleton variant="panel" rows={6} label="Loading message desk" />}>
-                                <StaffMessaging />
+                                <StaffMessaging
+                                    variant="admin-oversight"
+                                    refreshToken={messageRefreshToken}
+                                    onMetricsChange={setAdminMessageMetrics}
+                                />
                             </Suspense>
                         </div>
                     )}
@@ -4586,11 +5204,11 @@ const DashboardAdmin = () => {
                     {
                         activeTab === 'accounts' && (
                             <div className="animate-fadeIn">
-                                <div className="mb-5 flex flex-col gap-4 rounded-2xl border border-[#720101]/10 bg-white p-4 shadow-sm lg:flex-row lg:items-center lg:justify-between">
+                                <div className="admin-compact-command mb-4">
                                     <div>
                                         <p className="admin-kicker">Accounts</p>
                                         <h3 className="mt-1 text-xl font-black text-gray-950">Access and customer account controls</h3>
-                                        <p className="mt-1 max-w-3xl text-sm font-semibold text-slate-500">Deactivate preserves records. Reset creates a temporary password. Force change keeps the current password but requires a new one on next sign-in.</p>
+                                        <p>Manage staff access, customer account status, temporary passwords, and reactivation.</p>
                                     </div>
                                     <button onClick={() => openEmpModal('add')} className="inline-flex items-center justify-center gap-2 rounded-xl bg-[#720101] px-4 py-3 text-sm font-black text-white shadow-sm transition-colors hover:bg-[#5a0101]">
                                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
@@ -4598,31 +5216,32 @@ const DashboardAdmin = () => {
                                     </button>
                                 </div>
 
-                                <div className="mb-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                                <div className="admin-stat-strip mb-4">
                                     {[
                                         { label: 'Active staff', value: employeeAccountStats.active },
                                         { label: 'Need password change', value: employeeAccountStats.password },
                                         { label: 'Deactivated staff', value: employeeAccountStats.deactivated },
                                         { label: 'Customers with bookings', value: customerAccountStats.withBookings },
                                     ].map((stat) => (
-                                        <div key={stat.label} className="rounded-2xl border border-slate-100 bg-white px-4 py-3 shadow-sm">
-                                            <p className="text-[11px] font-black uppercase tracking-widest text-slate-400">{stat.label}</p>
-                                            <p className="mt-1 text-2xl font-black text-slate-950">{stat.value}</p>
-                                        </div>
+                                        <span key={stat.label} className="admin-stat-chip">
+                                            <strong>{stat.value}</strong>
+                                            <em>{stat.label}</em>
+                                        </span>
                                     ))}
                                 </div>
 
-                                <div className="mb-5 rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3 shadow-sm">
-                                    <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                                <details className="admin-help-disclosure mb-4">
+                                    <summary>Account action guide</summary>
+                                    <div className="mt-3 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                                         <div>
                                             <p className="text-sm font-black text-amber-950">Account emails are available as a fallback, and temporary passwords can be shown again until they expire or are changed.</p>
-                                            <p className="mt-1 text-xs font-bold text-amber-800">If a password email does not arrive, use Show temporary password or check delivery settings in Business Setup.</p>
+                                            <p className="mt-1 text-xs font-bold text-amber-800">Deactivate preserves records. Reset creates a temporary password. Force change keeps the current password but requires a new one on next sign-in.</p>
                                         </div>
                                         <button type="button" onClick={() => setActiveTab('public-content')} className="rounded-xl border border-amber-200 bg-white px-4 py-2 text-xs font-black text-amber-900 hover:bg-amber-100">
                                             Open delivery settings
                                         </button>
                                     </div>
-                                </div>
+                                </details>
 
                                 <div className="mb-5 inline-flex rounded-2xl border border-[#720101]/10 bg-white p-1 shadow-sm">
                                     {[
@@ -4886,27 +5505,28 @@ const DashboardAdmin = () => {
                     {
                         activeTab === 'bookings-intake' && (
                             <div className="animate-fadeIn">
-                                <div className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-                                    <div className="rounded-2xl border border-amber-200 bg-amber-50 px-5 py-4 text-sm font-semibold text-amber-900">
-                                        <span className="font-black uppercase tracking-widest">Admin override</span>
-                                        <p className="mt-1">Create assisted bookings, approve requests, and review booking adjustments from the owner console.</p>
+                                <div className="admin-compact-command admin-booking-command mb-4">
+                                    <div>
+                                        <p className="admin-kicker">Admin override</p>
+                                        <h3>Booking action desk</h3>
+                                        <p>Create assisted bookings, approve requests, and review adjustments from one queue.</p>
                                     </div>
-                                    <button type="button" onClick={() => setAssistedBookingOpen(true)} className="admin-button-primary inline-flex items-center justify-center px-5 py-3 text-sm font-black">
-                                        Create booking for customer
-                                    </button>
-                                    <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                                    <div className="admin-stat-strip admin-booking-stat-strip">
                                         {[
                                             { label: 'Current', value: bookingStats.total },
                                             { label: 'Pending', value: bookingStats.pending },
                                             { label: 'Active', value: bookingStats.active },
-                                            { label: 'Expected Value', value: formatCurrency(bookingStats.value) },
+                                            { label: 'Expected', value: formatCurrency(bookingStats.value) },
                                         ].map((stat) => (
-                                            <div key={stat.label} className="rounded-xl border border-gray-200 bg-white px-4 py-3 shadow-sm">
-                                                <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">{stat.label}</p>
-                                                <p className="mt-1 text-lg font-black text-gray-900">{stat.value}</p>
-                                            </div>
+                                            <span key={stat.label} className="admin-stat-chip">
+                                                <strong>{stat.value}</strong>
+                                                <em>{stat.label}</em>
+                                            </span>
                                         ))}
                                     </div>
+                                    <button type="button" onClick={() => setAssistedBookingOpen(true)} className="admin-button-primary admin-booking-command-button inline-flex items-center justify-center px-4 py-2.5 text-sm font-black">
+                                        Create booking
+                                    </button>
                                 </div>
 
                                 <div className="mb-4 rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
@@ -5059,41 +5679,118 @@ const DashboardAdmin = () => {
                             </div>
                         )
                     }
-                    {activeTab === 'calendar-handoff' && (
-                        <div className="animate-fadeIn space-y-5">
-                            <div className="rounded-2xl border border-[#720101]/10 bg-white p-5 shadow-sm">
+                    {activeTab === 'calendar' && (
+                        <div className="animate-fadeIn space-y-4">
+                            <div className="admin-panel p-3">
                                 <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-                                    <div>
-                                        <p className="admin-kicker">Calendar and readiness</p>
-                                        <h3 className="mt-1 text-xl font-black text-gray-950">Upcoming confirmed events</h3>
-                                        <p className="mt-2 max-w-3xl text-sm font-semibold leading-6 text-slate-500">
-                                            Open any event for owner-level context, then use the handoff board below to check readiness work.
-                                        </p>
-                                    </div>
-                                    <button type="button" onClick={() => setActiveTab('availability')} className="admin-button-secondary px-4 py-2 text-sm font-bold">
-                                        Manage availability
-                                    </button>
-                                </div>
-                                <div className="mt-5 grid grid-cols-1 gap-3 xl:grid-cols-3">
-                                    {upcomingConfirmedEvents.map((booking) => (
-                                        <button
-                                            type="button"
-                                            key={booking.id}
-                                            onClick={() => setEventDetailsModal({ open: true, data: booking })}
-                                            className="rounded-xl border border-slate-100 bg-slate-50 p-4 text-left transition hover:border-[#720101]/20 hover:bg-[#fff7e8]"
-                                        >
-                                            <span className="text-[10px] font-black uppercase tracking-widest text-[#9f6500]">{formatBookingRef(booking.id)}</span>
-                                            <strong className="mt-1 block text-sm font-black text-slate-950">{eventDisplayName(booking)}</strong>
-                                            <span className="mt-1 block text-xs font-semibold text-slate-500">{formatDate(booking.event_date)} / {formatTime(booking.event_time)} / {booking.pax || 0} guests</span>
+                                    <div className="flex min-w-0 flex-wrap items-center gap-2 lg:flex-nowrap">
+                                        <button type="button" onClick={() => changeAdminCalendarMonth(-1)} className="admin-icon-action" aria-label="Previous month" title="Previous month">
+                                            <ChevronDown className="h-4 w-4 rotate-90" />
                                         </button>
-                                    ))}
-                                    {!upcomingConfirmedEvents.length && (
-                                        <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 p-5 text-sm font-semibold text-slate-500 xl:col-span-3">
-                                            No upcoming confirmed events are waiting in the Admin calendar view.
+                                        <div className="flex h-10 w-36 items-center rounded-xl border border-[#720101]/10 bg-[#fffaf3] px-3">
+                                            <span className="text-sm font-black text-slate-950">{formatMonthLabel(adminCalendarMonthKey)}</span>
                                         </div>
-                                    )}
+                                        <button type="button" onClick={() => changeAdminCalendarMonth(1)} className="admin-icon-action" aria-label="Next month" title="Next month">
+                                            <ChevronDown className="h-4 w-4 -rotate-90" />
+                                        </button>
+                                        <button type="button" onClick={() => setAdminCalendarMonth(new Date(new Date().getFullYear(), new Date().getMonth(), 1))} className="admin-button-secondary h-10 px-3 text-xs font-black">This month</button>
+                                        <span className="inline-flex h-10 items-center rounded-xl border border-slate-100 bg-slate-50 px-3 text-xs font-black text-slate-700">
+                                            {adminCalendarEvents.length} {adminCalendarEvents.length === 1 ? 'event' : 'events'}
+                                        </span>
+                                        <span className="inline-flex h-10 max-w-56 items-center rounded-xl border border-slate-100 bg-slate-50 px-3 text-xs font-bold text-slate-600">
+                                            <span className="mr-2 shrink-0 text-[9px] font-black uppercase tracking-widest text-slate-400">Next</span>
+                                            <span className="truncate">{upcomingConfirmedEvents[0] ? eventDisplayName(upcomingConfirmedEvents[0]) : 'None scheduled'}</span>
+                                        </span>
+                                    </div>
+
+                                    <div className="flex min-w-0 shrink-0 flex-col gap-2 md:flex-row md:items-center lg:justify-end">
+                                        <input
+                                            type="search"
+                                            value={adminCalendarSearch}
+                                            onChange={(event) => setAdminCalendarSearch(event.target.value)}
+                                            placeholder="Search event, customer, venue..."
+                                            className="staff-control h-10 w-full md:w-72"
+                                        />
+                                        <div className="inline-flex h-10 rounded-xl border border-slate-200 bg-slate-50 p-1">
+                                            {['month', 'list'].map((view) => (
+                                                <button key={view} type="button" onClick={() => setAdminCalendarView(view)} className={`rounded-lg px-3 py-1.5 text-xs font-black uppercase tracking-widest ${adminCalendarView === view ? 'bg-white text-[#720101] shadow-sm' : 'text-slate-500 hover:text-slate-900'}`}>
+                                                    {view}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
+
+                            {adminCalendarView === 'month' ? (
+                                <div className="grid grid-cols-7 overflow-hidden rounded-2xl border border-[#720101]/10 bg-[#f4e7df] shadow-sm">
+                                    {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((day) => (
+                                        <div key={day} className="bg-[#fffaf3] py-3 text-center text-xs font-black uppercase tracking-wide text-slate-500">{day}</div>
+                                    ))}
+                                    {adminCalendarDays.map((day) => {
+                                        if (day.blank) return <div key={day.key} className="marketing-calendar-cell marketing-calendar-cell-empty" />;
+                                        const dayEvents = adminCalendarEventsByDate.get(day.dateKey) || [];
+                                        return (
+                                            <div key={day.key} className="marketing-calendar-cell custom-scrollbar bg-white">
+                                                <div className="mb-2 flex items-center justify-between">
+                                                    <span className="text-xs font-black text-slate-700">{day.day}</span>
+                                                    {dayEvents.length > 0 && <span className="rounded-md bg-amber-100 px-2 py-0.5 text-[10px] font-black text-amber-800">{dayEvents.length}</span>}
+                                                </div>
+                                                {dayEvents.map((booking) => (
+                                                    <button
+                                                        type="button"
+                                                        key={booking.id}
+                                                        title={`${formatBookingRef(booking.id)}\n${eventDisplayName(booking)}\n${formatTime(booking.event_time)} / ${booking.pax || 0} guests`}
+                                                        onClick={() => setEventDetailsModal({ open: true, data: booking })}
+                                                        className="marketing-event-chip mb-1 rounded-lg bg-emerald-100 px-2 py-1 text-left text-[11px] font-bold text-emerald-800 transition-transform hover:-translate-y-0.5"
+                                                    >
+                                                        <span className="marketing-event-primary">{eventDisplayName(booking)}</span>
+                                                        <span className="marketing-event-secondary">{formatTime(booking.event_time)} / {booking.pax || 0} guests</span>
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            ) : (
+                                <div className="staff-table-wrap rounded-2xl border border-[#720101]/10 bg-white shadow-sm">
+                                    <table className="staff-table">
+                                        <thead>
+                                            <tr>
+                                                <th>Date</th>
+                                                <th>Event</th>
+                                                <th>Client</th>
+                                                <th>Guests</th>
+                                                <th className="text-right">Action</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {adminCalendarEvents.map((booking) => (
+                                                <tr key={booking.id} className="cursor-pointer hover:bg-[#fffaf3]" onClick={() => setEventDetailsModal({ open: true, data: booking })}>
+                                                    <td className="font-bold text-slate-700">{formatDate(booking.event_date)} {formatTime(booking.event_time)}</td>
+                                                    <td>
+                                                        <div className="font-black text-slate-950">{eventDisplayName(booking)}</div>
+                                                        <div className="text-xs font-semibold text-slate-500">{formatBookingRef(booking.id)} / {booking.event_type || 'Event'}</div>
+                                                    </td>
+                                                    <td>{booking.client_full_name || booking.client_name || booking.username || 'Unnamed client'}</td>
+                                                    <td>{booking.pax || 0}</td>
+                                                    <td className="text-right"><button type="button" className="admin-button-secondary px-3 py-1.5 text-xs font-black">Open</button></td>
+                                                </tr>
+                                            ))}
+                                            {!adminCalendarEvents.length && (
+                                                <tr><td colSpan="5" className="px-4 py-10"><StaffEmptyState title="No calendar events found" message="No confirmed events match this month or search." /></td></tr>
+                                            )}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            )}
+                            {bookingsLoading && (
+                                <p className="rounded-xl bg-[#fffaf3] p-4 text-sm font-bold text-slate-500">Loading calendar events...</p>
+                            )}
+                        </div>
+                    )}
+                    {activeTab === 'handoff' && (
+                        <div className="animate-fadeIn">
                             <Suspense fallback={<StaffSkeleton variant="panel" rows={3} label="Loading handoff board" />}>
                                 <PreparationBoard />
                             </Suspense>
@@ -5104,73 +5801,155 @@ const DashboardAdmin = () => {
                     )}
                     {
                         activeTab === 'finance' && (
-                            <div className="animate-fadeIn space-y-5">
-                                <div className="rounded-2xl border border-[#720101]/10 bg-white p-5 shadow-sm">
-                                    <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-                                        <div>
-                                            <p className="admin-kicker">Accounting override</p>
-                                            <h3 className="mt-1 text-xl font-black text-gray-950">Finance action desk</h3>
-                                            <p className="mt-2 max-w-3xl text-sm font-semibold leading-6 text-slate-500">
-                                                Review payment exposure here, then open a booking row for payment schedules, term edits, receipts, and refund context.
-                                            </p>
+                            <div className="animate-fadeIn space-y-3">
+                                <div className="rounded-2xl border border-[#720101]/10 bg-white px-3 py-3 shadow-sm">
+                                    <div className="grid gap-3 2xl:grid-cols-[18rem_minmax(0,1fr)] 2xl:items-center">
+                                        <div className="inline-flex h-11 w-full rounded-xl border border-slate-200 bg-slate-50 p-1">
+                                            {[
+                                                { id: 'payments', label: 'Payments', count: financePaymentRows.length },
+                                                { id: 'refunds', label: 'Refunds', count: refundStats.count },
+                                            ].map((segment) => (
+                                                <button
+                                                    key={segment.id}
+                                                    type="button"
+                                                    onClick={() => setActiveFinanceSegment(segment.id)}
+                                                    className={`flex-1 rounded-lg px-3 text-xs font-black uppercase tracking-wider transition-colors ${activeFinanceSegment === segment.id ? 'bg-white text-[#720101] shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}
+                                                >
+                                                    {segment.label} <span className="ml-1 text-[11px]">{segment.count}</span>
+                                                </button>
+                                            ))}
                                         </div>
-                                        <button type="button" onClick={() => setActiveTab('analytics-reports')} className="admin-button-secondary px-4 py-2 text-sm font-bold">
-                                            Open finance reports
-                                        </button>
-                                    </div>
-                                    <div className="mt-5 grid grid-cols-1 gap-3 md:grid-cols-5">
-                                        {[
-                                            { label: 'Expected', value: formatCurrency(financeStats.totalExposure) },
-                                            { label: 'Collected', value: formatCurrency(financeStats.paid) },
-                                            { label: 'Remaining', value: formatCurrency(financeStats.remaining) },
-                                            { label: 'Pending proofs', value: financeStats.pendingPayments },
-                                            { label: 'Overdue terms', value: financeStats.overdue },
-                                        ].map((stat) => (
-                                            <div key={stat.label} className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
-                                                <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">{stat.label}</p>
-                                                <p className="mt-1 text-lg font-black text-gray-950">{stat.value}</p>
-                                            </div>
-                                        ))}
-                                    </div>
-                                </div>
-                                <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
-                                    {[
-                                        { label: 'Queued Cases', value: refundStats.count },
-                                        { label: 'Paid Exposure', value: formatCurrency(refundStats.paid) },
-                                        { label: 'Reservation Fees', value: formatCurrency(refundStats.fees) },
-                                        { label: 'Refundable', value: formatCurrency(refundStats.refundable) },
-                                    ].map((stat) => (
-                                        <div key={stat.label} className="admin-metric-card px-5 py-4">
-                                            <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">{stat.label}</p>
-                                            <p className="mt-1 text-xl font-black text-gray-950">{stat.value}</p>
+                                        <div className="grid min-w-0 grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-5">
+                                            {[
+                                                { label: 'Expected', value: formatCurrency(financeStats.totalExposure), emphasis: true },
+                                                { label: 'Collected', value: formatCurrency(financeStats.paid), emphasis: true },
+                                                { label: 'Remaining', value: formatCurrency(financeStats.remaining), emphasis: true },
+                                                { label: 'Review', value: financeStats.pendingPayments },
+                                                { label: 'Overdue', value: financeStats.overdue },
+                                            ].map((stat) => (
+                                                <span key={stat.label} className="flex h-14 min-w-0 flex-col justify-center overflow-hidden rounded-xl border border-[#720101]/10 bg-[#fbf8f2] px-3">
+                                                    <em className="text-[10px] font-black uppercase not-italic tracking-widest text-slate-400">{stat.label}</em>
+                                                    <strong className="mt-1 truncate text-lg font-black leading-none text-gray-950">{stat.value}</strong>
+                                                </span>
+                                            ))}
                                         </div>
-                                    ))}
+                                    </div>
                                 </div>
 
-                                <div className="admin-panel overflow-hidden">
-                                    <div className="flex flex-col gap-3 border-b border-gray-100 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
-                                        <div>
-                                            <h3 className="text-base font-black text-gray-950">Cancelled bookings with refundable payments</h3>
-                                            <p className="mt-1 text-sm font-medium text-gray-500">Refunds retain the non-refundable 10% reservation fee and update the payment records.</p>
+                                {activeFinanceSegment === 'payments' && <div className="admin-panel overflow-hidden">
+                                    <div className="flex flex-col gap-3 border-b border-gray-100 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+                                        <div className="min-w-0">
+                                            <h3 className="text-base font-black text-gray-950">Payment work queue</h3>
+                                            <p className="mt-1 text-sm font-medium text-gray-500">Review pending proofs, overdue terms, and payment exceptions before refund work.</p>
                                         </div>
-                                        <button
-                                            type="button"
-                                            onClick={() => { bustAdminCache('/api/admin/refunds/queue'); fetchRefundQueue(); }}
-                                            className="admin-button-secondary px-4 py-2 text-sm font-bold"
-                                        >
-                                            Refresh Queue
-                                        </button>
+                                        <div className="flex flex-wrap items-center gap-2 text-xs font-black uppercase tracking-wider text-slate-400">
+                                            <span className="rounded-full bg-[#fff7e1] px-3 py-1 text-[#720101]">{financePaymentRows.length} open</span>
+                                            {financePaymentRows.length > 8 && <span>Showing first 8</span>}
+                                        </div>
+                                    </div>
+
+                                    {bookingsLoading ? (
+                                        <StaffSkeleton rows={5} label="Loading payment work" />
+                                    ) : financePaymentRows.length === 0 ? (
+                                        <div className="flex items-center justify-center gap-3 px-5 py-6 text-center">
+                                            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-emerald-50">
+                                                <svg className="h-5 w-5 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
+                                            </div>
+                                            <div className="text-left">
+                                                <h3 className="text-base font-black text-gray-900">No payment items waiting</h3>
+                                                <p className="mt-1 text-sm text-gray-500">Pending proofs and overdue terms will appear here.</p>
+                                            </div>
+                                        </div>
+                                    ) : (
+                                        <div className="staff-table-wrap">
+                                            <table className="staff-table">
+                                                <thead>
+                                                    <tr>
+                                                        <th>Booking</th>
+                                                        <th>Client</th>
+                                                        <th>Payment</th>
+                                                        <th className="text-right">Amount</th>
+                                                        <th>Status</th>
+                                                        <th className="text-right">Action</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    {financePaymentRows.slice(0, 8).map(({ booking, payment, statusLabel, queueLabel }) => (
+                                                        <tr key={`${booking.id}-${payment.id}`} className="transition-colors hover:bg-[#fffaf3]">
+                                                            <td>
+                                                                <div className="font-black text-gray-950">{formatBookingRef(booking.id)}</div>
+                                                                <div className="text-xs font-semibold text-slate-500">{eventDisplayName(booking)}</div>
+                                                            </td>
+                                                            <td>
+                                                                <div className="font-bold text-gray-900">{booking.client_full_name || booking.client_name || booking.username || 'Unnamed client'}</div>
+                                                                <div className="text-xs text-gray-500">{booking.client_email || booking.client_phone || 'No contact recorded'}</div>
+                                                            </td>
+                                                            <td>
+                                                                <div className="font-bold text-gray-900">{paymentLabel(payment.payment_type)}</div>
+                                                                <div className="text-xs font-semibold text-slate-500">Due {formatDate(payment.due_date)}</div>
+                                                            </td>
+                                                            <td className="text-right font-black text-gray-950">{formatCurrency(payment.amount)}</td>
+                                                            <td>
+                                                                <span className={`inline-flex rounded-full px-3 py-1 text-xs font-black ${queueLabel === 'Overdue' ? 'bg-red-50 text-red-700' : queueLabel === 'Exception' ? 'bg-amber-50 text-amber-700' : 'bg-indigo-50 text-indigo-700'}`}>
+                                                                    {statusLabel}
+                                                                </span>
+                                                            </td>
+                                                            <td className="text-right">
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => setEventDetailsModal({ open: true, data: booking })}
+                                                                    className="admin-button-secondary px-3 py-1.5 text-xs font-black"
+                                                                >
+                                                                    Open
+                                                                </button>
+                                                            </td>
+                                                        </tr>
+                                                    ))}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    )}
+                                </div>}
+
+                                {activeFinanceSegment === 'refunds' && <div className="admin-panel overflow-hidden">
+                                    <div className="flex flex-col gap-3 border-b border-gray-100 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+                                        <div className="min-w-0">
+                                            <h3 className="text-base font-black text-gray-950">Cancelled bookings with refundable payments</h3>
+                                            <p className="mt-1 text-sm font-medium text-gray-500">Refunds retain the 10% reservation fee and update payment records.</p>
+                                        </div>
+                                        <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+                                            {[
+                                                { label: 'Cases', value: refundStats.count },
+                                                { label: 'Paid', value: formatCurrency(refundStats.paid) },
+                                                { label: 'Fees', value: formatCurrency(refundStats.fees) },
+                                                { label: 'Refundable', value: formatCurrency(refundStats.refundable) },
+                                            ].map((stat) => (
+                                                <span key={stat.label} className="inline-flex h-10 items-center gap-2 rounded-xl border border-[#720101]/10 bg-[#fbf8f2] px-3 text-xs font-black text-slate-500">
+                                                    <strong className="text-sm text-gray-950">{stat.value}</strong>
+                                                    <em className="not-italic uppercase tracking-wider">{stat.label}</em>
+                                                </span>
+                                            ))}
+                                            <button
+                                                type="button"
+                                                onClick={() => { bustAdminCache('/api/admin/refunds/queue'); fetchRefundQueue(); }}
+                                                className="admin-button-secondary h-10 px-3 text-xs font-black"
+                                            >
+                                                Refresh
+                                            </button>
+                                        </div>
                                     </div>
 
                                     {refundLoading ? (
                                         <StaffSkeleton rows={6} label="Loading refund queue" />
                                     ) : refundQueue.length === 0 ? (
-                                        <div className="p-12 text-center">
-                                            <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-emerald-50">
-                                                <svg className="h-6 w-6 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
+                                        <div className="flex items-center justify-center gap-3 px-5 py-6 text-center">
+                                            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-emerald-50">
+                                                <svg className="h-5 w-5 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
                                             </div>
-                                            <h3 className="text-base font-black text-gray-900">No refunds waiting</h3>
-                                            <p className="mt-1 text-sm text-gray-500">Cancelled bookings with verified payments will appear here.</p>
+                                            <div className="text-left">
+                                                <h3 className="text-base font-black text-gray-900">No refunds waiting</h3>
+                                                <p className="mt-1 text-sm text-gray-500">Cancelled bookings with verified payments will appear here.</p>
+                                            </div>
                                         </div>
                                     ) : (
                                         <div className="staff-table-wrap">
@@ -5224,7 +6003,7 @@ const DashboardAdmin = () => {
                                             </table>
                                         </div>
                                     )}
-                                </div>
+                                </div>}
                             </div>
                         )
                     }
@@ -5486,127 +6265,58 @@ const DashboardAdmin = () => {
                 eventDetailsModal.open && (
                     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
                         <div className="absolute inset-0 bg-gray-900/60 backdrop-blur-sm" onClick={() => setEventDetailsModal({ open: false, data: null })}></div>
-                        <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-2xl animate-fadeIn overflow-hidden flex flex-col max-h-[90vh]">
-                            <div className="px-6 py-4 border-b border-gray-100 bg-gray-50 flex justify-between items-center sticky top-0 z-10">
+                        <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-5xl animate-fadeIn overflow-hidden flex flex-col max-h-[90vh]">
+                            <div className="px-5 py-4 border-b border-[#720101]/10 bg-white flex justify-between items-start sticky top-0 z-10">
                                 <div>
-                                    <h3 className="text-lg font-bold text-gray-900">Event Intelligence Dashboard</h3>
-                                    <p className="text-xs text-gray-500 mt-1">Reference: #BK-{eventDetailsModal.data?.id.toString().padStart(4, '0')}</p>
+                                    <p className="marketing-kicker">Event details</p>
+                                    <h3 className="mt-1 text-2xl font-black leading-tight text-slate-950">{eventDisplayName(eventDetailsModal.data)}</h3>
+                                    <p className="mt-1 text-sm font-bold text-slate-500">{formatBookingRef(eventDetailsModal.data?.id)} / {eventDetailsModal.data?.event_type || 'Event'} / {eventDetailsModal.data?.pax || 0} guests</p>
                                 </div>
-                                <button onClick={() => setEventDetailsModal({ open: false, data: null })} className="text-gray-400 hover:text-gray-600 transition-colors">
-                                    <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                                <button onClick={() => setEventDetailsModal({ open: false, data: null })} className="staff-icon-button" aria-label="Close event details">
+                                    <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
                                 </button>
                             </div>
 
-                            <div className="p-6 overflow-y-auto custom-scrollbar flex-1 space-y-8 bg-white">
+                            <div className="p-5 overflow-y-auto custom-scrollbar flex-1 space-y-4 bg-[#fbf8f2]">
                                 {(() => {
                                     const selectedDishes = getSelectedDishes(eventDetailsModal.data);
                                     return (
                                         <>
-                                {/* Core Client Logic */}
-                                <div className="grid grid-cols-2 gap-6">
-                                    <div className="bg-indigo-50/50 p-4 rounded-xl border border-indigo-100/50">
-                                        <h4 className="text-xs font-bold text-indigo-800 uppercase tracking-wider mb-4 flex items-center gap-2">
-                                            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" /></svg>
-                                            Client Logic
-                                        </h4>
-                                        <div className="space-y-3">
-                                            <div>
-                                                <p className="text-[10px] uppercase font-bold text-gray-400 tracking-wider">Primary Entity</p>
-                                                <p className="text-sm font-semibold text-gray-900">{eventDetailsModal.data?.client_full_name || eventDetailsModal.data?.username || 'N/A'}</p>
-                                            </div>
-                                            <div>
-                                                <p className="text-[10px] uppercase font-bold text-gray-400 tracking-wider">Contact (Email)</p>
-                                                <p className="text-sm text-gray-700">{eventDetailsModal.data?.client_email || 'N/A'}</p>
-                                            </div>
-                                            <div>
-                                                <p className="text-[10px] uppercase font-bold text-gray-400 tracking-wider">Contact (Phone)</p>
-                                                <p className="text-sm text-gray-700">{eventDetailsModal.data?.client_phone || 'N/A'}</p>
-                                            </div>
-                                        </div>
-                                    </div>
-
-                                    {/* Schedule */}
-                                    <div className="bg-blue-50/50 p-4 rounded-xl border border-blue-100/50">
-                                        <h4 className="text-xs font-bold text-blue-800 uppercase tracking-wider mb-4 flex items-center gap-2">
-                                            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
-                                            Schedule
-                                        </h4>
-                                        <div className="space-y-3">
-                                            <div>
-                                                <p className="text-[10px] uppercase font-bold text-gray-400 tracking-wider">Event Date</p>
-                                                <p className="text-sm font-semibold text-gray-900">{eventDetailsModal.data?.event_date}</p>
-                                            </div>
-                                            <div className="grid grid-cols-2 gap-2">
-                                                <div>
-                                                    <p className="text-[10px] uppercase font-bold text-gray-400 tracking-wider">Start Time</p>
-                                                <p className="text-sm text-gray-700">{formatTime(eventDetailsModal.data?.event_time)}</p>
-                                                </div>
-                                            </div>
-                                            <div>
-                                                <p className="text-[10px] uppercase font-bold text-gray-400 tracking-wider">Booking Status</p>
-                                                <span className={`inline-flex mt-1 items-center px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${eventDetailsModal.data?.status === 'Confirmed' ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'
-                                                    }`}>
-                                                    {eventDetailsModal.data?.status}
-                                                </span>
-                                            </div>
-                                        </div>
-                                    </div>
+                                <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-[1.2fr_1fr_1fr_1fr]">
+                                    {[
+                                        ['Customer', eventDetailsModal.data?.client_full_name || eventDetailsModal.data?.username || 'N/A', `${eventDetailsModal.data?.client_email || 'No email'} / ${eventDetailsModal.data?.client_phone || 'No phone'}`],
+                                        ['Schedule', `${formatDate(eventDetailsModal.data?.event_date)} / ${formatTime(eventDetailsModal.data?.event_time)}`, eventDetailsModal.data?.status || 'Pending'],
+                                        ['Venue', formatFullAddress(eventDetailsModal.data), eventDetailsModal.data?.venue_building_details || 'No building notes'],
+                                        ['Total', formatCurrency(getBookingTotal(eventDetailsModal.data)), `${selectedDishes.length} dishes / ${eventDetailsModal.data?.transport_fee ? `Travel ${formatCurrency(eventDetailsModal.data.transport_fee)}` : 'No travel fee'}`],
+                                    ].map(([label, value, meta]) => (
+                                        <section key={label} className="rounded-xl border border-[#720101]/10 bg-white px-4 py-3">
+                                            <p className="text-[10px] font-black uppercase tracking-widest text-[#a16207]">{label}</p>
+                                            <p className="mt-1 break-words text-sm font-black leading-snug text-slate-950">{value}</p>
+                                            <p className="mt-1 break-words text-xs font-bold text-slate-500">{meta}</p>
+                                        </section>
+                                    ))}
                                 </div>
 
-                                {/* Venue Matrix */}
-                                <div>
-                                    <h4 className="text-xs font-bold text-gray-800 uppercase tracking-wider mb-3 border-b border-gray-100 pb-2">Event Venue</h4>
-                                    <div className="bg-rose-50/50 rounded-lg p-4 border border-rose-100">
-                                        <p className="text-xs text-gray-500 font-medium">Venue Address</p>
-                                        <p className="mt-1 text-sm font-bold text-gray-900">{formatFullAddress(eventDetailsModal.data)}</p>
-                                        {eventDetailsModal.data?.venue_building_details && (
-                                            <p className="mt-2 text-xs font-medium text-gray-600">{eventDetailsModal.data.venue_building_details}</p>
-                                        )}
-                                    </div>
-                                </div>
-
-                                {/* Selected Dishes */}
-                                <div>
-                                    <h4 className="text-xs font-bold text-gray-800 uppercase tracking-wider mb-3 border-b border-gray-100 pb-2">Selected Dishes</h4>
-                                    {selectedDishes.length === 0 ? (
-                                        <div className="bg-gray-50 rounded-lg p-4 text-sm font-medium text-gray-500">No dishes selected for this booking.</div>
-                                    ) : (
-                                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                {selectedDishes.length > 0 && (
+                                    <section>
+                                        <div className="mb-2 flex items-center justify-between border-b border-gray-100 pb-2">
+                                            <h4 className="text-xs font-bold text-gray-800 uppercase tracking-wider">Selected Dishes</h4>
+                                            <span className="rounded-full bg-[#fff7e8] px-2.5 py-1 text-[10px] font-black uppercase tracking-widest text-[#720101]">{selectedDishes.length} dishes</span>
+                                        </div>
+                                        <div className="grid max-h-40 grid-cols-1 gap-2 overflow-y-auto pr-1 sm:grid-cols-2 lg:grid-cols-4 custom-scrollbar">
                                             {selectedDishes.map((dish, index) => (
-                                                <div key={`${dish.category}-${dish.name}-${index}`} className="rounded-lg border border-gray-100 bg-gray-50 px-4 py-3">
-                                                    <p className="text-[10px] font-black uppercase tracking-widest text-indigo-500">{dish.category}</p>
+                                                <div key={`${dish.category}-${dish.name}-${index}`} className="rounded-lg border border-gray-100 bg-white px-3 py-2">
+                                                    <p className="text-[10px] font-black uppercase tracking-widest text-[#a16207]">{dish.category}</p>
                                                     <p className="mt-1 text-sm font-bold text-gray-900">{dish.name}</p>
                                                 </div>
                                             ))}
                                         </div>
-                                    )}
-                                </div>
+                                    </section>
+                                )}
 
-                                {/* Financial Matrix */}
                                 <div>
-                                    <h4 className="text-xs font-bold text-gray-800 uppercase tracking-wider mb-3 border-b border-gray-100 pb-2">Financial Summary</h4>
-                                    <div className="bg-gray-50 rounded-lg p-4 grid grid-cols-2 md:grid-cols-4 gap-4">
-                                        <div>
-                                            <p className="text-xs text-gray-500 font-medium">Guest count</p>
-                                            <p className="text-lg font-bold text-gray-900">{eventDetailsModal.data?.pax}</p>
-                                        </div>
-                                        <div>
-                                            <p className="text-xs text-gray-500 font-medium">Event Total (₱)</p>
-                                            <p className="text-lg font-bold text-gray-900">{eventDetailsModal.data?.total_cost?.toLocaleString()}</p>
-                                        </div>
-                                        <div>
-                                            <p className="text-xs text-gray-500 font-medium">Travel Fee (₱)</p>
-                                            <p className="text-lg font-bold text-orange-600">{eventDetailsModal.data?.transport_fee?.toLocaleString() || '0'}</p>
-                                        </div>
-                                        <div>
-                                            <p className="text-xs text-gray-500 font-medium">Extra Service Hours (₱)</p>
-                                            <p className="text-lg font-bold text-orange-600">{eventDetailsModal.data?.labor_surcharge?.toLocaleString() || '0'}</p>
-                                        </div>
-                                    </div>
-                                </div>
-                                <div>
-                                    <h4 className="text-xs font-bold text-gray-800 uppercase tracking-wider mb-3 border-b border-gray-100 pb-2">Payment Schedule</h4>
-                                    <div className="staff-table-wrap rounded-lg border border-[#720101]/10">
+                                    <h4 className="text-xs font-bold text-gray-800 uppercase tracking-wider mb-2 border-b border-gray-100 pb-2">Payment Schedule</h4>
+                                    <div className="overflow-x-auto rounded-lg border border-[#720101]/10">
                                         <table className="staff-table">
                                             <thead>
                                                 <tr>
@@ -5644,12 +6354,14 @@ const DashboardAdmin = () => {
                                 </div>
                                 {eventDetailsModal.data?.preparation_tasks?.length > 0 && (
                                     <div>
-                                        <h4 className="text-xs font-bold text-gray-800 uppercase tracking-wider mb-3 border-b border-gray-100 pb-2">Preparation Tasks</h4>
-                                        <div className="grid gap-2 sm:grid-cols-2">
+                                        <h4 className="text-xs font-bold text-gray-800 uppercase tracking-wider mb-2 border-b border-gray-100 pb-2">Preparation Tasks</h4>
+                                        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
                                             {eventDetailsModal.data.preparation_tasks.map(task => (
                                                 <div key={task.id} className={`rounded-lg border px-4 py-3 ${task.status === 'Done' ? 'border-emerald-100 bg-emerald-50' : 'border-amber-100 bg-[#fffaf3]'}`}>
                                                     <p className="text-sm font-bold text-gray-900">{task.label}</p>
-                                                    <p className="mt-1 text-[10px] font-black uppercase tracking-widest text-gray-400">{task.department} / {task.status}</p>
+                                                    <p className="mt-1 text-[10px] font-black uppercase tracking-widest text-gray-400">
+                                                        {task.responsible_area || handoffResponsibleArea(task.department)} / {task.status}
+                                                    </p>
                                                 </div>
                                             ))}
                                         </div>
@@ -5660,9 +6372,10 @@ const DashboardAdmin = () => {
                                 })()}
                             </div>
 
-                            <div className="px-6 py-4 border-t border-gray-100 bg-gray-50 flex justify-end">
-                                <button onClick={() => setEventDetailsModal({ open: false, data: null })} className="px-6 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-bold rounded-lg shadow-sm transition-colors">
-                                    Acknowledge
+                            <div className="px-5 py-3 border-t border-[#720101]/10 bg-white flex items-center justify-between gap-3">
+                                <p className="text-xs font-bold text-slate-500">Payment terms can be edited here. Other actions stay in the current workspace.</p>
+                                <button onClick={() => setEventDetailsModal({ open: false, data: null })} className="px-5 py-2 bg-[#720101] hover:bg-[#5a0101] text-white text-sm font-bold rounded-lg shadow-sm transition-colors">
+                                    Close
                                 </button>
                             </div>
                         </div>
@@ -5893,6 +6606,40 @@ const DashboardAdmin = () => {
                                 </button>
                             )}
                             <button type="button" onClick={copyTemporaryPassword} className="rounded-lg bg-[#8b0000] px-5 py-2.5 text-sm font-black text-white shadow-sm hover:bg-[#6f0000]">Copy password</button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {expandedAnalyticsPanel && (
+                <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/60 p-3 backdrop-blur-sm">
+                    <div className="admin-chart-modal">
+                        <header className="admin-chart-modal-head">
+                            <div>
+                                <p className="admin-kicker">Expanded analytics</p>
+                                <h3>{expandedPanelMeta[expandedAnalyticsPanel]?.[0] || 'Analytics chart'}</h3>
+                                <p>{businessSnapshot.label || 'Current timeframe'} · Larger view for easier reading.</p>
+                            </div>
+                            <button type="button" onClick={() => setExpandedAnalyticsPanel(null)} className="admin-mini-button inline-flex items-center gap-2">
+                                <X className="h-4 w-4" />
+                                Close
+                            </button>
+                        </header>
+                        <div className="admin-chart-modal-body">
+                            <div className="admin-chart-modal-figure">
+                                {renderExpandedAnalyticsContent(expandedAnalyticsPanel) || <div className="admin-chart-empty">No chart data available for this view.</div>}
+                            </div>
+                            <aside className="admin-chart-modal-insight">
+                                <InsightLine
+                                    insight={expandedPanelMeta[expandedAnalyticsPanel]?.[1] || {
+                                        headline: 'No interpretation available yet',
+                                        meaning: 'Use the trend and filters to compare current performance while this chart waits for a dedicated insight rule.',
+                                        recommended_action: 'Compare this chart with current bookings, payments, and handoff queues before acting.',
+                                        severity: 'watch',
+                                    }}
+                                    compact={false}
+                                />
+                            </aside>
                         </div>
                     </div>
                 </div>

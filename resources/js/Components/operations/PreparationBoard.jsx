@@ -9,10 +9,20 @@ import csrfFetch from '../../utils/csrf';
 const readinessLabels = {
     payment: 'Accounting: payment clearance',
     menu: 'Customer: final menu',
-    venue: 'Operations: venue access',
+    venue: 'Service prep: venue access',
     headcount: 'Customer: final headcount',
     tasting: 'Marketing: tasting outcome',
     customer_messages: 'Marketing: customer messages',
+};
+
+const responsibleArea = (taskOrDepartment) => {
+    const department = typeof taskOrDepartment === 'object'
+        ? (taskOrDepartment?.responsible_area || taskOrDepartment?.department || taskOrDepartment?.raw_department)
+        : taskOrDepartment;
+
+    return ['Operations', 'Admin', 'Service prep', undefined, null, ''].includes(department)
+        ? 'Service prep'
+        : department;
 };
 
 const formatDate = (value) => {
@@ -101,13 +111,13 @@ const PreparationBoard = () => {
     }, [rows, selectedBookingId]);
 
     const departments = useMemo(() => {
-        return Array.from(new Set(rows.flatMap((row) => (row.tasks || []).map((task) => task.department)).filter(Boolean))).sort();
+        return Array.from(new Set(rows.flatMap((row) => (row.tasks || []).map((task) => responsibleArea(task))).filter(Boolean))).sort();
     }, [rows]);
 
     const toggleTask = async (task) => {
         const nextStatus = task.status === 'Done' ? 'Pending' : 'Done';
         if (task.can_update === false) {
-            setError(task.action_hint || `${task.department} owns this handoff task.`);
+            setError(task.action_hint || `${responsibleArea(task)} is responsible for this handoff task.`);
             return;
         }
         setUpdatingTaskId(task.id);
@@ -167,7 +177,7 @@ const PreparationBoard = () => {
                         <option value="customer_messages">Marketing: open messages</option>
                     </select>
                     <select value={departmentFilter} onChange={(event) => setDepartmentFilter(event.target.value)} className="staff-control">
-                        <option value="all">All departments</option>
+                        <option value="all">All responsible areas</option>
                         {departments.map((department) => <option key={department} value={department}>{department}</option>)}
                     </select>
                     <button type="button" onClick={() => fetchBoard()} className="staff-row-action">Refresh</button>
@@ -311,7 +321,10 @@ const PreparationBoard = () => {
                                             <div className="flex items-center justify-between gap-3">
                                                 <div>
                                                     <p className="text-sm font-black text-slate-950">{task.label}</p>
-                                                    <p className="mt-1 text-xs font-bold uppercase text-slate-400">{task.department} / {task.due_state || 'Pending'}</p>
+                                                    <p className="mt-1 text-xs font-bold uppercase text-slate-400">
+                                                        {responsibleArea(task)} / {task.due_state || 'Pending'}
+                                                        {task.can_update && responsibleArea(task) === 'Service prep' ? ' / Admin override' : ''}
+                                                    </p>
                                                     {task.action_hint && <p className="mt-1 text-xs font-semibold normal-case text-slate-500">{task.action_hint}</p>}
                                                 </div>
                                                 <span className={done ? 'staff-status staff-status-good' : 'staff-status staff-status-muted'}>{done ? 'Done' : 'Pending'}</span>
