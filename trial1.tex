@@ -1,0 +1,455 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[a4paper,margin=0.75in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage{array}
+\usepackage{amssymb}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{xcolor}
+\usepackage{enumitem}
+\usepackage{fancyhdr}
+\usepackage{hyperref}
+\usepackage{titlesec}
+
+\definecolor{eloMaroon}{HTML}{8B0000}
+\definecolor{eloGold}{HTML}{A56600}
+\definecolor{eloInk}{HTML}{07142F}
+\definecolor{eloMuted}{HTML}{5F7188}
+\definecolor{eloPaper}{HTML}{FBF8F2}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=eloMaroon,
+  urlcolor=eloMaroon,
+  pdftitle={Trial 1 End-to-End System Test Script},
+  pdfauthor={Eloquente Catering System QA}
+}
+
+\pagestyle{fancy}
+\fancyhf{}
+\lhead{\textcolor{eloMaroon}{Eloquente Catering System}}
+\rhead{Trial 1 QA Script}
+\cfoot{\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+
+\titleformat{\section}
+  {\Large\bfseries\color{eloMaroon}}
+  {\thesection}{0.75em}{}
+
+\titleformat{\subsection}
+  {\large\bfseries\color{eloInk}}
+  {\thesubsection}{0.75em}{}
+
+\setlist[itemize]{leftmargin=1.5em}
+\setlist[enumerate]{leftmargin=1.7em}
+\renewcommand{\arraystretch}{1.25}
+
+\newcommand{\checkbox}{\(\square\)}
+\newcommand{\passbox}{\(\square\) Pass}
+\newcommand{\failbox}{\(\square\) Fail}
+\newcommand{\blockedbox}{\(\square\) Blocked}
+
+\begin{document}
+
+\begin{titlepage}
+  \centering
+  \vspace*{1.5cm}
+  {\Huge\bfseries\color{eloMaroon} Trial 1 End-to-End System Test Script\par}
+  \vspace{0.5cm}
+  {\Large Eloquente Catering System\par}
+  \vspace{1cm}
+  {\large Business-flow rehearsal from staff setup to customer feedback\par}
+  \vfill
+  \begin{tabular}{>{\bfseries}p{0.28\linewidth}p{0.58\linewidth}}
+    Document type & Manual QA and acceptance test script \\
+    Test scope & Admin, Customer, Marketing, Accounting, error handling, documents, audit, notifications \\
+    Recommended group & Four testers acting as Admin, Customer, Marketing, and Accounting \\
+    Date prepared & May 27, 2026 \\
+  \end{tabular}
+  \vfill
+  {\color{eloMuted} Use this packet to record actual outputs, screenshots, defects, and sign-off notes during the trial run.}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+\section{Purpose}
+This trial script guides the team through the full business journey: Admin creates staff accounts, a customer discovers the public site, submits a booking, Marketing reviews and prepares the event, Accounting verifies payment, the event is completed, and the customer submits feedback. It also includes skipped features, blocked-action cases, ownership rules, error handling, documents, notifications, and audit checks.
+
+\section{Tester Roles}
+\begin{longtable}{p{0.2\linewidth}p{0.72\linewidth}}
+\toprule
+\textbf{Role} & \textbf{Responsibilities} \\
+\midrule
+Admin tester & Owner/operator account, staff setup, oversight, settings, audit log, reports, business configuration. \\
+Customer tester & Public visitor and registered client; registration, booking, payment, chat, receipt, feedback, account safety. \\
+Marketing tester & Booking review, claim ownership, chat, event calendar, preparation, food tasting queue, feedback follow-up. \\
+Accounting tester & Payment verification, receipts, ledger, refunds, finance exceptions, accounting dashboard. \\
+\bottomrule
+\end{longtable}
+
+\section{Ground Rules}
+\begin{itemize}
+  \item Record pass, fail, or blocked after every case.
+  \item Capture screenshots for unexpected behavior, unclear messages, broken layouts, or console/API errors.
+  \item Use clear sample data: customer name, event name, event date, pax, package, payment reference, and notes.
+  \item When an error is expected, the system should show a clear user-facing message and should not crash.
+  \item Do not use real payment credentials unless testing on a proper production or sandbox payment setup.
+  \item Do not skip audit checks after sensitive actions such as staff changes, ownership changes, payments, refunds, and document downloads.
+\end{itemize}
+
+\section{Result Legend}
+\begin{longtable}{p{0.18\linewidth}p{0.75\linewidth}}
+\toprule
+\textbf{Mark} & \textbf{Meaning} \\
+\midrule
+\passbox & Behavior matches expected output. \\
+\failbox & Behavior is wrong, confusing, insecure, or incomplete. Create a bug entry. \\
+\blockedbox & Test could not continue because of missing setup, unavailable dependency, or previous failure. \\
+\bottomrule
+\end{longtable}
+
+\newpage
+
+\section{Phase 1: Admin Setup}
+\subsection{Objective}
+Confirm that Admin can access the owner workspace, create staff accounts, enforce first-login password behavior, and audit staff setup actions.
+
+\begin{longtable}{p{0.07\linewidth}p{0.13\linewidth}p{0.22\linewidth}p{0.28\linewidth}p{0.22\linewidth}}
+\toprule
+\textbf{ID} & \textbf{Actor} & \textbf{Test} & \textbf{Steps} & \textbf{Expected Output} \\
+\midrule
+TC-01 & Admin & Admin logs in & Open login, enter Admin credentials, open Admin dashboard. Try wrong password once. & Admin reaches Admin Console. Wrong password shows a clear error and grants no access. \\
+TC-02 & Admin & Create staff accounts & Open People/Staff, create one Marketing and one Accounting account, record generated invite or temporary password. & Staff accounts appear with correct role and account status. Audit records staff creation. \\
+TC-03 & Marketing, Accounting & First login and password setup & Log in as each staff user. Complete required password setup if prompted. & Staff cannot enter dashboard until password requirement is satisfied. Correct dashboard loads after completion. \\
+TC-04 & Admin & Review audit log & Open Activity Log and filter by account/staff actions. & Entries are business-readable, not route/method/code terms. Sensitive passwords or tokens are not shown. \\
+\bottomrule
+\end{longtable}
+
+\section{Phase 2: Public Customer Discovery}
+\subsection{Objective}
+Confirm that public pages are clear, accessible, and route customers toward booking, menu browsing, tasting, and contact inquiry without redundant CTAs.
+
+\begin{longtable}{p{0.07\linewidth}p{0.13\linewidth}p{0.22\linewidth}p{0.28\linewidth}p{0.22\linewidth}}
+\toprule
+\textbf{ID} & \textbf{Actor} & \textbf{Test} & \textbf{Steps} & \textbf{Expected Output} \\
+\midrule
+TC-05 & Customer & Visit public pages & Open Home, Menu, Packages, Food Tasting, Announcements, and Contact. Check desktop and mobile layout. & Navigation works, CTAs are clear, final CTA is readable, no raw technical text appears. \\
+TC-06 & Customer, Marketing & Send contact inquiry & Submit a public inquiry. Marketing checks inquiry queue/notifications. & Customer sees confirmation. Marketing receives a clear inquiry item and can follow up. \\
+\bottomrule
+\end{longtable}
+
+\section{Phase 3: Customer Registration And Verification}
+\subsection{Objective}
+Validate account creation, email verification, OTP behavior, and blocked sensitive actions before verification.
+
+\begin{longtable}{p{0.07\linewidth}p{0.13\linewidth}p{0.22\linewidth}p{0.28\linewidth}p{0.22\linewidth}}
+\toprule
+\textbf{ID} & \textbf{Actor} & \textbf{Test} & \textbf{Steps} & \textbf{Expected Output} \\
+\midrule
+TC-07 & Customer & Register & Create a customer account using valid sample data. Try a duplicate email afterward. & Account is created and verification is requested. Duplicate email is rejected cleanly. \\
+TC-08 & Customer & OTP verification & Enter correct OTP, then test expired/wrong/resend behavior if available. & Correct OTP verifies email. Wrong or expired OTP shows a clear message. Resend invalidates older codes. \\
+\bottomrule
+\end{longtable}
+
+\section{Phase 4: Booking Creation}
+\subsection{Objective}
+Create a realistic customer booking and confirm it enters the correct review state.
+
+\begin{longtable}{p{0.07\linewidth}p{0.13\linewidth}p{0.22\linewidth}p{0.28\linewidth}p{0.22\linewidth}}
+\toprule
+\textbf{ID} & \textbf{Actor} & \textbf{Test} & \textbf{Steps} & \textbf{Expected Output} \\
+\midrule
+TC-09 & Customer & Start booking & Start a booking, choose event type/date/package/menu, add pax and venue details, submit. & Booking appears in customer dashboard as submitted for review. Marketing count/claim queue updates. \\
+TC-10 & Customer & Update before review & Edit allowed booking details before Marketing approval. & Booking updates are saved, visible to staff, and logged as customer activity. \\
+\bottomrule
+\end{longtable}
+
+\section{Phase 5: Marketing Claim And Review}
+\subsection{Objective}
+Confirm explicit ownership: Marketing must claim before mutating a booking, while Admin can override.
+
+\begin{longtable}{p{0.07\linewidth}p{0.13\linewidth}p{0.22\linewidth}p{0.28\linewidth}p{0.22\linewidth}}
+\toprule
+\textbf{ID} & \textbf{Actor} & \textbf{Test} & \textbf{Steps} & \textbf{Expected Output} \\
+\midrule
+TC-11 & Marketing & View claim queue & Open Booking Reviews, select Claim Queue. & Only unassigned reviewable bookings appear. Completed, cancelled, and owned bookings are excluded. \\
+TC-12 & Marketing & Try mutation before claim & From Claim Queue or All Bookings, attempt Ask Details, Approve, or Reject before claiming. & Mutation is blocked with ``Claim this booking before making changes.'' \\
+TC-13 & Marketing & Claim booking & Click Claim booking. Refresh the queue. & Booking leaves Claim Queue and appears in My Bookings. Owner label shows current Marketing user. \\
+TC-14 & Marketing, Customer & Request customer details & Owner clicks Ask Details. Customer opens dashboard and responds. & Customer sees a clear clarification request. Marketing sees response and can continue review. \\
+TC-15 & Marketing & Approve booking & Owner approves booking after details are complete. & Booking becomes approved/confirmed as designed. Customer next step changes to payment or event details. \\
+\bottomrule
+\end{longtable}
+
+\section{Phase 6: Ownership And Transfer Cases}
+\subsection{Objective}
+Validate lockout, transfer, acceptance, and release behavior for claimed bookings.
+
+\begin{longtable}{p{0.07\linewidth}p{0.13\linewidth}p{0.22\linewidth}p{0.28\linewidth}p{0.22\linewidth}}
+\toprule
+\textbf{ID} & \textbf{Actor} & \textbf{Test} & \textbf{Steps} & \textbf{Expected Output} \\
+\midrule
+TC-16 & Marketing B & Non-owner blocked & Marketing B opens All Bookings and tries owner-only actions on Marketing A's booking. & Booking is visible but read-only. Helper says owned by another staff member. \\
+TC-17 & Marketing A, Marketing B & Transfer claimed booking & Owner requests transfer to Marketing B. Marketing B accepts or declines in modal. & Pending transfer is visible. Accept changes owner. Decline keeps original owner. Audit records result. \\
+TC-18 & Marketing/Admin & Release or unclaim & Owner or Admin releases booking if allowed. & Booking returns to Claim Queue. No mutation happens during release except ownership change. \\
+\bottomrule
+\end{longtable}
+
+\section{Phase 7: Chat And Collaboration}
+\subsection{Objective}
+Test booking-aware chat, staff claiming, collaboration, moderation, and resolved/reopened conversations.
+
+\begin{longtable}{p{0.07\linewidth}p{0.13\linewidth}p{0.22\linewidth}p{0.28\linewidth}p{0.22\linewidth}}
+\toprule
+\textbf{ID} & \textbf{Actor} & \textbf{Test} & \textbf{Steps} & \textbf{Expected Output} \\
+\midrule
+TC-19 & Customer & Start chat & Open Messages, choose booking or General Inquiry, send message. & Conversation appears for staff with client and booking context. \\
+TC-20 & Marketing & Claim and reply & Marketing claims conversation and replies. & Customer receives reply. Unassigned chats require claim before staff reply. \\
+TC-21 & Marketing/Admin & Collaboration & Owner invites another Marketing user or Admin joins. Collaborator replies. & Collaborator can read/reply but cannot transfer or resolve unless promoted/Admin. \\
+TC-22 & Customer, Staff & Edit/delete/reopen & Edit own recent message, soft-delete own message, resolve and reopen conversation. & Time limits and permissions are respected. Deleted message placeholder appears. Audit logs moderation. \\
+\bottomrule
+\end{longtable}
+
+\section{Phase 8: Payment Flow}
+\subsection{Objective}
+Confirm customer payment steps, accounting verification, labels, balances, and receipt documents.
+
+\begin{longtable}{p{0.07\linewidth}p{0.13\linewidth}p{0.22\linewidth}p{0.28\linewidth}p{0.22\linewidth}}
+\toprule
+\textbf{ID} & \textbf{Actor} & \textbf{Test} & \textbf{Steps} & \textbf{Expected Output} \\
+\midrule
+TC-23 & Customer & Open payment step & Open dashboard payment panel and submit proof or use sandbox payment path if configured. & Payment method labels are human-readable. Balance and status are clear. \\
+TC-24 & Accounting & Verify payment & Accounting opens Verify Payments, approves or rejects proof, then checks customer dashboard. & Approved payment updates balance and receipt availability. Rejection shows customer-safe reason. \\
+TC-25 & Customer, Accounting & Receipt PDF & Download receipt from customer/accounting/admin surfaces. & Branded PDF includes receipt number, booking reference, method label, amount, payment date, balance, and business contact. \\
+\bottomrule
+\end{longtable}
+
+\section{Phase 9: Event Preparation}
+\subsection{Objective}
+Validate preparation board visibility, task updates, ownership safety, and prep-list PDF output.
+
+\begin{longtable}{p{0.07\linewidth}p{0.13\linewidth}p{0.22\linewidth}p{0.28\linewidth}p{0.22\linewidth}}
+\toprule
+\textbf{ID} & \textbf{Actor} & \textbf{Test} & \textbf{Steps} & \textbf{Expected Output} \\
+\midrule
+TC-26 & Marketing & Open preparation board & Open Event Preparation and find the approved event. & Board loads without 500 errors and shows event details, owner, and tasks. \\
+TC-27 & Marketing & Update prep tasks & Owner updates task statuses, department, and notes. Non-owner tries the same. & Owner can update. Non-owner is blocked if ownership rules apply. Changes are audited. \\
+TC-28 & Marketing & Prep list PDF & Download prep list. & Branded PDF includes schedule, venue, client, pax, menu, dietary notes, equipment, timeline, tasks, owner, and generated timestamp. \\
+\bottomrule
+\end{longtable}
+
+\section{Phase 10: Event Calendar And Availability}
+\subsection{Objective}
+Verify calendar month/list views, filters, event stability while switching months, and availability management.
+
+\begin{longtable}{p{0.07\linewidth}p{0.13\linewidth}p{0.22\linewidth}p{0.28\linewidth}p{0.22\linewidth}}
+\toprule
+\textbf{ID} & \textbf{Actor} & \textbf{Test} & \textbf{Steps} & \textbf{Expected Output} \\
+\midrule
+TC-29 & Marketing & Calendar month view & Open Event Calendar, switch months, open an event. & Events remain visible and do not disappear after month switching. Event drawer opens correctly. \\
+TC-30 & Marketing/Admin & Calendar list and filters & Switch to List View. Filter by date, status, event type, venue/city, owner, preparation/payment state. & Filtered rows match month data and show date, event, client, pax, venue, status, owner, and prep state. \\
+TC-31 & Admin/Marketing & Date availability & Add or edit date availability/blackout. Customer checks booking date behavior. & Public booking respects availability rules. Audit records availability change. \\
+\bottomrule
+\end{longtable}
+
+\section{Phase 11: Completion And Event History}
+\subsection{Objective}
+Confirm completed events leave active queues and appear in shared staff history.
+
+\begin{longtable}{p{0.07\linewidth}p{0.13\linewidth}p{0.22\linewidth}p{0.28\linewidth}p{0.22\linewidth}}
+\toprule
+\textbf{ID} & \textbf{Actor} & \textbf{Test} & \textbf{Steps} & \textbf{Expected Output} \\
+\midrule
+TC-32 & Marketing/Admin & Mark event completed & Complete event through allowed workflow or run past-submitted cleanup command in a test environment. & Status becomes Completed. Event leaves claim/review/prep active queues. Feedback request is ensured. \\
+TC-33 & All staff & Event history notes & Admin, Marketing, and Accounting open Event History and add internal notes. & Completed event appears to all staff. Notes are visible to staff only and do not reopen active workflow. \\
+\bottomrule
+\end{longtable}
+
+\section{Phase 12: Feedback And Testimonials}
+\subsection{Objective}
+Validate post-event feedback request, customer submission, low-rating follow-up, and testimonial approval.
+
+\begin{longtable}{p{0.07\linewidth}p{0.13\linewidth}p{0.22\linewidth}p{0.28\linewidth}p{0.22\linewidth}}
+\toprule
+\textbf{ID} & \textbf{Actor} & \textbf{Test} & \textbf{Steps} & \textbf{Expected Output} \\
+\midrule
+TC-34 & System/Marketing & Feedback request exists & After completion, check customer and staff feedback surfaces. & One feedback request exists. Running completion twice does not create duplicates. \\
+TC-35 & Customer & Submit feedback & Customer rates service and optionally allows testimonial use. & Feedback saves successfully and appears in staff review surfaces. \\
+TC-36 & Marketing/Admin & Review feedback & Staff updates feedback status, follow-up owner/date, notes, and testimonial approval/rejection. & Public testimonial appears only with customer permission and staff approval. Audit records changes. \\
+\bottomrule
+\end{longtable}
+
+\section{Phase 13: Refund And Cancellation Cases}
+\subsection{Objective}
+Exercise refund and cancellation behavior without weakening payment controls.
+
+\begin{longtable}{p{0.07\linewidth}p{0.13\linewidth}p{0.22\linewidth}p{0.28\linewidth}p{0.22\linewidth}}
+\toprule
+\textbf{ID} & \textbf{Actor} & \textbf{Test} & \textbf{Steps} & \textbf{Expected Output} \\
+\midrule
+TC-37 & Customer, Accounting & Cancellation and refund & Customer requests cancellation if allowed. Accounting/Admin reviews refund path. & Refund queue shows request with original payment method label and clear status. \\
+TC-38 & Accounting/Admin & Refund exception & Simulate provider/manual refund failure or mark exception in test data. & Exception appears in Accounting/Admin queues and Next Action panels. Customer-safe messaging is shown. \\
+\bottomrule
+\end{longtable}
+
+\section{Phase 14: Admin Oversight And Settings}
+\subsection{Objective}
+Review owner-level oversight, reports, business settings, and staff lifecycle controls.
+
+\begin{longtable}{p{0.07\linewidth}p{0.13\linewidth}p{0.22\linewidth}p{0.28\linewidth}p{0.22\linewidth}}
+\toprule
+\textbf{ID} & \textbf{Actor} & \textbf{Test} & \textbf{Steps} & \textbf{Expected Output} \\
+\midrule
+TC-39 & Admin & Overview and analytics & Open Admin Overview and Analytics. Check counts, charts, and exception summaries. & Data loads without 500 errors. Completed events are not counted as active review work. \\
+TC-40 & Admin & Reports & Generate/download admin reports. & Reports are branded PDFs or properly formatted exports, not raw text or code-like output. \\
+TC-41 & Admin & Settings & Update safe business setting in test environment, then verify public/customer effect. & Setting saves, reflects correctly, and audit entry is readable. \\
+TC-42 & Admin & Staff lifecycle & Reset password, force password change, deactivate/reactivate staff. Attempt self-deactivation. & Staff lifecycle works. Self-deactivation is blocked. No undefined password crash occurs. \\
+\bottomrule
+\end{longtable}
+
+\section{Phase 15: Documents, Notifications, And Sounds}
+\subsection{Objective}
+Validate notification grouping, sound preferences, profile/account safety, and document audit coverage.
+
+\begin{longtable}{p{0.07\linewidth}p{0.13\linewidth}p{0.22\linewidth}p{0.28\linewidth}p{0.22\linewidth}}
+\toprule
+\textbf{ID} & \textbf{Actor} & \textbf{Test} & \textbf{Steps} & \textbf{Expected Output} \\
+\midrule
+TC-43 & All roles & Notification bell & Trigger booking, payment, chat, feedback, and transfer notifications. & Bell groups unread items by urgency/action/update. Own actions do not create noisy alerts. \\
+TC-44 & All roles & Sound preferences & Toggle sound settings and trigger incoming notifications. & Sounds play only after user gesture, respect preferences, and avoid repeated spam. \\
+TC-45 & Customer/Staff & Profile and account safety & Update profile, change password, try account deactivation flow where allowed. & Sensitive actions require verification/password confirmation. Operational records remain intact. \\
+\bottomrule
+\end{longtable}
+
+\section{Phase 16: Final Error Handling Sweep}
+\subsection{Objective}
+Try predictable failure paths and make sure the app fails gracefully.
+
+\begin{longtable}{p{0.07\linewidth}p{0.13\linewidth}p{0.22\linewidth}p{0.28\linewidth}p{0.22\linewidth}}
+\toprule
+\textbf{ID} & \textbf{Actor} & \textbf{Test} & \textbf{Steps} & \textbf{Expected Output} \\
+\midrule
+TC-46 & All roles & Unauthorized access & Try direct URLs for another role's dashboard/API. & Access is denied or redirected safely. No private data leaks. \\
+TC-47 & All roles & Invalid inputs & Submit missing fields, bad dates, large text, invalid files, duplicate actions. & User-facing validation appears. No 500 error or broken UI. \\
+TC-48 & All roles & Refresh and persistence & Refresh after key state changes, log out/in, revisit pages. & State persists correctly and old links normalize safely. \\
+TC-49 & All roles & Mobile/small screen & Test key pages on small viewport. & Primary actions remain visible, text is readable, no controls overlap. \\
+TC-50 & Admin/Developer & Production readiness scan & Run build, tests, route list, diff check, and preflight scan. & Automated checks pass or remaining infrastructure items are clearly listed. \\
+\bottomrule
+\end{longtable}
+
+\newpage
+
+\section{Detailed Execution Notes}
+\subsection{Main Business Flow Order}
+\begin{enumerate}
+  \item Admin logs in and creates Marketing and Accounting staff accounts.
+  \item Staff users complete first-login/password setup.
+  \item Customer explores public pages, registers, verifies email, and creates a booking.
+  \item Marketing confirms the booking appears in Claim Queue.
+  \item Marketing verifies unclaimed bookings cannot be mutated, then explicitly claims the booking.
+  \item Marketing requests clarification if needed, receives the customer response, and approves the booking.
+  \item Customer completes payment step.
+  \item Accounting verifies payment and checks receipt output.
+  \item Marketing updates preparation tasks and downloads the prep list.
+  \item Staff checks event calendar and availability behavior.
+  \item Event is completed and appears in shared Event History.
+  \item Customer submits feedback.
+  \item Marketing/Admin reviews feedback and testimonial eligibility.
+  \item Admin reviews reports, settings, audit entries, and staff lifecycle controls.
+\end{enumerate}
+
+\subsection{Error Handling To Try During The Flow}
+\begin{itemize}
+  \item Wrong password and invalid OTP.
+  \item Duplicate registration email.
+  \item Booking form with missing required fields.
+  \item Marketing mutation before claim.
+  \item Non-owner mutation after another staff member claims a booking.
+  \item Duplicate claim after a booking was already claimed.
+  \item Payment proof rejection.
+  \item Direct URL access to another role's dashboard.
+  \item Expired or old links such as old dashboard query parameters.
+  \item Refresh during or after state changes.
+\end{itemize}
+
+\subsection{Documents To Inspect}
+\begin{itemize}
+  \item Customer receipt/payment receipt.
+  \item Booking summary/customer copy, if available.
+  \item Event preparation list.
+  \item Calendar report.
+  \item Admin reports.
+  \item Refund/payment documentation.
+\end{itemize}
+
+\subsection{Audit Actions To Confirm}
+\begin{itemize}
+  \item Login, failed login, password reset, forced password change.
+  \item Staff creation, role change, deactivation, reactivation.
+  \item Booking claim, release, transfer request, accept, decline.
+  \item Booking approval, rejection, clarification request, status changes.
+  \item Chat claim, join, collaborator changes, resolve, reopen, message moderation.
+  \item Payment proof upload, verification, rejection, refund actions.
+  \item Feedback follow-up, testimonial approval/rejection, event history note.
+  \item Document generation/download.
+  \item Settings, menu, package, announcement, availability, and preview actions.
+\end{itemize}
+
+\newpage
+
+\section{Trial Result Template}
+\subsection{Pass/Fail Summary}
+\begin{longtable}{p{0.24\linewidth}p{0.16\linewidth}p{0.16\linewidth}p{0.16\linewidth}p{0.2\linewidth}}
+\toprule
+\textbf{Area} & \textbf{Passed} & \textbf{Failed} & \textbf{Blocked} & \textbf{Notes} \\
+\midrule
+Admin & & & & \\
+Customer & & & & \\
+Marketing & & & & \\
+Accounting & & & & \\
+Cross-role flow & & & & \\
+Documents/PDFs & & & & \\
+Audit/notifications & & & & \\
+Error handling & & & & \\
+\bottomrule
+\end{longtable}
+
+\subsection{Bug Log}
+\begin{longtable}{p{0.08\linewidth}p{0.15\linewidth}p{0.22\linewidth}p{0.22\linewidth}p{0.12\linewidth}p{0.12\linewidth}}
+\toprule
+\textbf{No.} & \textbf{Case ID} & \textbf{Issue} & \textbf{Expected Behavior} & \textbf{Severity} & \textbf{Owner} \\
+\midrule
+1 & & & & & \\
+2 & & & & & \\
+3 & & & & & \\
+4 & & & & & \\
+5 & & & & & \\
+\bottomrule
+\end{longtable}
+
+\subsection{Business Flow Verdict}
+\begin{itemize}
+  \item \checkbox\ The complete business flow can be performed without developer assistance.
+  \item \checkbox\ Each role understands what to do next.
+  \item \checkbox\ Ownership and permission rules behave correctly.
+  \item \checkbox\ Customer-facing copy is understandable.
+  \item \checkbox\ Staff-facing audit logs are business-readable.
+  \item \checkbox\ PDFs and exports are branded and complete.
+  \item \checkbox\ No critical 500 errors or broken screens remain.
+  \item \checkbox\ Remaining issues are minor and documented.
+\end{itemize}
+
+\vspace{1cm}
+\begin{longtable}{p{0.3\linewidth}p{0.3\linewidth}p{0.3\linewidth}}
+\toprule
+\textbf{Tester} & \textbf{Role} & \textbf{Signature / Date} \\
+\midrule
+ & Admin & \\
+ & Customer & \\
+ & Marketing & \\
+ & Accounting & \\
+\bottomrule
+\end{longtable}
+
+\end{document}

@@ -1,0 +1,440 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[margin=0.75in]{geometry}
+\usepackage{array}
+\usepackage{longtable}
+\usepackage{booktabs}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{fancyhdr}
+\usepackage{titlesec}
+\usepackage{enumitem}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=brandred,
+    urlcolor=brandred
+}
+
+\definecolor{brandred}{HTML}{720101}
+\definecolor{brandgold}{HTML}{A66A00}
+\definecolor{softgray}{HTML}{F7F3EC}
+\definecolor{darktext}{HTML}{111827}
+
+\pagestyle{fancy}
+\fancyhf{}
+\lhead{\textbf{Eloquente Catering Event Catering System}}
+\rhead{\textbf{Rated FRD}}
+\cfoot{\thepage}
+
+\titleformat{\section}
+  {\Large\bfseries\color{brandred}}
+  {\thesection}{0.7em}{}
+
+\titleformat{\subsection}
+  {\large\bfseries\color{brandgold}}
+  {\thesubsection}{0.7em}{}
+
+\renewcommand{\arraystretch}{1.35}
+\setlength{\tabcolsep}{5pt}
+\setlist[itemize]{leftmargin=1.2em}
+
+\newcolumntype{L}[1]{>{\raggedright\arraybackslash}p{#1}}
+\newcolumntype{C}[1]{>{\centering\arraybackslash}p{#1}}
+
+\newcommand{\statusdone}{\textbf{[x]}}
+\newcommand{\statuspartial}{\textbf{[{\textasciitilde}]}}
+\newcommand{\statusmissing}{\textbf{[ ]}}
+\newcommand{\statusrisk}{\textbf{[!]}}
+
+\begin{document}
+
+\begin{titlepage}
+    \centering
+    \vspace*{1.5cm}
+    {\Huge\bfseries\color{brandred} Rated Functional Requirements Document \par}
+    \vspace{0.5cm}
+    {\Large Eloquente Catering Event Catering System \par}
+    \vspace{1.5cm}
+    \begin{tabular}{rl}
+        \textbf{Date:} & 2026-05-25 \\
+        \textbf{Prepared for:} & Development team, project evaluators, and business stakeholders \\
+        \textbf{Basis:} & Current implemented system, FRD, rating review, and error review \\
+    \end{tabular}
+    \vfill
+    {\large Functional readiness: \textbf{78 / 100}\par}
+    {\large Production readiness: \textbf{70 / 100}\par}
+    {\large Demonstration readiness: \textbf{89 / 100}\par}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+\section{Rating Legend}
+
+\begin{longtable}{L{0.15\textwidth} L{0.55\textwidth} C{0.20\textwidth}}
+\toprule
+\textbf{Mark} & \textbf{Meaning} & \textbf{Completion Range} \\
+\midrule
+\statusdone & Mostly complete and usable & 85--100\% \\
+\statuspartial & Partially complete or needs polishing & 50--84\% \\
+\statusmissing & Not implemented or not reliable enough & 0--49\% \\
+\statusrisk & Implemented but risky or needs urgent correction & Any percent \\
+\bottomrule
+\end{longtable}
+
+\section{Overall Functional Completion}
+
+\begin{center}
+    \fcolorbox{brandred}{softgray}{
+        \begin{minipage}{0.88\textwidth}
+            \centering
+            \vspace{0.3cm}
+            {\Large\textbf{Estimated Functional Completion: 78 / 100}}\\[0.2cm]
+            The system has most major modules implemented, but several workflows still need final hardening before real production use.
+            The most urgent concern is the legacy manual payment verification path, which can still mark payments as verified from a customer-facing route.
+            \vspace{0.3cm}
+        \end{minipage}
+    }
+\end{center}
+
+\section{Summary By Module}
+
+\begin{longtable}{L{0.20\textwidth} C{0.10\textwidth} C{0.12\textwidth} C{0.13\textwidth} L{0.35\textwidth}}
+\toprule
+\textbf{Module} & \textbf{Status} & \textbf{Completion} & \textbf{Rating} & \textbf{Notes} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{Module} & \textbf{Status} & \textbf{Completion} & \textbf{Rating} & \textbf{Notes} \\
+\midrule
+\endhead
+Public website & \statusdone & 88\% & 8.6/10 & Public pages work. Not 100\% because final content governance, availability-driven notices, and production copy review are still needed. \\
+Authentication and profile & \statuspartial & 84\% & 8.2/10 & Login, registration, and profile work with stronger staff detail fields. Not 100\% because final security review, staff profile polish, and stronger account recovery flows are still needed. \\
+Customer booking & \statusdone & 87\% & 8.5/10 & Booking wizard is strong and now has stronger availability override support. Not 100\% because edge cases, budget generator accuracy, and customer-friendly validation errors still need cleanup. \\
+Customer dashboard & \statuspartial & 80\% & 7.8/10 & Dashboard is useful. Not 100\% because booking/payment status labels and refund/payment edge states still need standardization. \\
+Payments & \statusrisk & 68\% & 6.4/10 & PayMongo exists. Not 100\% because the legacy manual payment route can still mark payments verified and must be removed or converted to proof review. \\
+Marketing workflow & \statuspartial & 77\% & 7.5/10 & Intake workflow exists and availability visibility improved. Not 100\% because clarification still uses a browser prompt, queue priority can improve, and chat should connect better to booking review. \\
+Food tasting & \statuspartial & 70\% & 7.0/10 & Tasting requests exist. Not 100\% because staff still need a tasting queue/calendar, confirmation flow, and outcome notes. \\
+Accounting & \statuspartial & 70\% & 7.0/10 & Core accounting works. Not 100\% because PayMongo reconciliation, payment exception handling, and refund case records are still incomplete. \\
+Admin & \statuspartial & 78\% & 7.7/10 & Admin is broad and now includes date availability controls. Not 100\% because some screens are dense, some labels are technical, and advanced configuration needs better separation. \\
+Announcement CMS & \statusdone & 82\% & 8.0/10 & CMS foundation is strong. Not 100\% because approval workflow, content calendar, and stronger email scheduling controls are missing. \\
+Chat and notifications & \statuspartial & 76\% & 7.5/10 & Chat and notifications work with better lazy-loading and richer user summaries. Not 100\% because staff chat still uses native dialogs and needs better booking context integration. \\
+Reports and analytics & \statuspartial & 72\% & 7.2/10 & Reports are useful. Not 100\% because role-specific presets, action recommendations, export audit, and production data testing remain. \\
+Data and business rules & \statuspartial & 78\% & 7.8/10 & Core records exist, including date availability override records. Not 100\% because refund cases, event preparation tasks, payment events, and feedback records are not fully modeled. \\
+Non-functional requirements & \statuspartial & 74\% & 7.3/10 & Performance and security improved through lazy chart/chat loading and PHP config cleanup. Not 100\% because production hardening, broader tests, centralized statuses, and polished error handling remain. \\
+\bottomrule
+\end{longtable}
+
+\section{Public Website Requirements}
+
+\begin{longtable}{L{0.15\textwidth} L{0.22\textwidth} C{0.08\textwidth} C{0.10\textwidth} C{0.10\textwidth} L{0.25\textwidth}}
+\toprule
+\textbf{ID} & \textbf{Requirement} & \textbf{Status} & \textbf{Completion} & \textbf{Rating} & \textbf{Notes} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{ID} & \textbf{Requirement} & \textbf{Status} & \textbf{Completion} & \textbf{Rating} & \textbf{Notes} \\
+\midrule
+\endhead
+FR-PUB-001 & Home Page & \statusdone & 90\% & 8.8/10 & Home page exists. To reach 100\%, add stronger availability-driven prompts, final copy review, and production image/content audit. \\
+FR-PUB-002 & Menu Page & \statusdone & 88\% & 8.5/10 & Menu display works. To reach 100\%, finish image consistency, hide unavailable items perfectly, and test filtering with full production data. \\
+FR-PUB-003 & Amenities Page & \statusdone & 86\% & 8.3/10 & Amenities page exists. To reach 100\%, connect amenities more tightly to event/package configuration and keep content editable/governed. \\
+FR-PUB-004 & Contact Page & \statusdone & 86\% & 8.3/10 & Contact page exists. To reach 100\%, add clearer support routing by concern type and ensure active booking inquiries always route to chat. \\
+FR-PUB-005 & Public Announcements & \statusdone & 82\% & 8.0/10 & Public announcements work. To reach 100\%, add approval, scheduling calendar, and stronger audience/publish safeguards. \\
+\bottomrule
+\end{longtable}
+
+\section{Authentication And Profile Requirements}
+
+\begin{longtable}{L{0.15\textwidth} L{0.22\textwidth} C{0.08\textwidth} C{0.10\textwidth} C{0.10\textwidth} L{0.25\textwidth}}
+\toprule
+\textbf{ID} & \textbf{Requirement} & \textbf{Status} & \textbf{Completion} & \textbf{Rating} & \textbf{Notes} \\
+\midrule
+FR-AUTH-001 & Registration & \statusdone & 86\% & 8.4/10 & Registration exists. To reach 100\%, add stronger account recovery, clearer validation copy, and final security checks for duplicate/invalid inputs. \\
+FR-AUTH-002 & Login & \statusdone & 88\% & 8.5/10 & Login works. To reach 100\%, complete final session/security review and improve all failed-login and role-redirect edge states. \\
+FR-AUTH-003 & Logout & \statusdone & 90\% & 8.8/10 & Logout works. To reach 100\%, test session invalidation across all role dashboards and browser back-button cases. \\
+FR-AUTH-004 & Profile Management & \statuspartial & 82\% & 8.0/10 & Profile management exists with stronger staff detail fields. To reach 100\%, polish staff/admin profile UI, add clearer password rules, and audit profile update permissions. \\
+\bottomrule
+\end{longtable}
+
+\section{Customer Booking Requirements}
+
+\begin{longtable}{L{0.15\textwidth} L{0.22\textwidth} C{0.08\textwidth} C{0.10\textwidth} C{0.10\textwidth} L{0.25\textwidth}}
+\toprule
+\textbf{ID} & \textbf{Requirement} & \textbf{Status} & \textbf{Completion} & \textbf{Rating} & \textbf{Notes} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{ID} & \textbf{Requirement} & \textbf{Status} & \textbf{Completion} & \textbf{Rating} & \textbf{Notes} \\
+\midrule
+\endhead
+FR-BOOK-001 & Start Booking & \statusdone & 90\% & 8.8/10 & Booking wizard is accessible. To reach 100\%, add server-side draft recovery and more abandonment recovery behavior. \\
+FR-BOOK-002 & Select Event Type & \statusdone & 88\% & 8.5/10 & Event type selection works. To reach 100\%, sync event type setup/inclusions with admin-managed content and test all event types. \\
+FR-BOOK-003 & Select Date And Time & \statusdone & 88\% & 8.5/10 & Calendar availability works with staff-managed overrides for blocked or limited dates. To reach 100\%, add stronger race-condition protection, full capacity testing, and clearer blocked-date explanations. \\
+FR-BOOK-004 & Enter Guest Count & \statusdone & 86\% & 8.3/10 & Headcount and dietary notes exist. To reach 100\%, better validate unusual pax values and connect dietary notes to staff preparation views. \\
+FR-BOOK-005 & Choose Package Method & \statusdone & 88\% & 8.5/10 & Three methods exist. To reach 100\%, test every back/forward path and preserve selections perfectly across method changes. \\
+FR-BOOK-006 & Select Curated Package & \statusdone & 84\% & 8.1/10 & Curated packages work. To reach 100\%, reduce remaining text density, finish responsive states, and verify package data completeness. \\
+FR-BOOK-007 & Build Menu & \statusdone & 86\% & 8.4/10 & Menu builder works. To reach 100\%, harden category minimums, empty states, filters, pagination, and selected-price calculations. \\
+FR-BOOK-008 & Budget-Based Menu & \statuspartial & 72\% & 6.9/10 & Budget build exists. To reach 100\%, fix minimum budget calculation so it only promises full category coverage when it can generate it. \\
+FR-BOOK-009 & Contact And Venue Details & \statusdone & 84\% & 8.0/10 & Venue details work. To reach 100\%, make logistics fees transparent and connect venue risks to staff operations checklist. \\
+FR-BOOK-010 & Food Tasting Preference & \statusdone & 84\% & 8.1/10 & Tasting step exists. To reach 100\%, connect it to a staff tasting queue/calendar and enforce tasting slot availability. \\
+FR-BOOK-011 & Final Review Modal & \statusdone & 86\% & 8.3/10 & Review modal exists. To reach 100\%, add cleaner validation summaries and edit shortcuts to the exact relevant step. \\
+FR-BOOK-012 & Submit Booking & \statusdone & 86\% & 8.4/10 & Booking creation works. To reach 100\%, add broader tests for all package/payment/tasting combinations and friendlier validation mapping. \\
+FR-BOOK-013 & Booking Updates & \statuspartial & 76\% & 7.4/10 & Updates exist. To reach 100\%, test every lock rule and show clearer explanations when edits are no longer allowed. \\
+FR-BOOK-014 & Booking Cancellation & \statuspartial & 74\% & 7.2/10 & Cancellation exists. To reach 100\%, add refund case tracking, cancellation reasons, and clearer customer refund status. \\
+\bottomrule
+\end{longtable}
+
+\section{Customer Dashboard Requirements}
+
+\begin{longtable}{L{0.15\textwidth} L{0.22\textwidth} C{0.08\textwidth} C{0.10\textwidth} C{0.10\textwidth} L{0.25\textwidth}}
+\toprule
+\textbf{ID} & \textbf{Requirement} & \textbf{Status} & \textbf{Completion} & \textbf{Rating} & \textbf{Notes} \\
+\midrule
+FR-CDASH-001 & Dashboard Overview & \statusdone & 84\% & 8.1/10 & Dashboard works. To reach 100\%, simplify dense sections, standardize status displays, and test multiple active/history bookings. \\
+FR-CDASH-002 & Customer Next Actions & \statuspartial & 80\% & 7.8/10 & Next actions exist. To reach 100\%, make one primary next action obvious for every booking/payment/refund state. \\
+FR-CDASH-003 & Respond To Staff Request & \statusdone & 86\% & 8.4/10 & Clarification response works. To reach 100\%, add better notification timing, response history, and staff/customer read status. \\
+FR-CDASH-004 & Payment Summary & \statuspartial & 78\% & 7.5/10 & Payment summary works. To reach 100\%, unify payment labels, remove raw statuses, and harden rush/partial/refund cases. \\
+\bottomrule
+\end{longtable}
+
+\section{Payment Requirements}
+
+\begin{longtable}{L{0.15\textwidth} L{0.22\textwidth} C{0.08\textwidth} C{0.10\textwidth} C{0.10\textwidth} L{0.25\textwidth}}
+\toprule
+\textbf{ID} & \textbf{Requirement} & \textbf{Status} & \textbf{Completion} & \textbf{Rating} & \textbf{Notes} \\
+\midrule
+FR-PAY-001 & Payment Schedule Generation & \statusdone & 84\% & 8.0/10 & Schedule generation exists. To reach 100\%, add regression tests for standard, rush 1, rush 2, discounts, and edited terms. \\
+FR-PAY-002 & PayMongo Checkout & \statusdone & 82\% & 8.0/10 & PayMongo checkout exists. To reach 100\%, test all supported methods, expired sessions, retries, and webhook/local sync behavior. \\
+FR-PAY-003 & PayMongo Webhook & \statusdone & 80\% & 7.8/10 & Webhook works. To reach 100\%, add event ID tracking, duplicate event handling proof, and reconciliation dashboard visibility. \\
+FR-PAY-004 & Payment Verification & \statuspartial & 76\% & 7.3/10 & Verification exists. To reach 100\%, separate online paid, manually reviewed, rejected, expired, and overdue statuses clearly. \\
+FR-PAY-005 & Manual Payment Safety & \statusrisk & 35\% & 3.5/10 & Not complete because old customer route can verify payments. To complete, remove or lock it and replace with proof upload pending Accounting review. \\
+\bottomrule
+\end{longtable}
+
+\section{Marketing Requirements}
+
+\begin{longtable}{L{0.15\textwidth} L{0.22\textwidth} C{0.08\textwidth} C{0.10\textwidth} C{0.10\textwidth} L{0.25\textwidth}}
+\toprule
+\textbf{ID} & \textbf{Requirement} & \textbf{Status} & \textbf{Completion} & \textbf{Rating} & \textbf{Notes} \\
+\midrule
+FR-MKT-001 & Booking Intake Queue & \statuspartial & 78\% & 7.6/10 & Intake queue exists. To reach 100\%, add priority sorting, SLA timers, stronger filters, and unresolved-message visibility. \\
+FR-MKT-002 & Claim Booking & \statusdone & 88\% & 8.5/10 & Claiming works. To reach 100\%, add reassignment, assignment history, and admin override notes. \\
+FR-MKT-003 & Review Checklist & \statusdone & 84\% & 8.1/10 & Checklist works. To reach 100\%, make checklist templates configurable and block approval when critical tasks are unfinished. \\
+FR-MKT-004 & Request Customer Details & \statuspartial & 72\% & 6.8/10 & Flow works. To reach 100\%, replace browser prompt with branded modal, request templates, and clearer response tracking. \\
+FR-MKT-005 & Approve Or Decline Booking & \statuspartial & 78\% & 7.5/10 & Status updates work. To reach 100\%, add decline reasons, approval side-effect checks, and clearer customer-facing result messages. \\
+FR-MKT-006 & Live Event Status & \statuspartial & 74\% & 7.2/10 & Live status exists. To reach 100\%, add event preparation board, readiness gates, and event-day issue logging. \\
+FR-MKT-007 & Availability Review & \statuspartial & 78\% & 7.6/10 & Marketing can view availability context. To reach 100\%, connect availability changes to booking review recommendations and show conflict warnings directly in queues. \\
+\bottomrule
+\end{longtable}
+
+\section{Food Tasting Requirements}
+
+\begin{longtable}{L{0.15\textwidth} L{0.22\textwidth} C{0.08\textwidth} C{0.10\textwidth} C{0.10\textwidth} L{0.25\textwidth}}
+\toprule
+\textbf{ID} & \textbf{Requirement} & \textbf{Status} & \textbf{Completion} & \textbf{Rating} & \textbf{Notes} \\
+\midrule
+FR-TASTE-001 & Submit Tasting Request & \statusdone & 84\% & 8.1/10 & Tasting request exists. To reach 100\%, validate tasting slot capacity and connect requests directly to staff scheduling. \\
+FR-TASTE-002 & Manage Tasting Request & \statuspartial & 76\% & 7.4/10 & Customer management exists. To reach 100\%, add staff confirmation, reschedule flow, tasting outcome notes, and calendar conflict checks. \\
+\bottomrule
+\end{longtable}
+
+\section{Accounting Requirements}
+
+\begin{longtable}{L{0.15\textwidth} L{0.22\textwidth} C{0.08\textwidth} C{0.10\textwidth} C{0.10\textwidth} L{0.25\textwidth}}
+\toprule
+\textbf{ID} & \textbf{Requirement} & \textbf{Status} & \textbf{Completion} & \textbf{Rating} & \textbf{Notes} \\
+\midrule
+FR-ACC-001 & Payment Verification Tab & \statusdone & 82\% & 8.0/10 & Verification tab exists. To reach 100\%, add payment exception states and clearer PayMongo/local mismatch indicators. \\
+FR-ACC-002 & Ledger & \statusdone & 80\% & 7.8/10 & Ledger exists. To reach 100\%, add stronger export options, audit trail, and filters for tax/refund/method reporting. \\
+FR-ACC-003 & Payment Reminders & \statuspartial & 76\% & 7.4/10 & Manual reminders exist. To reach 100\%, add scheduled reminders before due date, on due date, and after overdue. \\
+FR-ACC-004 & Payment Term Editing & \statusdone & 82\% & 8.0/10 & Payment terms can be edited. To reach 100\%, add approval rules for sensitive edits and clearer change history. \\
+FR-ACC-005 & Refund Queue & \statuspartial & 76\% & 7.4/10 & Refund queue exists. To reach 100\%, create first-class refund cases with statuses, reason, approvals, and timeline. \\
+FR-ACC-006 & Refund Processing & \statuspartial & 72\% & 7.0/10 & PayMongo refunds exist. To reach 100\%, improve non-technical errors, retry handling, and manual fallback tracking. \\
+\bottomrule
+\end{longtable}
+
+\section{Admin Requirements}
+
+\begin{longtable}{L{0.15\textwidth} L{0.22\textwidth} C{0.08\textwidth} C{0.10\textwidth} C{0.10\textwidth} L{0.25\textwidth}}
+\toprule
+\textbf{ID} & \textbf{Requirement} & \textbf{Status} & \textbf{Completion} & \textbf{Rating} & \textbf{Notes} \\
+\midrule
+FR-ADM-001 & Staff Account Management & \statusdone & 84\% & 8.1/10 & Staff management exists. To reach 100\%, add role-change audit, account status controls, and safer deletion/deactivation flow. \\
+FR-ADM-002 & Customer Account Management & \statusdone & 82\% & 7.9/10 & Customer management exists. To reach 100\%, add customer profile history, deactivation instead of deletion, and clearer data impact warnings. \\
+FR-ADM-003 & Booking Management & \statuspartial & 78\% & 7.5/10 & Booking management exists. To reach 100\%, standardize status wording, remove technical labels, and align with Marketing review workflow. \\
+FR-ADM-004 & Menu Management & \statusdone & 84\% & 8.1/10 & Menu CRUD exists. To reach 100\%, add bulk edit/import, image validation, and change approval for customer-facing edits. \\
+FR-ADM-005 & Package And Event Type Management & \statusdone & 82\% & 8.0/10 & Package/event config exists. To reach 100\%, hide advanced fields and add preview/approval before publishing. \\
+FR-ADM-006 & Pricing Overrides & \statusdone & 82\% & 8.0/10 & Pricing overrides exist. To reach 100\%, add approval thresholds, history, and warnings for affected bookings. \\
+FR-ADM-007 & Audit Logs & \statuspartial & 78\% & 7.5/10 & Audit logs exist. To reach 100\%, expand coverage to all sensitive actions and add better filtering/export. \\
+FR-ADM-008 & Availability Controls & \statusdone & 84\% & 8.1/10 & Admin can manage date availability overrides for event slots and pax limits. To reach 100\%, add stronger audit history, conflict warnings, and confirmation before locking dates with existing interest. \\
+\bottomrule
+\end{longtable}
+
+\section{Announcement CMS Requirements}
+
+\begin{longtable}{L{0.15\textwidth} L{0.22\textwidth} C{0.08\textwidth} C{0.10\textwidth} C{0.10\textwidth} L{0.25\textwidth}}
+\toprule
+\textbf{ID} & \textbf{Requirement} & \textbf{Status} & \textbf{Completion} & \textbf{Rating} & \textbf{Notes} \\
+\midrule
+FR-CMS-001 & Create Announcement & \statusdone & 88\% & 8.5/10 & Creation exists. To reach 100\%, add content approval states, reusable templates, and stronger preview before publishing. \\
+FR-CMS-002 & Publish Announcement & \statusdone & 86\% & 8.3/10 & Publishing exists. To reach 100\%, add scheduled publish windows, approval gates, and publish audit details. \\
+FR-CMS-003 & Archive Announcement & \statusdone & 86\% & 8.3/10 & Archiving exists. To reach 100\%, add restore/unarchive flow and clearer archive reason tracking. \\
+FR-CMS-004 & Email Announcement & \statuspartial & 78\% & 7.5/10 & Email support exists. To reach 100\%, add delivery tracking, unsubscribe/compliance handling, and scheduled campaign sending. \\
+\bottomrule
+\end{longtable}
+
+\section{Chat, Notifications, Reports, Data, And Non-Functional Requirements}
+
+\subsection{Chat And Messaging}
+
+\begin{longtable}{L{0.15\textwidth} L{0.22\textwidth} C{0.08\textwidth} C{0.10\textwidth} C{0.10\textwidth} L{0.25\textwidth}}
+\toprule
+\textbf{ID} & \textbf{Requirement} & \textbf{Status} & \textbf{Completion} & \textbf{Rating} & \textbf{Notes} \\
+\midrule
+FR-CHAT-001 & Customer Chat & \statusdone & 84\% & 8.2/10 & Customer chat exists and lazy-loading reduces initial page cost. To reach 100\%, attach booking context clearly and improve offline/loading/error states. \\
+FR-CHAT-002 & Staff Chat Inbox & \statuspartial & 76\% & 7.4/10 & Staff chat exists. To reach 100\%, remove native dialogs, improve transfer/claim UX, and connect conversations to booking review. \\
+FR-CHAT-003 & Realtime Or Refresh Behavior & \statuspartial & 76\% & 7.4/10 & Refresh behavior and repeated opening improved through cached/lazy chat loading. To reach 100\%, benchmark repeated open/close, add reliable realtime fallback, and avoid repeated slow fetches. \\
+\bottomrule
+\end{longtable}
+
+\subsection{Notifications}
+
+\begin{longtable}{L{0.15\textwidth} L{0.22\textwidth} C{0.08\textwidth} C{0.10\textwidth} C{0.10\textwidth} L{0.25\textwidth}}
+\toprule
+\textbf{ID} & \textbf{Requirement} & \textbf{Status} & \textbf{Completion} & \textbf{Rating} & \textbf{Notes} \\
+\midrule
+FR-NOTIF-001 & Notification Bell & \statusdone & 84\% & 8.2/10 & Notification bell exists with richer user summary support. To reach 100\%, add better grouping, action links, and complete read-state consistency. \\
+FR-NOTIF-002 & Booking Status Notifications & \statuspartial & 78\% & 7.5/10 & Booking notifications exist. To reach 100\%, centralize status wording and notify every major workflow transition correctly. \\
+FR-NOTIF-003 & Payment Notifications & \statuspartial & 76\% & 7.4/10 & Payment notifications exist. To reach 100\%, automate due/overdue reminders and improve PayMongo confirmation messaging. \\
+\bottomrule
+\end{longtable}
+
+\subsection{Reports And Analytics}
+
+\begin{longtable}{L{0.15\textwidth} L{0.22\textwidth} C{0.08\textwidth} C{0.10\textwidth} C{0.10\textwidth} L{0.25\textwidth}}
+\toprule
+\textbf{ID} & \textbf{Requirement} & \textbf{Status} & \textbf{Completion} & \textbf{Rating} & \textbf{Notes} \\
+\midrule
+FR-REP-001 & Analytics Dashboard & \statuspartial & 74\% & 7.2/10 & Analytics exist. To reach 100\%, test with production-scale data and add clearer action recommendations per insight. \\
+FR-REP-002 & Report Builder & \statusdone & 82\% & 8.0/10 & Builder exists. To reach 100\%, add more role-specific blocks, stronger drag/drop polish, and better responsive behavior. \\
+FR-REP-003 & Saved Reports & \statusdone & 82\% & 8.0/10 & Saved reports exist. To reach 100\%, add ownership/permissions, version history, and duplicate/share actions. \\
+FR-REP-004 & Report Export & \statuspartial & 76\% & 7.4/10 & Export exists. To reach 100\%, add export audit trail, cleaner PDF layout, and business-ready spreadsheet formatting. \\
+\bottomrule
+\end{longtable}
+
+\subsection{Data Requirements}
+
+\begin{longtable}{L{0.24\textwidth} C{0.08\textwidth} C{0.10\textwidth} C{0.10\textwidth} L{0.36\textwidth}}
+\toprule
+\textbf{Data Entity} & \textbf{Status} & \textbf{Completion} & \textbf{Rating} & \textbf{Notes} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{Data Entity} & \textbf{Status} & \textbf{Completion} & \textbf{Rating} & \textbf{Notes} \\
+\midrule
+\endhead
+Users & \statusdone & 88\% & 8.5/10 & Implemented. To reach 100\%, add deactivation/status history, stronger profile fields, and complete audit for account changes. \\
+Bookings & \statusdone & 88\% & 8.5/10 & Implemented with workflow fields. To reach 100\%, add full lifecycle states for preparation, completion, feedback, and adjustments. \\
+Booking review tasks & \statusdone & 84\% & 8.1/10 & Implemented. To reach 100\%, add configurable templates, due dates, assignment history, and required task enforcement. \\
+Payments & \statuspartial & 78\% & 7.5/10 & Implemented. To reach 100\%, remove manual self-verification risk and add payment event/reconciliation records. \\
+Food tastings & \statuspartial & 76\% & 7.4/10 & Implemented. To reach 100\%, add tasting queue/calendar, confirmation statuses, and outcome records. \\
+Messages/conversations & \statuspartial & 76\% & 7.4/10 & Implemented. To reach 100\%, polish UX, remove native dialogs, and attach conversations to bookings. \\
+Notifications & \statusdone & 82\% & 8.0/10 & Implemented. To reach 100\%, add better categories, action links, and full transition coverage. \\
+Menu items & \statusdone & 86\% & 8.3/10 & Implemented. To reach 100\%, add image management, availability scheduling, and bulk/approval tools. \\
+Packages & \statusdone & 84\% & 8.1/10 & Implemented. To reach 100\%, add versioning, preview, and approval before customer-facing changes go live. \\
+Event types & \statusdone & 84\% & 8.1/10 & Implemented. To reach 100\%, add stronger setup governance and preview effects on booking. \\
+Announcements & \statusdone & 84\% & 8.1/10 & Implemented. To reach 100\%, add approval, publishing calendar, delivery tracking, and audit history. \\
+Report templates/runs & \statusdone & 82\% & 8.0/10 & Implemented. To reach 100\%, add sharing/permissions, export audit, and version history. \\
+Audit logs & \statuspartial & 78\% & 7.5/10 & Implemented. To reach 100\%, cover every sensitive action and add filtering/export. \\
+Pricing overrides & \statusdone & 82\% & 8.0/10 & Implemented. To reach 100\%, add approval thresholds, change impact preview, and full history. \\
+Calendar availability overrides & \statusdone & 84\% & 8.1/10 & Implemented with staff-managed date locks and capacity limits. To reach 100\%, add full audit history, conflict warnings, and bulk/recurring override tools. \\
+Refund cases & \statusmissing & 25\% & 2.5/10 & Refunds are actions, not full case records. To complete, add statuses, approvals, reason, timeline, and provider response tracking. \\
+Event preparation tasks & \statusmissing & 20\% & 2.0/10 & Event preparation is not fully modeled. To complete, add operations board, checklist tasks, assignees, and event sheet export. \\
+Feedback requests/responses & \statusmissing & 20\% & 2.0/10 & Post-event feedback is mostly future work. To complete, add feedback links, ratings, low-rating alerts, and testimonial approval. \\
+\bottomrule
+\end{longtable}
+
+\subsection{Business Rules}
+
+\begin{longtable}{L{0.24\textwidth} C{0.08\textwidth} C{0.10\textwidth} C{0.10\textwidth} L{0.36\textwidth}}
+\toprule
+\textbf{Rule Area} & \textbf{Status} & \textbf{Completion} & \textbf{Rating} & \textbf{Notes} \\
+\midrule
+Booking ownership & \statusdone & 90\% & 8.8/10 & Authenticated ownership is enforced. To reach 100\%, add tests proving users cannot access or modify others' bookings. \\
+Date availability & \statusdone & 88\% & 8.5/10 & Availability checks and staff override controls exist. To reach 100\%, add concurrency protection, audit history, and stress tests for simultaneous bookings. \\
+Guest minimums & \statusdone & 84\% & 8.1/10 & Guest rules exist. To reach 100\%, centralize all pax limits and validate every package/event type combination. \\
+Server-side pricing validation & \statuspartial & 78\% & 7.5/10 & Validation exists. To reach 100\%, make budget and package/menu pricing fully server-verified with clear mismatch handling. \\
+Payment step sequencing & \statusdone & 82\% & 8.0/10 & Sequencing exists. To reach 100\%, add regression tests for edited terms, rush bookings, failed payments, and retries. \\
+Customer cannot self-verify payments & \statusrisk & 35\% & 3.5/10 & Not complete because \texttt{/api/bookings/pay} remains reachable. Remove or lock it and route manual proof to Accounting review. \\
+Refund policy & \statuspartial & 72\% & 7.0/10 & Refund calculation exists. To reach 100\%, add refund cases, approval thresholds, customer status, and policy display. \\
+Role access & \statuspartial & 80\% & 7.8/10 & Role middleware exists. To reach 100\%, audit every endpoint/action and add tests for unauthorized role access. \\
+\bottomrule
+\end{longtable}
+
+\subsection{Non-Functional Requirements}
+
+\begin{longtable}{L{0.15\textwidth} L{0.22\textwidth} C{0.08\textwidth} C{0.10\textwidth} C{0.10\textwidth} L{0.25\textwidth}}
+\toprule
+\textbf{ID} & \textbf{Requirement} & \textbf{Status} & \textbf{Completion} & \textbf{Rating} & \textbf{Notes} \\
+\midrule
+NFR-001 & Security & \statuspartial & 72\% & 7.0/10 & Improved. To reach 100\%, remove payment self-verification, harden environment settings, audit roles, and add security tests. \\
+NFR-002 & Performance & \statusdone & 82\% & 8.1/10 & Optimizations now include lazy chart loading, deferred chat loading, and PHP config cleanup. To reach 100\%, benchmark large datasets, chat open/close cycles, analytics queries, and production builds. \\
+NFR-003 & Usability & \statuspartial & 73\% & 7.1/10 & Customer UX is strong. To reach 100\%, simplify staff dashboards, remove native dialogs, and standardize UI patterns. \\
+NFR-004 & Reliability & \statuspartial & 72\% & 7.1/10 & Core flows work. To reach 100\%, add feature tests, webhook idempotency proof, retry handling, and failure recovery paths. \\
+NFR-005 & Maintainability & \statuspartial & 74\% & 7.2/10 & Structure improved. To reach 100\%, centralize status mappers, modal components, filter components, and business rules. \\
+\bottomrule
+\end{longtable}
+
+\subsection{Integration Requirements}
+
+\begin{longtable}{L{0.24\textwidth} C{0.08\textwidth} C{0.10\textwidth} C{0.10\textwidth} L{0.36\textwidth}}
+\toprule
+\textbf{Integration} & \textbf{Status} & \textbf{Completion} & \textbf{Rating} & \textbf{Notes} \\
+\midrule
+PayMongo checkout & \statusdone & 82\% & 8.0/10 & Implemented. To reach 100\%, test every checkout state, expired sessions, retries, and production webhook deployment setup. \\
+PayMongo webhook & \statusdone & 80\% & 7.8/10 & Implemented with validation. To reach 100\%, store webhook event IDs, expose reconciliation state, and prove duplicate safety. \\
+PayMongo refund & \statuspartial & 72\% & 7.0/10 & Implemented. To reach 100\%, add refund case records, staff-friendly errors, retry tracking, and admin approval thresholds. \\
+Email notifications & \statuspartial & 76\% & 7.4/10 & Implemented in key areas. To reach 100\%, add templates, scheduled reminders, delivery logs, and complete event coverage. \\
+\bottomrule
+\end{longtable}
+
+\section{Requirements Needing Immediate Attention}
+
+\begin{longtable}{C{0.10\textwidth} L{0.34\textwidth} L{0.42\textwidth}}
+\toprule
+\textbf{Priority} & \textbf{Requirement} & \textbf{Reason} \\
+\midrule
+1 & FR-PAY-005 Manual Payment Safety & Customers must not be able to mark payments verified. \\
+2 & FR-BOOK-008 Budget-Based Menu & Helper text must not promise full category coverage unless it can generate it. \\
+3 & FR-MKT-004 Request Customer Details & Browser prompt should be replaced by a branded modal. \\
+4 & FR-CDASH-004 Payment Summary & Payment labels and edge cases must be consistent. \\
+5 & FR-ADM-003 Booking Management & Admin wording/status display should be business-friendly. \\
+6 & FR-ACC-006 Refund Processing & Refund errors and tracking need better staff-facing workflow. \\
+7 & NFR-001 Security & Production hardening is still needed. \\
+8 & NFR-003 Usability & Native alerts/confirms should be removed from major workflows. \\
+\bottomrule
+\end{longtable}
+
+\section{Final Rating}
+
+\begin{center}
+    \begin{tabular}{L{0.45\textwidth} C{0.25\textwidth}}
+    \toprule
+    \textbf{Readiness Area} & \textbf{Score} \\
+    \midrule
+    Functional readiness & 78 / 100 \\
+    Production readiness & 70 / 100 \\
+    Demonstration readiness & 89 / 100 \\
+    \bottomrule
+    \end{tabular}
+\end{center}
+
+\vspace{0.5cm}
+\noindent
+The system is impressive and feature-rich, but the final stretch should focus on safety, consistency, and operational polish rather than adding many new features.
+
+\end{document}
