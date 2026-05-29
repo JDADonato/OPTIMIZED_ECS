@@ -4,7 +4,9 @@ namespace Tests\Feature;
 
 use App\Models\Booking;
 use App\Models\BusinessRule;
+use App\Models\EventType;
 use App\Models\MenuItem;
+use App\Models\Package;
 use App\Models\Payment;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -161,6 +163,106 @@ class WorkflowCleanupTest extends TestCase
             ->assertOk()
             ->assertJsonPath('meta.changed', true)
             ->assertJsonPath('payments.0.status', 'Verified');
+    }
+
+    public function test_archiving_menu_item_hides_from_public_catalog_but_preserves_admin_record(): void
+    {
+        $admin = $this->user('Admin');
+        $item = MenuItem::create([
+            'dish_id' => 'archive-me-main',
+            'name' => 'Archive Me Main',
+            'category' => 'main',
+            'cost_per_head' => 200,
+            'price_adj' => 25,
+            'is_active' => true,
+        ]);
+
+        $this->actingAs($admin)
+            ->deleteJson("/api/admin/menu-items/{$item->id}")
+            ->assertOk()
+            ->assertJsonPath('message', 'Menu item archived successfully');
+
+        $this->assertDatabaseHas('menu_items', ['id' => $item->id]);
+        $this->assertFalse((bool) $item->fresh()->is_active);
+
+        $this->actingAs($this->user('Client'))
+            ->getJson('/api/menu-items')
+            ->assertOk()
+            ->assertJsonMissing(['id' => $item->id]);
+
+        $this->actingAs($admin)
+            ->getJson('/api/admin/menu-items')
+            ->assertOk()
+            ->assertJsonFragment(['id' => $item->id]);
+
+        $second = MenuItem::create([
+            'dish_id' => 'archive-alias-main',
+            'name' => 'Archive Alias Main',
+            'category' => 'main',
+            'cost_per_head' => 180,
+            'price_adj' => 0,
+            'is_active' => true,
+        ]);
+
+        $this->actingAs($admin)
+            ->patchJson("/api/admin/menu-items/{$second->id}/archive")
+            ->assertOk()
+            ->assertJsonPath('message', 'Menu item archived successfully');
+        $this->assertFalse((bool) $second->fresh()->is_active);
+    }
+
+    public function test_archiving_event_type_hides_public_choices_without_rewriting_history(): void
+    {
+        $admin = $this->user('Admin');
+        $type = EventType::create([
+            'slug' => 'archive-gala',
+            'label' => 'Archive Gala',
+            'icon' => 'sparkles',
+            'description' => 'Private event type',
+            'is_active' => true,
+        ]);
+        $package = Package::create([
+            'name' => 'Archive Gala Package',
+            'type' => $type->slug,
+            'event_type_slugs' => [$type->slug],
+            'base_price_per_head' => 1500,
+            'minimum_pax' => 30,
+            'is_active' => true,
+        ]);
+        $booking = $this->booking($this->user('Client'), ['event_type' => $type->label]);
+
+        $this->actingAs($admin)
+            ->deleteJson("/api/admin/event-types/{$type->id}")
+            ->assertOk()
+            ->assertJsonPath('message', 'Event type archived successfully.');
+
+        $this->assertDatabaseHas('event_types', ['id' => $type->id, 'slug' => 'archive-gala']);
+        $this->assertFalse((bool) $type->fresh()->is_active);
+        $this->assertSame('archive-gala', $package->fresh()->type);
+        $this->assertSame('Archive Gala', $booking->fresh()->event_type);
+
+        $this->getJson('/api/event-types?per_page=100')
+            ->assertOk()
+            ->assertJsonMissing(['slug' => 'archive-gala']);
+
+        $this->actingAs($admin)
+            ->getJson('/api/admin/event-types')
+            ->assertOk()
+            ->assertJsonFragment(['slug' => 'archive-gala']);
+
+        $second = EventType::create([
+            'slug' => 'archive-alias-gala',
+            'label' => 'Archive Alias Gala',
+            'icon' => 'sparkles',
+            'description' => 'Alias event type',
+            'is_active' => true,
+        ]);
+
+        $this->actingAs($admin)
+            ->patchJson("/api/admin/event-types/{$second->id}/archive")
+            ->assertOk()
+            ->assertJsonPath('message', 'Event type archived successfully.');
+        $this->assertFalse((bool) $second->fresh()->is_active);
     }
 
     private function user(string $role, array $overrides = []): User

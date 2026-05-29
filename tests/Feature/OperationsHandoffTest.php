@@ -7,6 +7,7 @@ use App\Models\EventPreparationTask;
 use App\Models\FeedbackRequest;
 use App\Models\FeedbackResponse;
 use App\Models\FoodTasting;
+use App\Models\Payment;
 use App\Models\User;
 use App\Services\EventPreparationService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -58,12 +59,61 @@ class OperationsHandoffTest extends TestCase
             ->assertJsonPath('0.event_sheet.booking_ref', str_pad((string) $included->id, 5, '0', STR_PAD_LEFT));
     }
 
+    public function test_preparation_board_returns_action_first_handoff_helpers(): void
+    {
+        $admin = $this->user('Admin');
+        $booking = $this->booking([
+            'status' => 'Confirmed',
+            'event_date' => now()->addDays(10)->toDateString(),
+        ]);
+
+        $response = $this->actingAs($admin)
+            ->getJson('/api/operations/preparation-board')
+            ->assertOk();
+
+        $response->assertJsonPath('0.booking.id', $booking->id)
+            ->assertJsonPath('0.next_action.kind', 'payment')
+            ->assertJsonPath('0.next_action.label', 'Accounting must clear payment')
+            ->assertJsonPath('0.blocking_items.0.key', 'payment')
+            ->assertJsonPath('0.readiness_progress.total', 6)
+            ->assertJsonPath('0.task_groups.0.owner', 'Marketing')
+            ->assertJsonPath('0.task_groups.1.owner', 'Accounting')
+            ->assertJsonPath('0.task_groups.2.owner', 'Service prep');
+    }
+
+    public function test_preparation_board_prioritizes_customer_menu_before_headcount_after_payment_clearance(): void
+    {
+        $marketing = $this->user('Marketing');
+        $booking = $this->booking([
+            'status' => 'Confirmed',
+            'event_date' => now()->addDays(10)->toDateString(),
+            'selected_menu' => null,
+            'pax' => 0,
+        ]);
+        Payment::create([
+            'booking_id' => $booking->id,
+            'amount' => 1000,
+            'payment_method' => 'cash',
+            'payment_type' => 'Reservation',
+            'status' => 'Paid',
+        ]);
+
+        $this->actingAs($marketing)
+            ->getJson('/api/operations/preparation-board')
+            ->assertOk()
+            ->assertJsonPath('0.blocking_items.0.key', 'menu')
+            ->assertJsonPath('0.next_action.kind', 'menu')
+            ->assertJsonPath('0.next_action.primary_action_label', 'Open messages');
+    }
+
     public function test_staff_can_complete_and_reopen_preparation_task(): void
     {
         $marketing = $this->user('Marketing');
         $booking = $this->booking(['status' => 'Confirmed']);
         EventPreparationService::ensureDefaultTasks($booking);
-        $task = EventPreparationTask::where('booking_id', $booking->id)->first();
+        $task = EventPreparationTask::where('booking_id', $booking->id)
+            ->where('department', 'Marketing')
+            ->firstOrFail();
 
         $this->actingAs($marketing)
             ->patchJson("/api/operations/preparation-tasks/{$task->id}", ['status' => 'Done'])
@@ -80,6 +130,26 @@ class OperationsHandoffTest extends TestCase
             ->patchJson("/api/operations/preparation-tasks/{$task->id}", ['status' => 'Pending'])
             ->assertOk()
             ->assertJsonPath('task.status', 'Pending');
+
+        $this->assertDatabaseHas('event_preparation_tasks', [
+            'id' => $task->id,
+            'status' => 'Pending',
+            'completed_by' => null,
+        ]);
+    }
+
+    public function test_marketing_cannot_update_non_marketing_preparation_task(): void
+    {
+        $marketing = $this->user('Marketing');
+        $booking = $this->booking(['status' => 'Confirmed']);
+        EventPreparationService::ensureDefaultTasks($booking);
+        $task = EventPreparationTask::where('booking_id', $booking->id)
+            ->where('department', 'Accounting')
+            ->firstOrFail();
+
+        $this->actingAs($marketing)
+            ->patchJson("/api/operations/preparation-tasks/{$task->id}", ['status' => 'Done'])
+            ->assertForbidden();
 
         $this->assertDatabaseHas('event_preparation_tasks', [
             'id' => $task->id,

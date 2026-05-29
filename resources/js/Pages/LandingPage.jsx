@@ -3,6 +3,7 @@ import { Head, Link, router } from '@inertiajs/react';
 import { useAuth } from '../context/AuthContext';
 import ClientNavbar from '../Components/common/ClientNavbar';
 import Footer from '../Components/common/Footer';
+import SmartImage from '../Components/common/SmartImage';
 
 /* ── SVG Icons ── */
 const settledStatuses = ['Paid', 'Verified'];
@@ -599,7 +600,7 @@ const HomepageAnnouncements = ({ announcements }) => {
 
                 <div className="grid gap-5 lg:grid-cols-[1.25fr_0.75fr]">
                     <article className="overflow-hidden rounded-3xl border border-[#720101]/10 bg-[#fffaf3] shadow-sm">
-                        {image && <img src={image} alt="" className="h-64 w-full object-cover" />}
+                        {image && <SmartImage src={image} alt="" aspectRatio="16 / 9" containerClassName="h-64" />}
                         <div className="p-6 md:p-8">
                             <span className="inline-flex rounded-full bg-[#720101]/10 px-3 py-1 text-[11px] font-black uppercase tracking-widest text-[#720101]">
                                 {announcementTypeLabels[featured.type] || 'Announcement'}
@@ -829,7 +830,7 @@ const LandingPage = () => {
                         ].map((item,i)=>(
                             <Rv key={item.title} d={`rv-d${i+1}`}>
                                 <article className="overflow-hidden rounded-3xl border border-gray-100 bg-[#faf7f2] shadow-sm">
-                                    <img src={item.img} alt={item.title} className="h-72 w-full object-cover"/>
+                                    <SmartImage src={item.img} alt={item.title} aspectRatio="4 / 3" containerClassName="h-72" />
                                     <div className="p-7">
                                         <h3 className="font-display text-2xl font-bold text-[#1a1a1a]">{item.title}</h3>
                                         <p className="mt-3 text-sm font-medium leading-7 text-gray-600">{item.text}</p>
@@ -879,7 +880,7 @@ const LandingPage = () => {
                             <Rv key={i} d={`rv-d${i+1}`}>
                                 <div className="group rounded-2xl overflow-hidden bg-white shadow-sm hover:shadow-xl transition-all duration-500 cursor-pointer">
                                     <div className="relative h-52 overflow-hidden">
-                                        <img src={s.img} alt={s.t} className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110"/>
+                                        <SmartImage src={s.img} alt={s.t} aspectRatio="1 / 1" containerClassName="h-full" className="transition-transform duration-700 group-hover:scale-110" />
                                         <div className="absolute inset-0 bg-gradient-to-t from-[#720101]/80 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500"/>
                                         <div className="absolute bottom-0 left-0 right-0 p-5 translate-y-4 opacity-0 group-hover:translate-y-0 group-hover:opacity-100 transition-all duration-500">
                                             <p className="text-white/80 text-sm">{s.d}</p>

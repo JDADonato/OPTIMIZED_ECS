@@ -60,6 +60,24 @@ Broadcast::channel('accounting.dashboard', function ($user) {
     return in_array($user->role, ['Accounting', 'Admin']);
 });
 
+Broadcast::channel('admin.dashboard', function ($user) {
+    return $user->role === 'Admin';
+});
+
+Broadcast::channel('booking.{bookingId}', function ($user, $bookingId) {
+    $booking = \App\Models\Booking::query()->select(['id', 'user_id'])->find($bookingId);
+
+    if (!$booking) {
+        return false;
+    }
+
+    if ((int) $user->id === (int) $booking->user_id) {
+        return true;
+    }
+
+    return in_array($user->role, ['Marketing', 'Accounting', 'Admin'], true);
+});
+
 Broadcast::channel('client.{userId}', function ($user, $userId) {
     return (int) $user->id === (int) $userId;
 });

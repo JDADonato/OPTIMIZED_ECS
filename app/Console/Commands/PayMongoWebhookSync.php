@@ -11,9 +11,11 @@ class PayMongoWebhookSync extends Command
     protected $signature = 'paymongo:webhook-sync
                             {--ngrok-path= : Full path to ngrok.exe (defaults to env NGROK_PATH or common locations)}
                             {--port=8080 : Local Laravel server port}
-                            {--skip-ngrok : Skip starting ngrok (use if already running)}';
+                            {--skip-ngrok : Skip starting ngrok (use if already running)}
+                            {--force-production : Allow this dev/staging helper to run in production}
+                            {--no-disable-old : Do not disable old PayMongo webhooks pointing at /webhook/paymongo}';
 
-    protected $description = 'Start ngrok, detect the public URL, and register/update the PayMongo webhook automatically.';
+    protected $description = 'Dev/staging helper: start ngrok, detect the public URL, and register/update the PayMongo webhook.';
 
     /**
      * PayMongo webhook events we need to subscribe to.
@@ -30,6 +32,11 @@ class PayMongoWebhookSync extends Command
 
     public function handle(): int
     {
+        if (app()->environment('production') && !$this->option('force-production')) {
+            $this->error('paymongo:webhook-sync is a dev/staging helper. Refusing to run in production without --force-production.');
+            return self::FAILURE;
+        }
+
         $this->info('🔄 PayMongo Webhook Sync');
         $this->newLine();
 
@@ -86,14 +93,17 @@ class PayMongoWebhookSync extends Command
             }
         }
 
-        // Disable old webhooks pointing to different URLs
-        foreach ($oldWebhooks as $webhook) {
-            $status = $webhook['attributes']['status'] ?? '';
-            if ($status === 'enabled') {
-                $existingUrl = $webhook['attributes']['url'] ?? '';
-                $this->warn("   ⏸️  Disabling old webhook: {$existingUrl} (ID: {$webhook['id']})");
-                $this->disableWebhook($secretKey, $webhook['id'], $caBundle);
+        if ($this->shouldDisableOldWebhooks()) {
+            foreach ($oldWebhooks as $webhook) {
+                $status = $webhook['attributes']['status'] ?? '';
+                if ($status === 'enabled') {
+                    $existingUrl = $webhook['attributes']['url'] ?? '';
+                    $this->warn("   ⏸️  Disabling old webhook: {$existingUrl} (ID: {$webhook['id']})");
+                    $this->disableWebhook($secretKey, $webhook['id'], $caBundle);
+                }
             }
+        } elseif (count($oldWebhooks) > 0) {
+            $this->warn('Old PayMongo webhooks were left unchanged because --no-disable-old was set.');
         }
 
         $webhookId = null;
@@ -263,6 +273,14 @@ class PayMongoWebhookSync extends Command
     }
 
     /**
+     * Old webhook cleanup is enabled by default for local/staging convenience.
+     */
+    public function shouldDisableOldWebhooks(): bool
+    {
+        return !$this->option('no-disable-old');
+    }
+
+    /**
      * Find the ngrok executable.
      */
     private function resolveNgrokPath(): ?string
@@ -281,9 +299,8 @@ class PayMongoWebhookSync extends Command
             return $envPath;
         }
 
-        // 3. Common Windows location
+        // 3. Project-local executable
         $commonPaths = [
-            'C:\\Users\\Joshua Aquino\\Downloads\\ngrok-v3-stable-windows-amd64\\ngrok.exe',
             base_path('ngrok.exe'),
         ];
 

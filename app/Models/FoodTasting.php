@@ -20,8 +20,10 @@ class FoodTasting extends Model
         'status',
         'confirmed_at',
         'completed_at',
+        'archived_at',
         'outcome_notes',
         'handled_by',
+        'duplicate_user_id',
     ];
 
     protected function casts(): array
@@ -30,6 +32,7 @@ class FoodTasting extends Model
             'preferred_date' => 'date',
             'confirmed_at' => 'datetime',
             'completed_at' => 'datetime',
+            'archived_at' => 'datetime',
         ];
     }
 
@@ -38,5 +41,10 @@ class FoodTasting extends Model
     public function user()
     {
         return $this->belongsTo(User::class);
+    }
+
+    public function duplicateUser()
+    {
+        return $this->belongsTo(User::class, 'duplicate_user_id');
     }
 }

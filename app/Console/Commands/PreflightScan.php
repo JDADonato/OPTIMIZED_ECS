@@ -86,6 +86,7 @@ class PreflightScan extends Command
 
         $checks[] = $this->check(config('app.debug') === false, 'env.app_debug', 'APP_DEBUG is false in the loaded environment', 'warning', 'Set APP_DEBUG=false before launch.');
         $checks[] = $this->check(str_starts_with((string) config('app.url'), 'https://'), 'env.app_url_https', 'APP_URL uses HTTPS', 'warning', 'Use a real HTTPS production domain.');
+        $checks[] = $this->check(config('database.default') === 'pgsql', 'env.db_connection_pgsql', 'DB_CONNECTION is pgsql for production parity', 'warning', 'Set DB_CONNECTION=pgsql in production.');
         $checks[] = $this->check(config('session.secure') === true, 'env.secure_cookie', 'Secure session cookies are enabled', 'warning', 'Set SESSION_SECURE_COOKIE=true on production.');
         $checks[] = $this->check(! blank(config('services.paymongo.webhook_secret')), 'env.paymongo_webhook_secret', 'PayMongo webhook secret is configured', 'warning', 'Set PAYMONGO_WEBHOOK_SECRET on production.');
 
@@ -122,7 +123,11 @@ class PreflightScan extends Command
             $this->check(is_writable(storage_path()), 'deploy.storage_writable', 'storage directory is writable', 'fail', 'Ensure the web user can write to storage/.'),
             $this->check(is_writable(base_path('bootstrap/cache')), 'deploy.bootstrap_cache_writable', 'bootstrap/cache directory is writable', 'fail', 'Ensure the web user can write to bootstrap/cache.'),
             $this->check(str_contains(File::get(base_path('bootstrap/app.php')), 'withSchedule'), 'deploy.scheduler_configured', 'Laravel scheduler is configured'),
+            $this->check(str_contains(File::get(base_path('bootstrap/app.php')), 'announcements:publish-due'), 'deploy.announcement_scheduler', 'Due scheduled announcements are published by the scheduler', 'warning', 'Register announcements:publish-due in the Laravel scheduler.'),
+            $this->check(str_contains(File::get(base_path('bootstrap/app.php')), 'uploads:purge-orphans'), 'deploy.upload_purge_scheduler', 'Temporary upload cleanup is scheduled', 'warning', 'Register uploads:purge-orphans in the Laravel scheduler.'),
             $this->check(config('queue.default') !== 'sync', 'deploy.queue_not_sync', 'Queue driver is production-capable', 'warning', 'Use redis or database queue workers in production.'),
+            $this->check(class_exists(\Barryvdh\DomPDF\Facade\Pdf::class), 'deploy.pdf_renderer_installed', 'PDF renderer package is installed', 'fail', 'Install barryvdh/laravel-dompdf before deployment.'),
+            $this->check(config('broadcasting.default') === 'reverb' || ! app()->environment('production'), 'deploy.reverb_expected', 'Reverb broadcasting is expected in production', 'warning', 'Run Reverb and set BROADCAST_CONNECTION=reverb in production.'),
         ];
     }
 

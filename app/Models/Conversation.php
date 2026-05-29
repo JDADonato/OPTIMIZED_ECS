@@ -44,6 +44,11 @@ class Conversation extends Model
 
     public function participants()
     {
+        return $this->hasMany(ConversationParticipant::class)->active();
+    }
+
+    public function participantHistory()
+    {
         return $this->hasMany(ConversationParticipant::class);
     }
 
@@ -80,7 +85,9 @@ class Conversation extends Model
      */
     public function scopeUnassigned($query)
     {
-        return $query->whereNull('staff_id')->where('status', 'active');
+        return $query->whereNull('staff_id')
+            ->where('status', 'active')
+            ->withActiveClient();
     }
 
     /**
@@ -89,6 +96,7 @@ class Conversation extends Model
     public function scopeClaimedBy($query, int $staffId)
     {
         return $query->where('status', 'active')
+            ->withActiveClient()
             ->where(function ($inner) use ($staffId) {
                 $inner->where('staff_id', $staffId)
                     ->orWhereHas('participants', function ($participant) use ($staffId) {
@@ -104,6 +112,11 @@ class Conversation extends Model
     public function scopeResolved($query)
     {
         return $query->where('status', 'resolved');
+    }
+
+    public function scopeWithActiveClient($query)
+    {
+        return $query->whereHas('client', fn ($client) => $client->activeAccounts());
     }
 
     // ─── Helpers ───

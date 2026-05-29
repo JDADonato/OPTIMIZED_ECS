@@ -102,7 +102,7 @@ class BookingManagementService
         $eventDate = Carbon::parse($booking->event_date)->startOfDay();
         $daysUntilEvent = now()->startOfDay()->diffInDays($eventDate, false);
         
-        $totalPaid = $booking->payments()->whereIn('status', ['Verified', 'Paid'])->sum('amount');
+        $totalPaid = $booking->payments()->active()->whereIn('status', ['Verified', 'Paid'])->sum('amount');
         $totalCost = (float) $booking->total_cost;
         $reservationFee = $totalCost * 0.10;
 

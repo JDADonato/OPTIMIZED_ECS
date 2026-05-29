@@ -4,10 +4,14 @@ import { router } from '@inertiajs/react';
 import { fetchMenuItemsFromAPI } from '../../utils/menuUtils';
 import ClientNavbar from '../../Components/common/ClientNavbar';
 import ConfirmModal from '../../Components/common/ConfirmModal';
+import SmartImage from '../../Components/common/SmartImage';
 import CustomerAnnouncements from '../../Components/content/CustomerAnnouncements';
 import { customerBookingStatus, customerPaymentStatus, isSettledPaymentStatus, paymentTypeLabel, statusToneClasses } from '../../utils/statusLabels';
 import { fetchSmartResource, getUserScopedCacheKey, writeSmartCache } from '../../utils/smartResource';
-import useOnlineStatus from '../../hooks/useOnlineStatus';
+import useRealtimeStatus from '../../hooks/useRealtimeStatus';
+import useSmartRefresh from '../../hooks/useSmartRefresh';
+import { LiveSyncIndicator, SoftRefreshBoundary } from '../../Components/common/LiveFeedback';
+import { operationalChannelsForUser } from '../../utils/liveChannels';
 
 const ReceiptModal = lazy(() => import('../../Components/common/ReceiptModal'));
 
@@ -239,7 +243,7 @@ const buildJourneySteps = (booking, payments) => {
     return steps;
 };
 
-const HistoryPanel = ({ bookings, onRemove }) => (
+const HistoryPanel = ({ bookings, onHide }) => (
     <div className="rounded-3xl border border-gray-100 bg-white p-6 shadow-sm sm:p-8">
         <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
@@ -269,12 +273,12 @@ const HistoryPanel = ({ bookings, onRemove }) => (
                                 </p>
                             </div>
                             <div className="flex items-center gap-3">
-                                {onRemove && (
+                                {onHide && (
                                     <button 
-                                        onClick={() => onRemove(booking.id)}
+                                        onClick={() => onHide(booking.id)}
                                         className="rounded-xl border border-red-200 bg-white px-4 py-2 text-xs font-bold text-red-600 opacity-0 transition-opacity group-hover:opacity-100 hover:bg-red-50 hover:text-red-700"
                                     >
-                                        Remove
+                                        Hide
                                     </button>
                                 )}
                                 <button onClick={() => router.get('/book')} className="rounded-xl bg-[#720101] px-5 py-3 text-sm font-bold text-white shadow-sm hover:bg-[#5a0101]">
@@ -533,7 +537,14 @@ const SmartEventDetailsPanel = ({
                                 <input type="file" accept="image/*" className="hidden" disabled={uploadingImage} onChange={(event) => uploadInspirationImage(event.target.files?.[0])} />
                             </label>
                         </div>
-                        {detailsForm.theme_uploads && <img src={detailsForm.theme_uploads} alt="Event inspiration" className="mt-4 max-h-64 w-full rounded-2xl object-cover" />}
+                        {detailsForm.theme_uploads && (
+                            <SmartImage
+                                src={detailsForm.theme_uploads}
+                                alt="Event inspiration"
+                                aspectRatio="16 / 9"
+                                containerClassName="mt-4 max-h-64 rounded-2xl"
+                            />
+                        )}
                     </div>
                 </div>
             )}
@@ -543,7 +554,7 @@ const SmartEventDetailsPanel = ({
 
 const ClientDashboard = () => {
     const { user, logout } = useAuth();
-    const online = useOnlineStatus();
+    const { online, syncState: realtimeSyncState } = useRealtimeStatus();
     const dashboardStoragePrefix = `ecs_client_dashboard_${user?.id || 'guest'}`;
     const activeBookingStorageKey = `${dashboardStoragePrefix}_active_booking_id`;
     const activeSectionStorageKey = `${dashboardStoragePrefix}_active_section`;
@@ -552,6 +563,8 @@ const ClientDashboard = () => {
     const cachedDashboardData = readStoredDashboardJson(dashboardDataStorageKey);
     const [data, setData] = useState(cachedDashboardData || { bookings: [], historyBookings: [], tastings: [], payments: [] });
     const [loading, setLoading] = useState(!cachedDashboardData);
+    const [dashboardRefreshing, setDashboardRefreshing] = useState(false);
+    const [dashboardError, setDashboardError] = useState(null);
     const [activeBookingId, setActiveBookingId] = useState(() => {
         const stored = readStoredDashboardValue(sharedSelectedBookingKey) || readStoredDashboardValue(activeBookingStorageKey);
         return stored ? Number(stored) : null;
@@ -582,6 +595,7 @@ const ClientDashboard = () => {
     const [feedbackRequests, setFeedbackRequests] = useState([]);
     const [feedbackForm, setFeedbackForm] = useState({ rating: 5, food_rating: 5, service_rating: 5, communication_rating: 5, value_rating: 5, comments: '', testimonial_permission: false });
     const [submittingFeedback, setSubmittingFeedback] = useState(false);
+    const liveChannels = React.useMemo(() => operationalChannelsForUser(user), [user?.id, user?.role]);
 
     const closeConfirmModal = () => setConfirmModal({ isOpen: false, title: '', message: '', confirmText: 'Confirm', onConfirm: null });
 
@@ -626,7 +640,7 @@ const ClientDashboard = () => {
         if (target) {
             setPendingScrollTarget(target);
         }
-        fetchData();
+        fetchData({ silent: Boolean(cachedDashboardData) });
     }, []);
 
     useEffect(() => {
@@ -722,12 +736,19 @@ const ClientDashboard = () => {
         }
     }, [toast]);
 
-    const fetchData = async () => {
+    const fetchData = async ({ silent = false, force = false } = {}) => {
+        if (silent) {
+            setDashboardRefreshing(true);
+        } else if (!data.bookings.length && !data.historyBookings.length) {
+            setLoading(true);
+        }
+        setDashboardError(null);
+
         try {
             const smartResult = await fetchSmartResource('/api/dashboard/client', {
                 cacheKey: dashboardSmartCacheKey,
                 ttl: 30000,
-                force: false,
+                force,
             });
             const result = smartResult.raw || smartResult.data || {};
             if (result) {
@@ -772,10 +793,21 @@ const ClientDashboard = () => {
             }
         } catch (error) {
             console.error("Error fetching dashboard data:", error);
+            setDashboardError(error);
         } finally {
             setLoading(false);
+            setDashboardRefreshing(false);
         }
     };
+
+    useSmartRefresh({
+        enabled: Boolean(user),
+        interval: online ? 30000 : 45000,
+        idleAfter: 180000,
+        refresh: () => fetchData({ silent: true }),
+        channels: liveChannels,
+        resources: ['bookings', 'finance', 'payments', 'refunds', 'food_tastings', 'feedback', 'announcements', 'catalog'],
+    });
 
     const submitFeedback = async (token) => {
         if (!token || submittingFeedback) return;
@@ -1089,6 +1121,7 @@ const ClientDashboard = () => {
         try {
             const formData = new FormData();
             formData.append('image', file);
+            formData.append('purpose', 'theme_upload');
             const res = await fetch('/api/upload', { method: 'POST', body: formData });
             const result = await res.json();
             if (res.ok) {
@@ -1276,6 +1309,15 @@ const ClientDashboard = () => {
                     </div>
                 )}
 
+                <div className="mb-4 flex justify-end">
+                    <LiveSyncIndicator
+                        state={dashboardError ? 'error' : (dashboardRefreshing ? 'syncing' : realtimeSyncState)}
+                        lastSyncedAt={null}
+                        compact
+                        onRetry={() => fetchData({ silent: true, force: true })}
+                    />
+                </div>
+
                 <CustomerAnnouncements />
 
                 {feedbackRequests.length > 0 && (
@@ -1369,6 +1411,11 @@ const ClientDashboard = () => {
                     </div>
                 </div>
 
+                <SoftRefreshBoundary
+                    refreshing={dashboardRefreshing}
+                    stale={Boolean(dashboardError)}
+                    staleMessage="Viewing saved dashboard data. We'll keep trying in the background."
+                >
                 {data.bookings.length === 0 && data.historyBookings.length === 0 ? (
                     <div className="bg-white rounded-3xl shadow-sm border border-gray-100 p-16 text-center">
                         <div className="w-20 h-20 bg-[#f0aa0b]/10 rounded-full flex items-center justify-center mx-auto mb-6">
@@ -1772,7 +1819,7 @@ const ClientDashboard = () => {
                                                                 </label>
                                                             </div>
                                                             {detailsForm.theme_uploads && (
-                                                                <img src={detailsForm.theme_uploads} alt="Event inspiration" className="mt-4 h-44 w-full rounded-2xl object-cover" />
+                                                                <SmartImage src={detailsForm.theme_uploads} alt="Event inspiration" aspectRatio="16 / 9" containerClassName="mt-4 h-44 rounded-2xl" />
                                                             )}
                                                         </div>
                                                     </div>
@@ -1886,7 +1933,7 @@ const ClientDashboard = () => {
                                                                         
                                                                         {detailsForm.theme_uploads && (
                                                                             <div className="relative group/img aspect-video sm:aspect-auto sm:h-64 overflow-hidden rounded-2xl border-4 border-white shadow-lg">
-                                                                                <img src={detailsForm.theme_uploads} alt="Event inspiration" className="h-full w-full object-cover" />
+                                                                                <SmartImage src={detailsForm.theme_uploads} alt="Event inspiration" aspectRatio="16 / 9" containerClassName="h-full" />
                                                                                 <div className="absolute inset-0 bg-black/40 opacity-0 group-hover/img:opacity-100 transition-opacity flex items-center justify-center">
                                                                                     <span className="bg-white/20 backdrop-blur-md text-white px-4 py-2 rounded-full text-xs font-black uppercase tracking-widest border border-white/30">Current Reference</span>
                                                                                 </div>
@@ -1928,17 +1975,17 @@ const ClientDashboard = () => {
                                     )}
 
                                     {activeSection === 'history' && (
-                                        <HistoryPanel bookings={data.historyBookings} onRemove={(id) => {
+                                        <HistoryPanel bookings={data.historyBookings} onHide={(id) => {
                                             setConfirmModal({
                                                 isOpen: true,
-                                                title: 'Remove event from history?',
-                                                message: 'This hides the event from your dashboard history.',
-                                                confirmText: 'Remove',
+                                                title: 'Hide event from your history?',
+                                                message: 'This only hides the event from your dashboard history. Eloquente keeps booking, payment, and refund records for business records.',
+                                                confirmText: 'Hide from history',
                                                 onConfirm: () => {
                                                     closeConfirmModal();
-                                                    fetch(`/api/bookings/${id}/remove-history`, { method: 'DELETE' })
+                                                    fetch(`/api/bookings/${id}/hide-from-history`, { method: 'PATCH' })
                                                         .then(() => fetchData())
-                                                        .catch(err => setToast({ message: 'Error removing history.', type: 'error' }));
+                                                        .catch(err => setToast({ message: 'Error hiding history.', type: 'error' }));
                                                 },
                                             });
                                         }} />
@@ -1985,7 +2032,7 @@ const ClientDashboard = () => {
                                                                         confirmText: 'Cancel Session',
                                                                         onConfirm: () => {
                                                                             closeConfirmModal();
-                                                                            fetch(`/api/food-tasting/${latestTasting.id}`, { method: 'DELETE', headers: { 'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '' } })
+                                                                            fetch(`/api/food-tasting/${latestTasting.id}/cancel`, { method: 'PATCH', headers: { 'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '' } })
                                                                                 .then(() => { setToast({ message: 'Tasting cancelled.', type: 'success' }); fetchData(); })
                                                                                 .catch(() => setToast({ message: 'Error cancelling tasting.', type: 'error' }));
                                                                         },
@@ -2067,7 +2114,7 @@ const ClientDashboard = () => {
                                                                 <div key={`${category.id}-${index}`} className="group relative overflow-hidden rounded-3xl border border-gray-100 bg-[#faf7f2]/40 p-4 transition-all hover:bg-white hover:shadow-xl hover:shadow-[#720101]/5">
                                                                     <div className="flex gap-4">
                                                                         <div className="relative h-20 w-20 shrink-0 overflow-hidden rounded-2xl shadow-sm">
-                                                                            <img src={item.image || 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&q=80&w=300'} alt={item.name} className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-110" />
+                                                                            <SmartImage src={item.image || 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&q=80&w=300'} alt={item.name} aspectRatio="1 / 1" containerClassName="h-full" className="transition-transform duration-500 group-hover:scale-110" />
                                                                         </div>
                                                                         <div className="min-w-0 flex-1">
                                                                             <h5 className="truncate text-base font-bold text-gray-900">{item.name}</h5>
@@ -2399,6 +2446,7 @@ const ClientDashboard = () => {
                         </div>
                     </div>
                 )}
+                </SoftRefreshBoundary>
             </main>
             
             {/* MODALS */}
@@ -2469,7 +2517,7 @@ const ClientDashboard = () => {
                         <div className="mt-7 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
                             <button type="button" onClick={() => { setEditCoreModalOpen(false); setCorePricePreview(null); }} className="rounded-xl border border-gray-200 bg-white px-5 py-3 text-sm font-bold text-gray-600 hover:bg-gray-50">Cancel</button>
                             <button type="submit" disabled={savingCore} className="rounded-xl bg-[#720101] px-6 py-3 text-sm font-black text-white shadow-sm hover:bg-[#5a0101] disabled:opacity-60">
-                                {savingCore ? 'Checking...' : 'Save Changes'}
+                                {savingCore ? 'Checking...' : 'Save changes'}
                             </button>
                         </div>
                     </form>

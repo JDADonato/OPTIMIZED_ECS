@@ -106,6 +106,7 @@ const ProfileEdit = () => {
     const fileInputRef = useRef(null);
     const cropImageRef = useRef(null);
     const [activeTab, setActiveTab] = useState('overview');
+    const [preferenceSection, setPreferenceSection] = useState('planning');
     const [editing, setEditing] = useState(null);
     const [activity, setActivity] = useState([]);
     const [showPasswords, setShowPasswords] = useState(false);
@@ -179,6 +180,12 @@ const ProfileEdit = () => {
         avatar: null,
         remove_avatar: false,
     });
+
+    useEffect(() => {
+        if (!isClient && preferenceSection !== 'notifications') {
+            setPreferenceSection('notifications');
+        }
+    }, [isClient, preferenceSection]);
 
     useEffect(() => {
         fetch('/api/profile/activity', { headers: { Accept: 'application/json', 'X-CSRF-TOKEN': csrfToken() } })
@@ -458,7 +465,7 @@ const ProfileEdit = () => {
         });
     };
 
-    const deleteAccount = async () => {
+    const deactivateAccount = async () => {
         if (!isClient || deletingAccount) return;
         setDeletingAccount(true);
         setDeleteError('');
@@ -481,12 +488,12 @@ const ProfileEdit = () => {
 
             const payload = await response.json().catch(() => ({}));
             if (!response.ok) {
-                throw new Error(Object.values(payload.errors || {})?.[0]?.[0] || payload.message || 'Could not delete account.');
+                throw new Error(Object.values(payload.errors || {})?.[0]?.[0] || payload.message || 'Could not deactivate account.');
             }
 
             window.location.href = '/';
         } catch (error) {
-            setDeleteError(error.message || 'Could not delete account.');
+            setDeleteError(error.message || 'Could not deactivate account.');
         } finally {
             setDeletingAccount(false);
         }
@@ -670,81 +677,115 @@ const ProfileEdit = () => {
         </>
     );
 
-    const renderPreferences = () => (
-        <>
-            <PanelHeader
-                eyebrow={isClient ? 'Planning defaults' : 'Communication'}
-                title={isClient ? 'Planning and alerts' : 'Notification preferences'}
-                text={isClient ? 'Set your usual event details and keep important booking alerts within reach.' : 'Choose which staff notifications should actively reach you.'}
-                action={isClient && editing !== 'preferences' && <button type="button" onClick={() => setEditing('preferences')} className="rounded-xl bg-[#720101] px-5 py-3 text-sm font-black text-white">Set default event details</button>}
-            />
-            <div className="py-6">
-                <div className={`grid gap-6 ${isClient ? 'xl:grid-cols-[0.9fr_1.1fr]' : ''}`}>
-                    {isClient && <div className="rounded-2xl border border-[#ead8cc] bg-[#fffaf3] p-5">
-                        <div className="flex items-start justify-between gap-4">
-                            <div>
-                                <p className="text-xs font-black uppercase tracking-[0.2em] text-[#9f6500]">Event defaults</p>
-                                <h3 className="mt-1 text-xl font-black text-slate-950">Your usual setup</h3>
-                                <p className="mt-2 text-sm font-semibold leading-6 text-slate-500">These details help new inquiries start faster.</p>
+    const renderPreferences = () => {
+        const preferenceSections = isClient
+            ? [['planning', 'Planning defaults'], ['notifications', 'Notifications']]
+            : [['notifications', 'Notifications']];
+        const showPlanning = isClient && preferenceSection === 'planning';
+        const showNotifications = !isClient || preferenceSection === 'notifications';
+
+        return (
+            <>
+                <PanelHeader
+                    eyebrow={isClient ? 'Preferences' : 'Communication'}
+                    title={isClient ? 'Planning and alerts' : 'Notification preferences'}
+                    text={isClient ? 'Use the section switcher to edit one kind of preference at a time.' : 'Choose which staff notifications should actively reach you.'}
+                    action={showPlanning && editing !== 'preferences' && (
+                        <button type="button" onClick={() => setEditing('preferences')} className="rounded-xl bg-[#720101] px-5 py-3 text-sm font-black text-white">Set default event details</button>
+                    )}
+                />
+
+                {preferenceSections.length > 1 && (
+                    <div className="mt-5 inline-flex max-w-full flex-wrap gap-2 rounded-2xl border border-[#ead8cc] bg-[#fffaf3] p-1.5">
+                        {preferenceSections.map(([key, label]) => (
+                            <button
+                                key={key}
+                                type="button"
+                                onClick={() => setPreferenceSection(key)}
+                                className={`rounded-xl px-4 py-2 text-sm font-black transition ${
+                                    preferenceSection === key
+                                        ? 'bg-white text-[#720101] shadow-sm'
+                                        : 'text-slate-500 hover:bg-white/70 hover:text-[#720101]'
+                                }`}
+                            >
+                                {label}
+                            </button>
+                        ))}
+                    </div>
+                )}
+
+                <div className="py-6">
+                    {showPlanning && (
+                        <div className="rounded-2xl border border-[#ead8cc] bg-[#fffaf3] p-5">
+                            <div className="flex items-start justify-between gap-4">
+                                <div>
+                                    <p className="text-xs font-black uppercase tracking-[0.2em] text-[#9f6500]">Event defaults</p>
+                                    <h3 className="mt-1 text-xl font-black text-slate-950">Your usual setup</h3>
+                                    <p className="mt-2 text-sm font-semibold leading-6 text-slate-500">These details help new inquiries start faster.</p>
+                                </div>
+                                {editing !== 'preferences' && (
+                                    <button type="button" onClick={() => setEditing('preferences')} className="rounded-xl border border-[#720101]/15 bg-white px-4 py-2.5 text-sm font-black text-[#720101] hover:bg-[#fff7e8]">
+                                        Edit
+                                    </button>
+                                )}
                             </div>
-                            {isClient && editing !== 'preferences' && (
-                                <button type="button" onClick={() => setEditing('preferences')} className="rounded-xl border border-[#720101]/15 bg-white px-4 py-2.5 text-sm font-black text-[#720101] hover:bg-[#fff7e8]">
-                                    Edit
-                                </button>
+                            {editing === 'preferences' ? (
+                                <div className="mt-5 grid gap-4 md:grid-cols-2">
+                                    <label>
+                                        <span className="text-xs font-black uppercase tracking-widest text-slate-500">Default event city</span>
+                                        <input value={data.profile_preferences.default_event_city} onChange={(e) => setData('profile_preferences', { ...data.profile_preferences, default_event_city: e.target.value })} className="mt-2 w-full rounded-xl border border-slate-200 px-4 py-3 text-sm font-bold" />
+                                    </label>
+                                    <label>
+                                        <span className="text-xs font-black uppercase tracking-widest text-slate-500">Usual guest count</span>
+                                        <input type="number" min="1" value={data.profile_preferences.default_guest_count || ''} onChange={(e) => setData('profile_preferences', { ...data.profile_preferences, default_guest_count: e.target.value })} className="mt-2 w-full rounded-xl border border-slate-200 px-4 py-3 text-sm font-bold" />
+                                    </label>
+                                    <label className="md:col-span-2">
+                                        <span className="text-xs font-black uppercase tracking-widest text-slate-500">Planning notes</span>
+                                        <textarea rows={4} value={data.profile_preferences.planning_notes} onChange={(e) => setData('profile_preferences', { ...data.profile_preferences, planning_notes: e.target.value })} className="mt-2 w-full rounded-xl border border-slate-200 px-4 py-3 text-sm font-bold" />
+                                    </label>
+                                    <div className="md:col-span-2">
+                                        <EditActions onCancel={cancelEdit} onSave={submit} processing={processing} saveLabel="Save event defaults" />
+                                    </div>
+                                </div>
+                            ) : (
+                                <div className="mt-5 divide-y divide-[#f1e2d8]">
+                                    <InfoRow label="Default city" value={profilePrefs.default_event_city} />
+                                    <InfoRow label="Usual pax" value={profilePrefs.default_guest_count} />
+                                    <InfoRow label="Planning notes" value={profilePrefs.planning_notes} />
+                                </div>
                             )}
                         </div>
-                        {editing === 'preferences' ? (
-                            <div className="mt-5 grid gap-4">
-                                <label>
-                                    <span className="text-xs font-black uppercase tracking-widest text-slate-500">Default event city</span>
-                                    <input value={data.profile_preferences.default_event_city} onChange={(e) => setData('profile_preferences', { ...data.profile_preferences, default_event_city: e.target.value })} className="mt-2 w-full rounded-xl border border-slate-200 px-4 py-3 text-sm font-bold" />
-                                </label>
-                                <label>
-                                    <span className="text-xs font-black uppercase tracking-widest text-slate-500">Usual guest count</span>
-                                    <input type="number" min="1" value={data.profile_preferences.default_guest_count || ''} onChange={(e) => setData('profile_preferences', { ...data.profile_preferences, default_guest_count: e.target.value })} className="mt-2 w-full rounded-xl border border-slate-200 px-4 py-3 text-sm font-bold" />
-                                </label>
-                                <label className="sm:col-span-2 xl:col-span-3">
-                                    <span className="text-xs font-black uppercase tracking-widest text-slate-500">Planning notes</span>
-                                    <textarea rows={4} value={data.profile_preferences.planning_notes} onChange={(e) => setData('profile_preferences', { ...data.profile_preferences, planning_notes: e.target.value })} className="mt-2 w-full rounded-xl border border-slate-200 px-4 py-3 text-sm font-bold" />
-                                </label>
-                                <EditActions onCancel={cancelEdit} onSave={submit} processing={processing} saveLabel="Save event defaults" />
-                            </div>
-                        ) : (
-                            <div className="mt-5 divide-y divide-[#f1e2d8]">
-                                <InfoRow label="Default city" value={profilePrefs.default_event_city} />
-                                <InfoRow label="Usual pax" value={profilePrefs.default_guest_count} />
-                                <InfoRow label="Planning notes" value={profilePrefs.planning_notes} />
-                            </div>
-                        )}
-                    </div>}
+                    )}
 
-                    <div className="rounded-2xl border border-[#ead8cc] bg-white p-5">
-                        <div className="flex items-start gap-3">
-                            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-[#fff1c2] text-[#9f6500]">
-                                <Bell className="h-5 w-5" />
-                            </div>
-                            <div>
-                                <p className="text-xs font-black uppercase tracking-[0.2em] text-[#9f6500]">Alert preferences</p>
-                                <h3 className="mt-1 text-xl font-black text-slate-950">Notifications and reminders</h3>
-                                <p className="mt-2 text-sm font-semibold leading-6 text-slate-500">These switches save immediately. Turning off an alert asks for confirmation first.</p>
-                            </div>
-                        </div>
-                        <div className="mt-5 grid gap-3">
-                            {Object.entries(activeNotificationLabels).map(([key, label]) => (
-                                <div key={key} className={`flex items-center justify-between gap-4 rounded-2xl border px-4 py-4 ${data.notification_preferences[key] ? 'border-emerald-200 bg-emerald-50' : 'border-slate-200 bg-slate-50'}`}>
-                                    <div>
-                                        <p className="font-black text-slate-950">{label}</p>
-                                        <p className="mt-1 text-xs font-semibold text-slate-500">{data.notification_preferences[key] ? 'On and ready to reach you.' : 'Off until you turn it back on.'}</p>
-                                    </div>
-                                    <ToggleSwitch checked={Boolean(data.notification_preferences[key])} disabled={processing} onChange={() => requestNotificationToggle(key)} />
+                    {showNotifications && (
+                        <div className="rounded-2xl border border-[#ead8cc] bg-white p-5">
+                            <div className="flex items-start gap-3">
+                                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-[#fff1c2] text-[#9f6500]">
+                                    <Bell className="h-5 w-5" />
                                 </div>
-                            ))}
+                                <div>
+                                    <p className="text-xs font-black uppercase tracking-[0.2em] text-[#9f6500]">Alert preferences</p>
+                                    <h3 className="mt-1 text-xl font-black text-slate-950">Notifications and reminders</h3>
+                                    <p className="mt-2 text-sm font-semibold leading-6 text-slate-500">These switches save immediately. Turning off an alert asks for confirmation first.</p>
+                                </div>
+                            </div>
+                            <div className="mt-5 grid gap-3 md:grid-cols-2">
+                                {Object.entries(activeNotificationLabels).map(([key, label]) => (
+                                    <div key={key} className={`flex items-center justify-between gap-4 rounded-2xl border px-4 py-4 ${data.notification_preferences[key] ? 'border-emerald-200 bg-emerald-50' : 'border-slate-200 bg-slate-50'}`}>
+                                        <div>
+                                            <p className="font-black text-slate-950">{label}</p>
+                                            <p className="mt-1 text-xs font-semibold text-slate-500">{data.notification_preferences[key] ? 'On and ready to reach you.' : 'Off until you turn it back on.'}</p>
+                                        </div>
+                                        <ToggleSwitch checked={Boolean(data.notification_preferences[key])} disabled={processing} onChange={() => requestNotificationToggle(key)} />
+                                    </div>
+                                ))}
+                            </div>
                         </div>
-                    </div>
+                    )}
                 </div>
-            </div>
-        </>
-    );
+            </>
+        );
+    };
 
     const renderSecurity = () => (
         <>
@@ -873,16 +914,16 @@ const ProfileEdit = () => {
                         />
                         {isClient && (
                             <div className="rounded-2xl border border-red-200 bg-red-50 p-5 lg:col-span-3">
-                                <p className="text-xs font-black uppercase tracking-[0.18em] text-red-700">Account deletion</p>
+                                <p className="text-xs font-black uppercase tracking-[0.18em] text-red-700">Account closure</p>
                                 <h3 className="mt-2 text-xl font-black text-slate-950">Deactivate my account</h3>
-                                <p className="mt-2 text-sm font-semibold leading-6 text-slate-600">This removes your access while preserving booking, payment, and audit records for business history.</p>
+                                <p className="mt-2 text-sm font-semibold leading-6 text-slate-600">This removes your access while preserving booking, payment, refund, chat, and audit records for business history.</p>
                                 <div className="mt-4 grid gap-3 md:grid-cols-3">
                                     <input type="password" value={deleteForm.password} onChange={(e) => setDeleteForm((current) => ({ ...current, password: e.target.value }))} placeholder="Current password" className="rounded-xl border border-red-100 bg-white px-4 py-3 text-sm font-bold" />
-                                    <input value={deleteForm.confirmation} onChange={(e) => setDeleteForm((current) => ({ ...current, confirmation: e.target.value }))} placeholder="Type DELETE" className="rounded-xl border border-red-100 bg-white px-4 py-3 text-sm font-bold" />
+                                    <input value={deleteForm.confirmation} onChange={(e) => setDeleteForm((current) => ({ ...current, confirmation: e.target.value }))} placeholder="Type DEACTIVATE" className="rounded-xl border border-red-100 bg-white px-4 py-3 text-sm font-bold" />
                                     <input value={deleteForm.reason} onChange={(e) => setDeleteForm((current) => ({ ...current, reason: e.target.value }))} placeholder="Reason, optional" className="rounded-xl border border-red-100 bg-white px-4 py-3 text-sm font-bold" />
                                 </div>
                                 {deleteError && <p className="mt-3 text-sm font-bold text-red-700">{deleteError}</p>}
-                                <button type="button" onClick={deleteAccount} disabled={deletingAccount || deleteForm.confirmation !== 'DELETE'} className="mt-4 rounded-xl bg-red-800 px-5 py-3 text-sm font-black text-white disabled:cursor-not-allowed disabled:opacity-50">
+                                <button type="button" onClick={deactivateAccount} disabled={deletingAccount || deleteForm.confirmation !== 'DEACTIVATE'} className="mt-4 rounded-xl bg-red-800 px-5 py-3 text-sm font-black text-white disabled:cursor-not-allowed disabled:opacity-50">
                                     {deletingAccount ? 'Deactivating...' : 'Deactivate account'}
                                 </button>
                             </div>

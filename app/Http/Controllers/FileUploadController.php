@@ -2,9 +2,9 @@
 
 namespace App\Http\Controllers;
 
+use App\Services\UploadRegistryService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Facades\Storage;
 
 /**
  * Ported from: server/index.js file upload routes
@@ -12,17 +12,22 @@ use Illuminate\Support\Facades\Storage;
  */
 class FileUploadController extends Controller
 {
-    public function store(Request $request)
+    public function store(Request $request, UploadRegistryService $uploads)
     {
         $request->validate([
             'image' => 'required|image|mimes:jpg,jpeg,png,webp|max:5120', // 5MB max
+            'purpose' => 'nullable|string|max:80',
         ]);
 
-        $file = $request->file('image');
-        $path = $file->store('uploads', 'public');
+        $record = $uploads->register(
+            $request->file('image'),
+            Auth::user(),
+            $request->input('purpose', 'theme_upload')
+        );
 
         return response()->json([
-            'url' => '/storage/' . $path,
+            'url' => $record->url,
+            'upload_id' => $record->id,
         ]);
     }
 }

@@ -7,16 +7,20 @@ import useCachedJson from '../hooks/useCachedJson';
 import useSmartRefresh from '../hooks/useSmartRefresh';
 import useStaffWorkspaceState from '../hooks/useStaffWorkspaceState';
 import ConfirmModal from '../Components/common/ConfirmModal';
+import SmartImage from '../Components/common/SmartImage';
 import StaffSkeleton, { StaffWorkspaceSkeleton } from '../Components/staff/StaffSkeleton';
 import StaffWorkspaceLayout from '../Layouts/StaffWorkspaceLayout';
+import { AdminCommandStrip, AdminPageSurface, AdminResponsiveTable, AdminSurfaceSection } from '../Components/admin/AdminSurface';
 import StaffPageHeader from '../Components/staff/StaffPageHeader';
 import StaffEmptyState from '../Components/staff/StaffEmptyState';
 import EventHistoryPanel from '../Components/staff/EventHistoryPanel';
 import NextActionPanel from '../Components/staff/NextActionPanel';
+import RoleSettingsPanel from '../Components/staff/RoleSettingsPanel';
 import AssistedBookingWizard from '../Components/marketing/AssistedBookingWizard';
 import { getListData } from '../utils/apiResponses';
 import csrfFetch from '../utils/csrf';
 import { fetchSmartResource, getUserScopedCacheKey, readSmartCache } from '../utils/smartResource';
+import { operationalChannelsForUser } from '../utils/liveChannels';
 import {
     formatBookingRef,
     formatCurrency,
@@ -36,6 +40,7 @@ const AnnouncementManager = lazy(() => import('../Components/content/Announcemen
 const PaymentTermEditorModal = lazy(() => import('../Components/finance/PaymentTermEditorModal'));
 const PreparationBoard = lazy(() => import('../Components/operations/PreparationBoard'));
 const StaffMessaging = lazy(() => import('../Components/common/StaffMessaging'));
+const FoodTastingQueue = lazy(() => import('../Components/operations/FoodTastingQueue'));
 
 const paymentLabel = paymentTypeLabel;
 
@@ -66,6 +71,36 @@ const SNAPSHOT_WINDOW_OPTIONS = [
     { value: '24m', label: 'Last 24 months' },
     { value: 'ytd', label: 'Year to date' },
 ];
+
+const PUBLIC_CONTENT_TABS = [
+    ['announcements', 'Announcements'],
+    ['packages', 'Packages'],
+    ['eventTypes', 'Event Types'],
+    ['menuItems', 'Menu Items'],
+];
+
+const PUBLIC_CONTENT_META = {
+    announcements: {
+        kicker: 'Customer updates',
+        title: 'Announcements',
+        description: 'Draft, schedule, publish, and email customer announcements from one place.',
+    },
+    packages: {
+        kicker: 'Catalog setup',
+        title: 'Packages',
+        description: 'Manage package presets, pricing, connected event types, and customer-facing details.',
+    },
+    eventTypes: {
+        kicker: 'Catalog setup',
+        title: 'Event Types',
+        description: 'Manage the event categories used by booking flows and package presets.',
+    },
+    menuItems: {
+        kicker: 'Catalog setup',
+        title: 'Menu Items',
+        description: 'Review menu items by category and manage custom item records.',
+    },
+};
 
 const MENU_CATEGORY_OPTIONS = [
     { value: 'all', label: 'All dish types' },
@@ -99,13 +134,16 @@ const DEFAULT_ANALYTICS_FILTERS = {
 const ADMIN_EMPLOYEES_URL = '/api/admin/employees?paginated=1&per_page=25';
 const ADMIN_CUSTOMERS_URL = '/api/admin/customers?paginated=1&per_page=25';
 const ADMIN_BOOKINGS_URL = '/api/admin/bookings?paginated=1&per_page=25';
-const ADMIN_WORKSPACE_TABS = ['today', 'bookings-intake', 'calendar', 'handoff', 'finance', 'messages-inquiries', 'public-content', 'availability', 'accounts', 'analytics', 'reports', 'system-audit', 'history', 'profile'];
+const ADMIN_WORKSPACE_TABS = ['today', 'bookings-intake', 'calendar', 'handoff', 'tastings', 'finance', 'messages-inquiries', 'public-content', 'availability', 'accounts', 'settings', 'analytics', 'reports', 'system-audit', 'history'];
+const ADMIN_FULL_SURFACE_TABS = ['bookings-intake', 'calendar', 'handoff', 'tastings', 'finance', 'messages-inquiries', 'public-content', 'availability', 'accounts', 'settings', 'system-audit', 'history'];
 const ADMIN_TAB_ALIASES = {
     dashboard: 'today',
     overview: 'today',
     bookings: 'bookings-intake',
     intake: 'bookings-intake',
     preparation: 'handoff',
+    tasting: 'tastings',
+    food: 'tastings',
     'calendar-handoff': 'calendar',
     calendar: 'calendar',
     handoff: 'handoff',
@@ -115,8 +153,8 @@ const ADMIN_TAB_ALIASES = {
     messages: 'messages-inquiries',
     inquiries: 'messages-inquiries',
     content: 'public-content',
-    configuration: 'public-content',
-    settings: 'public-content',
+    configuration: 'settings',
+    settings: 'settings',
     users: 'accounts',
     people: 'accounts',
     'analytics-reports': 'analytics',
@@ -202,12 +240,15 @@ const shiftMonthValue = (value, offset) => {
 
 const DashboardAdmin = () => {
     const { user, logout } = useAuth();
+    const adminWorkspacePrefs = user?.profile_preferences?.staff_workspace?.admin || {};
+    const adminDefaultTab = ADMIN_WORKSPACE_TABS.includes(adminWorkspacePrefs.default_tab) ? adminWorkspacePrefs.default_tab : 'today';
     const [activeTab, setActiveTab] = useStaffWorkspaceState({
         storageKey: 'ecs:staff-workspace:admin',
-        defaultTab: 'today',
+        defaultTab: adminDefaultTab,
         allowedTabs: ADMIN_WORKSPACE_TABS,
         tabAliases: ADMIN_TAB_ALIASES,
     });
+    const liveChannels = useMemo(() => operationalChannelsForUser(user), [user?.id, user?.role]);
     const [profileForm, setProfileForm] = useState({
         username: user?.username || '',
         email: user?.email || '',
@@ -457,10 +498,6 @@ const DashboardAdmin = () => {
     const [employeeFilters, setEmployeeFilters] = useState({ search: '', role: 'all', account_status: 'all', must_change_password: 'all' });
     const [customerFilters, setCustomerFilters] = useState({ search: '', booking_activity: 'all' });
     const [confirmNotifyCustomer, setConfirmNotifyCustomer] = useState(true);
-    const [deliveryDiagnostics, setDeliveryDiagnostics] = useState(null);
-    const [deliveryLoading, setDeliveryLoading] = useState(false);
-    const [testEmail, setTestEmail] = useState(user?.email || '');
-    const [testEmailSending, setTestEmailSending] = useState(false);
     const confirmNotifyCustomerRef = useRef(true);
     const [bookingPage, setBookingPage] = useState(1);
     const [auditPage, setAuditPage] = useState(1);
@@ -507,12 +544,6 @@ const DashboardAdmin = () => {
         setEmployeePage(1);
     }, [employeeFilters]);
 
-    useEffect(() => {
-        if (activeTab === 'accounts' || activeTab === 'system-audit') {
-            fetchDeliveryDiagnostics({ silent: true });
-        }
-    }, [activeTab]);
-
     const handleLogout = () => {
         router.post('/logout');
     };
@@ -543,44 +574,6 @@ const DashboardAdmin = () => {
     const showToast = (message, type = 'success') => {
         setToast({ message, type });
         setTimeout(() => setToast(null), 3000);
-    };
-
-    const fetchDeliveryDiagnostics = async ({ silent = false } = {}) => {
-        if (!silent) setDeliveryLoading(true);
-        try {
-            const response = await fetch('/api/admin/system-delivery', { headers: { Accept: 'application/json' } });
-            const data = await response.json().catch(() => ({}));
-            if (!response.ok) throw new Error(data.error || 'Could not load delivery diagnostics.');
-            setDeliveryDiagnostics(data);
-        } catch (error) {
-            if (!silent) showToast(error.message || 'Could not load delivery diagnostics.', 'error');
-        } finally {
-            if (!silent) setDeliveryLoading(false);
-        }
-    };
-
-    const sendDiagnosticEmail = async () => {
-        if (!testEmail) {
-            showToast('Enter an email address for the test.', 'error');
-            return;
-        }
-
-        setTestEmailSending(true);
-        try {
-            const response = await csrfFetch('/api/admin/system-delivery/test-email', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ email: testEmail }),
-            });
-            const data = await response.json().catch(() => ({}));
-            if (!response.ok) throw new Error(data.email_delivery || data.message || 'Diagnostic email could not be sent.');
-            showToast(data.email_delivery || data.message || 'Diagnostic email sent.');
-            fetchDeliveryDiagnostics({ silent: true });
-        } catch (error) {
-            showToast(error.message || 'Diagnostic email could not be sent.', 'error');
-        } finally {
-            setTestEmailSending(false);
-        }
     };
 
     useEffect(() => {
@@ -667,7 +660,7 @@ const DashboardAdmin = () => {
             fetchEmployees({ silent });
             fetchCustomers({ silent });
         } else if (activeTab === 'public-content') {
-            bustAdminCache('/api/pricing', '/api/menu-items', '/api/packages?per_page=100', '/api/event-types?per_page=100');
+            bustAdminCache('/api/pricing', '/api/admin/menu-items', '/api/menu-items', '/api/packages?per_page=100', '/api/admin/event-types', '/api/event-types?per_page=100');
             fetchPricingOverrides({ silent });
             fetchCustomMenuItems();
             fetchPackages();
@@ -690,7 +683,6 @@ const DashboardAdmin = () => {
         } else if (activeTab === 'system-audit') {
             bustAdminCache('/api/admin/audits?per_page=25');
             fetchAudits({ silent });
-            fetchDeliveryDiagnostics({ silent: true });
         }
     };
 
@@ -734,8 +726,13 @@ const DashboardAdmin = () => {
             title: 'Account Management',
             description: 'Manage staff access, customer account status, and password recovery actions.',
         },
+        settings: {
+            eyebrow: 'Owner controls',
+            title: 'Settings',
+            description: 'Manage workspace preferences, notifications, business profile, and payment rules.',
+        },
         'bookings-intake': {
-            eyebrow: 'Marketing override',
+            eyebrow: 'Booking operations',
             title: 'Bookings & Intake',
             description: 'Review, approve, adjust, and create customer bookings without switching accounts.',
         },
@@ -753,6 +750,11 @@ const DashboardAdmin = () => {
             eyebrow: 'Event handoff',
             title: 'Handoff',
             description: 'Track readiness, blockers, and preparation tasks for upcoming confirmed events.',
+        },
+        tastings: {
+            eyebrow: 'Customer experience',
+            title: 'Food Tastings',
+            description: 'Manage tasting requests, confirmations, and tasting outcomes.',
         },
         'messages-inquiries': {
             eyebrow: 'Support desk',
@@ -778,6 +780,7 @@ const DashboardAdmin = () => {
                 { id: 'bookings-intake', label: 'Bookings & Intake' },
                 { id: 'calendar', label: 'Calendar' },
                 { id: 'handoff', label: 'Handoff' },
+                { id: 'tastings', label: 'Food Tastings' },
                 { id: 'finance', label: 'Finance' },
                 { id: 'messages-inquiries', label: 'Messages & Inquiries' },
             ],
@@ -788,6 +791,7 @@ const DashboardAdmin = () => {
                 { id: 'public-content', label: 'Public Content' },
                 { id: 'availability', label: 'Availability' },
                 { id: 'accounts', label: 'Accounts' },
+                { id: 'settings', label: 'Settings' },
             ],
         },
         {
@@ -1195,7 +1199,6 @@ const DashboardAdmin = () => {
             fetchAvailabilityOverrides();
         } else if (activeTab === 'system-audit') {
             fetchAudits();
-            fetchDeliveryDiagnostics({ silent: true });
         }
     }, [activeTab, availabilityMonth, customerStatusFilter, employeeFilters, customerFilters]);
 
@@ -1203,6 +1206,8 @@ const DashboardAdmin = () => {
         enabled: ['today', 'analytics', 'reports', 'bookings-intake', 'calendar', 'handoff', 'finance', 'accounts', 'public-content', 'availability', 'system-audit'].includes(activeTab),
         interval: activeTab === 'today' || activeTab === 'analytics' || activeTab === 'reports' ? 120000 : 90000,
         idleAfter: 180000,
+        channels: liveChannels,
+        resources: ['bookings', 'finance', 'payments', 'refunds', 'accounts', 'contact_inquiries', 'food_tastings', 'feedback', 'announcements', 'catalog', 'report_templates', 'reports', 'availability'],
         refresh: refreshCurrentTab,
     });
 
@@ -1397,7 +1402,7 @@ const DashboardAdmin = () => {
         try {
             const [packageData, eventData] = await Promise.all([
                 fetchCachedJson('/api/packages?per_page=100', 60000),
-                fetchCachedJson('/api/event-types?per_page=100', 60000),
+                fetchCachedJson('/api/admin/event-types', 60000),
             ]);
             setPackages(packageData.data || packageData);
             const types = eventData.data || eventData;
@@ -1494,7 +1499,7 @@ const DashboardAdmin = () => {
                 showToast(editingEventTypeId ? 'Event type updated' : 'Event type created');
                 resetEventTypeForm();
                 setCatalogDrawer(null);
-                bustAdminCache('/api/event-types?per_page=100', '/api/packages?per_page=100');
+                bustAdminCache('/api/admin/event-types', '/api/event-types?per_page=100', '/api/packages?per_page=100');
                 fetchPackages();
             } else {
                 showToast(getErrorMessage(data, 'Could not save event type'), 'error');
@@ -1523,33 +1528,33 @@ const DashboardAdmin = () => {
         });
     };
 
-    const handleDeleteEventType = async (eventType) => {
+    const handleArchiveEventType = async (eventType) => {
         setConfirmDialog({
             isOpen: true,
-            title: `Delete ${eventType.label}?`,
-            message: 'Packages using this event type will move to Other.',
-            confirmText: 'Delete',
+            title: `Archive ${eventType.label}?`,
+            message: 'This hides the event type from future customer booking choices while preserving historical bookings, packages, and reports.',
+            confirmText: 'Archive',
             tone: 'danger',
-            onConfirm: () => confirmDeleteEventType(eventType),
+            onConfirm: () => confirmArchiveEventType(eventType),
         });
     };
 
-    const confirmDeleteEventType = async (eventType) => {
+    const confirmArchiveEventType = async (eventType) => {
         closeConfirmDialog();
         setPackageSaving(true);
         try {
-            const res = await fetch(`/api/admin/event-types/${eventType.id}`, { method: 'DELETE' });
+            const res = await fetch(`/api/admin/event-types/${eventType.id}/archive`, { method: 'PATCH' });
             if (res.ok) {
-                showToast('Event type deleted');
-                bustAdminCache('/api/event-types?per_page=100', '/api/packages?per_page=100');
+                showToast('Event type archived');
+                bustAdminCache('/api/admin/event-types', '/api/event-types?per_page=100', '/api/packages?per_page=100');
                 fetchPackages();
             } else {
                 const data = await res.json().catch(() => ({}));
-                showToast(getErrorMessage(data, 'Could not delete event type'), 'error');
+                showToast(getErrorMessage(data, 'Could not archive event type'), 'error');
             }
         } catch (error) {
             console.error(error);
-            showToast('Could not delete event type. Please try again.', 'error');
+            showToast('Could not archive event type. Please try again.', 'error');
         } finally {
             setPackageSaving(false);
         }
@@ -1561,7 +1566,7 @@ const DashboardAdmin = () => {
 
     const fetchCustomMenuItems = async () => {
         try {
-            const data = await fetchCachedJson('/api/menu-items', 60000);
+            const data = await fetchCachedJson('/api/admin/menu-items', 60000);
             setCustomMenuItems(data);
         } catch (error) {
             console.error(error);
@@ -1615,7 +1620,7 @@ const DashboardAdmin = () => {
             if (res.ok) {
                 showToast(isEditing ? 'Menu item updated successfully' : 'Menu item added successfully');
                 setMenuItemModal({ open: false, mode: 'add', data: null });
-                bustAdminCache('/api/menu-items', '/api/admin/analytics');
+                bustAdminCache('/api/admin/menu-items', '/api/menu-items', '/api/admin/analytics');
                 fetchCustomMenuItems();
             } else {
                 const err = await res.json();
@@ -1629,31 +1634,31 @@ const DashboardAdmin = () => {
         }
     };
 
-    const handleDeleteMenuItem = async (id) => {
+    const handleArchiveMenuItem = async (id) => {
         setConfirmDialog({
             isOpen: true,
-            title: 'Delete menu item?',
-            message: 'This dish will no longer be available in the menu catalog.',
-            confirmText: 'Delete',
+            title: 'Archive menu item?',
+            message: 'This hides the dish from future customer menus while preserving historical bookings and reports.',
+            confirmText: 'Archive',
             tone: 'danger',
-            onConfirm: () => confirmDeleteMenuItem(id),
+            onConfirm: () => confirmArchiveMenuItem(id),
         });
     };
 
-    const confirmDeleteMenuItem = async (id) => {
+    const confirmArchiveMenuItem = async (id) => {
         closeConfirmDialog();
         try {
-            const res = await fetch(`/api/admin/menu-items/${id}`, { method: 'DELETE' });
+            const res = await fetch(`/api/admin/menu-items/${id}/archive`, { method: 'PATCH' });
             if (res.ok) {
-                showToast('Menu item deleted');
-                bustAdminCache('/api/menu-items', '/api/admin/analytics');
+                showToast('Menu item archived');
+                bustAdminCache('/api/admin/menu-items', '/api/menu-items', '/api/admin/analytics');
                 fetchCustomMenuItems();
             } else {
-                showToast('Could not delete menu item', 'error');
+                showToast('Could not archive menu item', 'error');
             }
         } catch (error) {
             console.error(error);
-            showToast('Could not delete menu item. Please try again.', 'error');
+            showToast('Could not archive menu item. Please try again.', 'error');
         }
     };
 
@@ -1673,6 +1678,7 @@ const DashboardAdmin = () => {
                 image: item.image || 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&q=80&w=400',
                 isBestSeller: item.is_best_seller,
                 description: item.description || '',
+                isActive: item.is_active !== false,
                 _isCustom: true,
             }));
     }
@@ -1768,11 +1774,11 @@ const DashboardAdmin = () => {
         try {
             const [widgetsRes, templatesRes] = await Promise.all([
                 fetch('/api/admin/report-widgets'),
-                fetch('/api/admin/report-templates'),
+                fetch('/api/admin/report-templates?paginated=1&per_page=75'),
             ]);
             const [widgets, templates] = await Promise.all([widgetsRes.json(), templatesRes.json()]);
             setReportWidgets(Array.isArray(widgets) ? widgets : []);
-            setReportTemplates(Array.isArray(templates) ? templates : []);
+            setReportTemplates(Array.isArray(templates) ? templates : (templates.data || []));
         } catch (error) {
             console.error(error);
             showToast('Could not load report builder', 'error');
@@ -1870,29 +1876,29 @@ const DashboardAdmin = () => {
         showToast('Editing a new copy. Save it when ready.');
     };
 
-    const deleteSavedReport = async () => {
+    const archiveSavedReport = async () => {
         if (!reportTemplateId) return;
         setConfirmDialog({
             isOpen: true,
-            title: 'Delete saved report?',
-            message: 'This removes the saved report template from the builder.',
-            confirmText: 'Delete',
+            title: 'Archive saved report?',
+            message: 'This hides the saved report template from default pickers. Generated exports and report runs remain in records.',
+            confirmText: 'Archive',
             tone: 'danger',
-            onConfirm: confirmDeleteSavedReport,
+            onConfirm: confirmArchiveSavedReport,
         });
     };
 
-    const confirmDeleteSavedReport = async () => {
+    const confirmArchiveSavedReport = async () => {
         closeConfirmDialog();
         try {
-            const res = await fetch(`/api/admin/report-templates/${reportTemplateId}`, { method: 'DELETE' });
-            if (!res.ok) throw new Error('Delete failed');
+            const res = await fetch(`/api/admin/report-templates/${reportTemplateId}/archive`, { method: 'PATCH' });
+            if (!res.ok) throw new Error('Archive failed');
             setReportTemplateId('');
             await fetchReportBuilder({ silent: true });
-            showToast('Saved report deleted');
+            showToast('Saved report archived');
         } catch (error) {
             console.error(error);
-            showToast('Could not delete saved report', 'error');
+            showToast('Could not archive saved report', 'error');
         }
     };
 
@@ -2811,24 +2817,32 @@ const DashboardAdmin = () => {
         }
     };
 
-    const handleProcessRefund = async (bookingId) => {
+    const handleProcessRefund = async (itemOrBookingId) => {
+        const item = typeof itemOrBookingId === 'object' ? itemOrBookingId : null;
+        const bookingId = item?.booking_id || itemOrBookingId;
+        const refundCase = item?.refund_cases?.[0] || null;
+        const action = refundCase?.next_actions?.includes('retry_provider_refund') ? 'retry_provider_refund' : 'process';
         setConfirmDialog({
             isOpen: true,
-            title: `Process refund for booking #${bookingId}?`,
-            message: 'The non-refundable reservation fee will be retained and a refund case will be recorded.',
-            confirmText: 'Process Refund',
+            title: `${action === 'retry_provider_refund' ? 'Retry provider refund' : 'Process refund'} for booking #${bookingId}?`,
+            message: action === 'retry_provider_refund'
+                ? 'Admin will retry the PayMongo refund and keep the case open if the provider fails again.'
+                : 'The non-refundable reservation fee will be retained and a refund case will be recorded.',
+            confirmText: action === 'retry_provider_refund' ? 'Retry Refund' : 'Process Refund',
             tone: 'danger',
-            onConfirm: () => confirmProcessRefund(bookingId),
+            onConfirm: () => confirmProcessRefund(bookingId, action, refundCase?.id || null),
         });
     };
 
-    const confirmProcessRefund = async (bookingId) => {
+    const confirmProcessRefund = async (bookingId, action = 'process', refundCaseId = null) => {
         closeConfirmDialog();
         setProcessingRefundId(bookingId);
         try {
-            const res = await fetch(`/api/admin/refund/${bookingId}`, {
+            const isRetry = action === 'retry_provider_refund';
+            const res = await fetch(isRetry ? `/api/admin/refund/${bookingId}/retry_provider_refund` : `/api/admin/refund/${bookingId}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
+                body: isRetry ? JSON.stringify({ refund_case_id: refundCaseId }) : undefined,
             });
             const data = await res.json().catch(() => ({}));
 
@@ -3299,6 +3313,8 @@ const DashboardAdmin = () => {
             onNavigate={setActiveTab}
             onLogout={handleLogout}
             navGroups={adminNavGroups}
+            roleKey="admin"
+            workspaceClassName="admin-page"
         >
                 <StaffPageHeader
                     eyebrow={currentPage.eyebrow}
@@ -3312,7 +3328,7 @@ const DashboardAdmin = () => {
                     ]}
                 />
 
-                <div className="space-y-5">
+                <div className={ADMIN_FULL_SURFACE_TABS.includes(activeTab) ? 'admin-full-surface-tab-shell' : 'space-y-5'}>
                     {activeTab === 'today' && (
                         <div className="animate-fadeIn">
                             <div className="space-y-6">
@@ -3740,7 +3756,7 @@ const DashboardAdmin = () => {
                                 {/* Revenue Trends */}
                                 <div className="admin-panel p-6">
                                     <h3 className="font-bold text-gray-900 mb-6 flex items-center gap-2">
-                                        <svg className="w-5 h-5 text-indigo-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" /></svg>
+                                        <svg className="w-5 h-5 text-[#720101]" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" /></svg>
                                         Revenue Trends (Last {analyticsFilters.trend_months || 6} Months)
                                     </h3>
                                     <div className="mb-4 flex justify-end">
@@ -4234,84 +4250,21 @@ const DashboardAdmin = () => {
                         </>
                     )}
                     {activeTab === 'public-content' && (
-                        <div className="animate-fadeIn">
-                            <div className="mb-5 rounded-2xl border border-[#720101]/10 bg-white p-4 shadow-sm">
-                                <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                                    <div>
-                                        <p className="admin-kicker">Delivery health</p>
-                                        <h3 className="mt-1 text-lg font-black text-slate-950">Email and sign-in readiness</h3>
-                                        <p className="mt-1 max-w-3xl text-sm font-semibold text-slate-500">Use this when account invitations, password reset messages, or announcement emails do not arrive.</p>
-                                    </div>
-                                    <button type="button" onClick={() => fetchDeliveryDiagnostics()} disabled={deliveryLoading} className="rounded-xl border border-[#720101]/15 bg-white px-4 py-2 text-sm font-black text-[#720101] hover:bg-[#fff7e8] disabled:opacity-60">
-                                        {deliveryLoading ? 'Checking...' : 'Check delivery'}
-                                    </button>
-                                </div>
-                                {deliveryDiagnostics && (
-                                    <div className="mt-4 grid gap-3 lg:grid-cols-3">
-                                        <div className="rounded-xl border border-slate-100 bg-slate-50 p-3">
-                                            <p className="text-[11px] font-black uppercase tracking-widest text-slate-400">Sign-in session</p>
-                                            <p className={`mt-2 inline-flex rounded-full px-2.5 py-1 text-xs font-black ${deliveryDiagnostics.session?.authenticated ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}>
-                                                {deliveryDiagnostics.session?.authenticated ? 'Session looks healthy' : 'Sign-in check needed'}
-                                            </p>
-                                            <p className="mt-2 text-xs font-bold text-slate-500">Use the same site address while testing account actions.</p>
-                                        </div>
-                                        <div className="rounded-xl border border-slate-100 bg-slate-50 p-3">
-                                            <p className="text-[11px] font-black uppercase tracking-widest text-slate-400">Email sender</p>
-                                            <p className={`mt-2 inline-flex rounded-full px-2.5 py-1 text-xs font-black ${deliveryDiagnostics.mail?.configured ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}>
-                                                {deliveryDiagnostics.mail?.configured ? 'Ready to send' : 'Needs setup'}
-                                            </p>
-                                            <p className="mt-2 text-xs font-bold text-slate-500">{deliveryDiagnostics.mail?.from_address ? `Sender: ${deliveryDiagnostics.mail.from_address}` : 'No sender address found'}</p>
-                                        </div>
-                                        <div className="rounded-xl border border-slate-100 bg-slate-50 p-3">
-                                            <p className="text-[11px] font-black uppercase tracking-widest text-slate-400">Send test</p>
-                                            <p className={`mt-2 inline-flex rounded-full px-2.5 py-1 text-xs font-black ${deliveryDiagnostics.queue?.worker_required ? 'bg-amber-50 text-amber-700' : 'bg-emerald-50 text-emerald-700'}`}>
-                                                {deliveryDiagnostics.queue?.worker_required ? 'Background sending required' : 'Sends immediately'}
-                                            </p>
-                                            <div className="mt-3 flex gap-2">
-                                                <input type="email" value={testEmail} onChange={(event) => setTestEmail(event.target.value)} placeholder="Test email address" className="admin-input min-w-0 flex-1 py-2 text-sm" />
-                                                <button type="button" onClick={sendDiagnosticEmail} disabled={testEmailSending} className="rounded-xl bg-[#720101] px-3 py-2 text-xs font-black text-white hover:bg-[#5a0101] disabled:opacity-60">
-                                                    {testEmailSending ? 'Sending...' : 'Send test'}
-                                                </button>
-                                            </div>
-                                        </div>
-                                    </div>
-                                )}
-                                {deliveryDiagnostics?.guidance?.length > 0 && (
-                                    <div className="mt-3 rounded-xl border border-amber-100 bg-amber-50 p-3 text-sm font-bold text-amber-800">
-                                        Some emails are waiting to be sent in the background. Ask the system operator to start background email sending before expecting inbox delivery.
-                                    </div>
-                                )}
-                                {deliveryDiagnostics && (
-                                    <details className="mt-3 rounded-xl border border-slate-100 bg-slate-50 p-3">
-                                        <summary className="cursor-pointer text-xs font-black uppercase tracking-widest text-slate-500">Advanced setup details</summary>
-                                        <div className="mt-3 grid gap-2 text-xs font-bold text-slate-600 md:grid-cols-3">
-                                            <p>Current site address: {deliveryDiagnostics.session?.current_host || '-'}</p>
-                                            <p>Configured site address: {deliveryDiagnostics.session?.app_url || '-'}</p>
-                                            <p>Browser cookie mode: {deliveryDiagnostics.session?.same_site || '-'}</p>
-                                            <p>Email sending method: {deliveryDiagnostics.mail?.mailer || '-'}</p>
-                                            <p>Background delivery mode: {deliveryDiagnostics.queue?.connection || '-'}</p>
-                                        </div>
-                                    </details>
-                                )}
-                            </div>
+                        <AdminPageSurface>
                             <div className="animate-fadeIn">
                                 {pricingLoading ? (
                                     <StaffSkeleton variant="panel" rows={3} label="Loading pricing configuration" />
                                 ) : (
                                     <>
-                                    <div className="overflow-hidden rounded-xl border border-gray-100 bg-white shadow-sm">
+                                    <div className="admin-surface-grid overflow-hidden">
                                         <div className="staff-catalog-head">
                                             <div>
-                                                <p className="admin-kicker">Catalog setup</p>
+                                                <p className="admin-kicker">{PUBLIC_CONTENT_META[activeConfigTab]?.kicker || 'Public content'}</p>
                                                 <h3 className="staff-section-title">
-                                                    {activeConfigTab === 'packages' ? 'Packages' : activeConfigTab === 'eventTypes' ? 'Event Types' : 'Menu Items'}
+                                                    {PUBLIC_CONTENT_META[activeConfigTab]?.title || 'Public Content'}
                                                 </h3>
                                                 <p className="staff-section-copy">
-                                                    {activeConfigTab === 'packages'
-                                                        ? 'Manage package presets, pricing, connected event types, and customer-facing details.'
-                                                        : activeConfigTab === 'eventTypes'
-                                                            ? 'Manage the event categories used by booking flows and package presets.'
-                                                            : 'Review menu items by category and manage custom item records.'}
+                                                    {PUBLIC_CONTENT_META[activeConfigTab]?.description || 'Manage customer-facing content.'}
                                                 </p>
                                             </div>
                                             {activeConfigTab === 'packages' && <button type="button" onClick={() => openPackageDrawer()} className="staff-button-primary">Create package</button>}
@@ -4320,11 +4273,7 @@ const DashboardAdmin = () => {
                                         </div>
                                         <div className="staff-catalog-tabs">
                                             <nav className="flex gap-2 overflow-x-auto">
-                                                {[
-                                                    ['packages', 'Packages'],
-                                                    ['eventTypes', 'Event Types'],
-                                                    ['menuItems', 'Menu Items'],
-                                                ].map(([key, label]) => (
+                                                {PUBLIC_CONTENT_TABS.map(([key, label]) => (
                                                     <button
                                                         key={key}
                                                         onClick={() => setActiveConfigTab(key)}
@@ -4335,6 +4284,12 @@ const DashboardAdmin = () => {
                                                 ))}
                                             </nav>
                                         </div>
+
+                                        {activeConfigTab === 'announcements' && (
+                                            <Suspense fallback={<StaffSkeleton variant="panel" rows={3} label="Loading announcements" />}>
+                                                <AnnouncementManager variant="admin" user={user} />
+                                            </Suspense>
+                                        )}
 
                                         {activeConfigTab === 'packages' && (
                                             <div>
@@ -4356,7 +4311,7 @@ const DashboardAdmin = () => {
                                                             {paginatedPackages.items.map(pkg => (
                                                                 <tr key={pkg.id} className="hover:bg-gray-50">
                                                                     <td className="px-6 py-4 font-bold text-gray-900">{pkg.name}</td>
-                                                                    <td className="px-6 py-4"><span className="rounded-full bg-indigo-50 px-2.5 py-1 text-xs font-black uppercase text-indigo-700">{eventTypes.find(type => type.slug === pkg.type)?.label || pkg.type}</span></td>
+                                                                    <td className="px-6 py-4 text-sm font-bold text-gray-700">{eventTypes.find(type => type.slug === pkg.type)?.label || pkg.type}</td>
                                                                     <td className="px-6 py-4 text-gray-600">{getCategoryLabel(pkg.package_category)}</td>
                                                                     <td className="px-6 py-4 text-gray-600">{(pkg.event_type_slugs || [pkg.type]).map(slug => eventTypes.find(type => type.slug === slug)?.label || slug).join(', ')}</td>
                                                                     <td className="px-6 py-4 text-right font-bold text-gray-900">PHP {Number(pkg.base_price_per_head || 0).toLocaleString()}</td>
@@ -4392,15 +4347,20 @@ const DashboardAdmin = () => {
                                                         <tbody className="divide-y divide-gray-100">
                                                             {paginatedEventTypes.items.map(type => (
                                                                 <tr key={type.id} className="hover:bg-gray-50">
-                                                                    <td className="px-6 py-4 font-bold text-gray-900">{type.label}</td>
-                                                                    <td className="px-6 py-4"><span className="rounded-full bg-gray-100 px-2.5 py-1 text-xs font-black uppercase text-gray-700">{type.slug}</span></td>
+                                                                    <td className="px-6 py-4 font-bold text-gray-900">
+                                                                        {type.label}
+                                                                        {type.is_active === false && <span className="ml-2 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-black uppercase text-slate-500">Inactive</span>}
+                                                                    </td>
+                                                                    <td className="px-6 py-4 text-sm font-semibold text-gray-600">{type.slug}</td>
                                                                     <td className="px-6 py-4 text-gray-600">{getCategoryLabel(type.package_category)}</td>
                                                                     <td className="px-6 py-4 text-gray-600">{type.security_label || getSecurityLabel(type.security_type)}</td>
                                                                     <td className="px-6 py-4 text-gray-600">{type.icon}</td>
                                                                     <td className="px-6 py-4 text-gray-600">{type.description || 'No description'}</td>
                                                                     <td className="px-6 py-4 text-right">
-                                                                        <button type="button" onClick={() => openEventTypeDrawer(type)} className="staff-row-action mr-2">Edit</button>
-                                                                        <button type="button" onClick={() => handleDeleteEventType(type)} className="staff-row-action staff-row-action-danger">Delete</button>
+                                                                        <div className="inline-flex flex-wrap justify-end gap-2">
+                                                                            <button type="button" onClick={() => openEventTypeDrawer(type)} className="staff-row-action">Edit</button>
+                                                                            <button type="button" onClick={() => handleArchiveEventType(type)} className="staff-row-action staff-row-action-danger">Archive</button>
+                                                                        </div>
                                                                     </td>
                                                                 </tr>
                                                             ))}
@@ -4416,7 +4376,7 @@ const DashboardAdmin = () => {
                                                 <div className="flex flex-col gap-4 border-b border-gray-100 p-6 lg:flex-row lg:items-center lg:justify-between">
                                                     <nav className="flex gap-2 overflow-x-auto">
                                                         {MENU_CATEGORIES.map(category => (
-                                                            <button key={category} onClick={() => setActiveMenuCategory(category)} className={`whitespace-nowrap rounded-lg px-4 py-2 text-sm font-bold capitalize transition-colors ${activeMenuCategory === category ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
+                                                            <button key={category} onClick={() => setActiveMenuCategory(category)} className={`whitespace-nowrap rounded-lg px-4 py-2 text-sm font-bold capitalize transition-colors ${activeMenuCategory === category ? 'bg-[#720101] text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
                                                                 {category}
                                                             </button>
                                                         ))}
@@ -4437,10 +4397,19 @@ const DashboardAdmin = () => {
                                                                 return (
                                                                     <tr key={item.id} className="hover:bg-gray-50">
                                                                         <td className="px-6 py-4">
-                                                                            <div className="flex items-center gap-3">
-                                                                                <img src={item.image} alt={item.name} className="h-12 w-12 rounded-lg object-cover ring-1 ring-gray-200" />
+                                                                            <div className="flex min-w-0 items-center gap-3">
+                                                                                <SmartImage
+                                                                                    src={item.image}
+                                                                                    alt={item.name}
+                                                                                    aspectRatio="1 / 1"
+                                                                                    containerClassName="shrink-0 rounded-lg ring-1 ring-gray-200"
+                                                                                    style={{ width: '3.25rem', height: '3.25rem', flex: '0 0 3.25rem' }}
+                                                                                />
                                                                                 <div className="min-w-0">
-                                                                                    <div className="font-bold text-gray-900">{item.name}</div>
+                                                                                    <div className="font-bold text-gray-900">
+                                                                                        {item.name}
+                                                                                        {!item.isActive && <span className="ml-2 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-black uppercase text-slate-500">Inactive</span>}
+                                                                                    </div>
                                                                                     <div className="line-clamp-1 text-xs text-gray-500">{item.description || 'No description'}</div>
                                                                                 </div>
                                                                             </div>
@@ -4448,8 +4417,8 @@ const DashboardAdmin = () => {
                                                                         <td className="px-6 py-4 capitalize text-gray-600">{item.category}</td>
                                                                         <td className="px-6 py-4 text-right font-bold text-gray-900">PHP {Number(item.costPerHead || 0).toLocaleString()}</td>
                                                                         <td className="px-6 py-4 text-right">
-                                                                            <button onClick={() => openEditMenuItemModal(item)} className="mr-2 rounded-lg bg-indigo-600 px-3 py-2 text-xs font-bold text-white hover:bg-indigo-700">Edit</button>
-                                                                            {item._isCustom && <button onClick={() => handleDeleteMenuItem(item._dbId)} className="rounded-lg bg-red-50 px-3 py-2 text-xs font-bold text-red-700 hover:bg-red-100">Delete</button>}
+                                                                            <button onClick={() => openEditMenuItemModal(item)} className="mr-2 rounded-lg bg-[#720101] px-3 py-2 text-xs font-bold text-white hover:bg-[#5a0101]">Edit</button>
+                                                                            {item._isCustom && item.isActive && <button onClick={() => handleArchiveMenuItem(item._dbId)} className="rounded-lg bg-red-50 px-3 py-2 text-xs font-bold text-red-700 hover:bg-red-100">Archive</button>}
                                                                         </td>
                                                                     </tr>
                                                                 );
@@ -4471,20 +4440,20 @@ const DashboardAdmin = () => {
                                                 <p className="text-xs text-gray-500 mt-1">Create reusable package offers for weddings, corporate events, social events, and other inquiries.</p>
                                             </div>
                                             <form onSubmit={handlePackageSubmit} className="p-6 grid grid-cols-1 md:grid-cols-6 gap-4">
-                                                <input required value={packageForm.name} onChange={e => setPackageForm({ ...packageForm, name: e.target.value })} placeholder="Package name" className="md:col-span-2 rounded-lg border border-gray-200 px-4 py-3 text-sm font-medium outline-none focus:ring-2 focus:ring-indigo-100" />
-                                                <select required value={packageForm.type} onChange={e => setPackageForm({ ...packageForm, type: e.target.value })} className="rounded-lg border border-gray-200 px-4 py-3 text-sm font-medium outline-none focus:ring-2 focus:ring-indigo-100">
+                                                <input required value={packageForm.name} onChange={e => setPackageForm({ ...packageForm, name: e.target.value })} placeholder="Package name" className="md:col-span-2 rounded-lg border border-gray-200 px-4 py-3 text-sm font-medium outline-none focus:ring-2 focus:ring-[#720101]/10" />
+                                                <select required value={packageForm.type} onChange={e => setPackageForm({ ...packageForm, type: e.target.value })} className="rounded-lg border border-gray-200 px-4 py-3 text-sm font-medium outline-none focus:ring-2 focus:ring-[#720101]/10">
                                                     {eventTypes.map(type => <option key={type.id} value={type.slug}>{type.label}</option>)}
                                                 </select>
-                                                <input required type="number" min="0" value={packageForm.base_price_per_head} onChange={e => setPackageForm({ ...packageForm, base_price_per_head: e.target.value })} placeholder="Price / head" className="rounded-lg border border-gray-200 px-4 py-3 text-sm font-medium outline-none focus:ring-2 focus:ring-indigo-100" />
-                                                <input required type="number" min="1" value={packageForm.minimum_pax} onChange={e => setPackageForm({ ...packageForm, minimum_pax: e.target.value })} placeholder="Min pax" className="rounded-lg border border-gray-200 px-4 py-3 text-sm font-medium outline-none focus:ring-2 focus:ring-indigo-100" />
-                                                <button disabled={packageSaving} className="rounded-lg bg-indigo-600 px-4 py-3 text-sm font-bold text-white hover:bg-indigo-700 disabled:opacity-60">{packageSaving ? 'Saving...' : 'Create'}</button>
-                                                <textarea value={packageForm.description} onChange={e => setPackageForm({ ...packageForm, description: e.target.value })} placeholder="Description" className="md:col-span-3 rounded-lg border border-gray-200 px-4 py-3 text-sm font-medium outline-none focus:ring-2 focus:ring-indigo-100" />
-                                                <textarea value={packageForm.inclusions} onChange={e => setPackageForm({ ...packageForm, inclusions: e.target.value })} placeholder="Inclusions, one per line" className="md:col-span-3 rounded-lg border border-gray-200 px-4 py-3 text-sm font-medium outline-none focus:ring-2 focus:ring-indigo-100" />
+                                                <input required type="number" min="0" value={packageForm.base_price_per_head} onChange={e => setPackageForm({ ...packageForm, base_price_per_head: e.target.value })} placeholder="Price / head" className="rounded-lg border border-gray-200 px-4 py-3 text-sm font-medium outline-none focus:ring-2 focus:ring-[#720101]/10" />
+                                                <input required type="number" min="1" value={packageForm.minimum_pax} onChange={e => setPackageForm({ ...packageForm, minimum_pax: e.target.value })} placeholder="Min pax" className="rounded-lg border border-gray-200 px-4 py-3 text-sm font-medium outline-none focus:ring-2 focus:ring-[#720101]/10" />
+                                                <button disabled={packageSaving} className="rounded-lg bg-[#720101] px-4 py-3 text-sm font-bold text-white hover:bg-[#5a0101] disabled:opacity-60">{packageSaving ? 'Saving...' : 'Create'}</button>
+                                                <textarea value={packageForm.description} onChange={e => setPackageForm({ ...packageForm, description: e.target.value })} placeholder="Description" className="md:col-span-3 rounded-lg border border-gray-200 px-4 py-3 text-sm font-medium outline-none focus:ring-2 focus:ring-[#720101]/10" />
+                                                <textarea value={packageForm.inclusions} onChange={e => setPackageForm({ ...packageForm, inclusions: e.target.value })} placeholder="Inclusions, one per line" className="md:col-span-3 rounded-lg border border-gray-200 px-4 py-3 text-sm font-medium outline-none focus:ring-2 focus:ring-[#720101]/10" />
                                             </form>
                                             <div className="px-6 pb-6 grid grid-cols-1 md:grid-cols-3 gap-3">
                                                 {packages.map(pkg => (
                                                     <div key={pkg.id} className="rounded-lg border border-gray-100 bg-gray-50 p-4">
-                                                        <p className="text-xs font-black uppercase text-indigo-500">{pkg.type}</p>
+                                                        <p className="text-xs font-black uppercase text-[#720101]">{pkg.type}</p>
                                                         <h4 className="mt-1 font-bold text-gray-900">{pkg.name}</h4>
                                                         <p className="text-sm text-gray-600">PHP {Number(pkg.base_price_per_head || 0).toLocaleString()} / head · min {pkg.minimum_pax} pax</p>
                                                     </div>
@@ -4495,28 +4464,28 @@ const DashboardAdmin = () => {
                                         <div className="bg-white shadow overflow-hidden rounded-xl border border-gray-100">
                                             <div className="px-6 py-4 border-b border-gray-100 bg-gray-50">
                                                 <h3 className="text-sm font-bold text-gray-700 uppercase tracking-wide">Event Types</h3>
-                                                <p className="text-xs text-gray-500 mt-1">Create, modify, or delete event categories used by package presets.</p>
+                                                <p className="text-xs text-gray-500 mt-1">Create, modify, or archive event categories used by package presets.</p>
                                             </div>
                                             <form onSubmit={handleEventTypeSubmit} className="p-6 grid grid-cols-1 md:grid-cols-6 gap-4">
-                                                <input required value={eventTypeForm.label} onChange={e => setEventTypeForm({ ...eventTypeForm, label: e.target.value })} placeholder="Event type name" className="md:col-span-2 rounded-lg border border-gray-200 px-4 py-3 text-sm font-medium outline-none focus:ring-2 focus:ring-indigo-100" />
-                                                <input value={eventTypeForm.slug} onChange={e => setEventTypeForm({ ...eventTypeForm, slug: e.target.value })} placeholder="Short name (optional)" className="rounded-lg border border-gray-200 px-4 py-3 text-sm font-medium outline-none focus:ring-2 focus:ring-indigo-100" />
-                                                <input value={eventTypeForm.icon} onChange={e => setEventTypeForm({ ...eventTypeForm, icon: e.target.value })} placeholder="Icon name" className="rounded-lg border border-gray-200 px-4 py-3 text-sm font-medium outline-none focus:ring-2 focus:ring-indigo-100" />
-                                                <input value={eventTypeForm.image} onChange={e => setEventTypeForm({ ...eventTypeForm, image: e.target.value })} placeholder="Image link" className="md:col-span-2 rounded-lg border border-gray-200 px-4 py-3 text-sm font-medium outline-none focus:ring-2 focus:ring-indigo-100" />
-                                                <textarea value={eventTypeForm.description} onChange={e => setEventTypeForm({ ...eventTypeForm, description: e.target.value })} placeholder="Description" className="md:col-span-4 rounded-lg border border-gray-200 px-4 py-3 text-sm font-medium outline-none focus:ring-2 focus:ring-indigo-100" />
+                                                <input required value={eventTypeForm.label} onChange={e => setEventTypeForm({ ...eventTypeForm, label: e.target.value })} placeholder="Event type name" className="md:col-span-2 rounded-lg border border-gray-200 px-4 py-3 text-sm font-medium outline-none focus:ring-2 focus:ring-[#720101]/10" />
+                                                <input value={eventTypeForm.slug} onChange={e => setEventTypeForm({ ...eventTypeForm, slug: e.target.value })} placeholder="Short name (optional)" className="rounded-lg border border-gray-200 px-4 py-3 text-sm font-medium outline-none focus:ring-2 focus:ring-[#720101]/10" />
+                                                <input value={eventTypeForm.icon} onChange={e => setEventTypeForm({ ...eventTypeForm, icon: e.target.value })} placeholder="Icon name" className="rounded-lg border border-gray-200 px-4 py-3 text-sm font-medium outline-none focus:ring-2 focus:ring-[#720101]/10" />
+                                                <input value={eventTypeForm.image} onChange={e => setEventTypeForm({ ...eventTypeForm, image: e.target.value })} placeholder="Image link" className="md:col-span-2 rounded-lg border border-gray-200 px-4 py-3 text-sm font-medium outline-none focus:ring-2 focus:ring-[#720101]/10" />
+                                                <textarea value={eventTypeForm.description} onChange={e => setEventTypeForm({ ...eventTypeForm, description: e.target.value })} placeholder="Description" className="md:col-span-4 rounded-lg border border-gray-200 px-4 py-3 text-sm font-medium outline-none focus:ring-2 focus:ring-[#720101]/10" />
                                                 <div className="md:col-span-2 flex gap-2">
                                                     {editingEventTypeId && <button type="button" onClick={resetEventTypeForm} className="flex-1 rounded-lg border border-gray-200 px-4 py-3 text-sm font-bold text-gray-600 hover:bg-gray-50">Cancel</button>}
-                                                    <button disabled={packageSaving} className="flex-1 rounded-lg bg-indigo-600 px-4 py-3 text-sm font-bold text-white hover:bg-indigo-700 disabled:opacity-60">{packageSaving ? 'Saving...' : editingEventTypeId ? 'Save Type' : 'Create Type'}</button>
+                                                    <button disabled={packageSaving} className="flex-1 rounded-lg bg-[#720101] px-4 py-3 text-sm font-bold text-white hover:bg-[#5a0101] disabled:opacity-60">{packageSaving ? 'Saving...' : editingEventTypeId ? 'Save type' : 'Create Type'}</button>
                                                 </div>
                                             </form>
                                             <div className="px-6 pb-6 grid grid-cols-1 md:grid-cols-3 gap-3">
                                                 {eventTypes.map(type => (
                                                     <div key={type.id} className="rounded-lg border border-gray-100 bg-gray-50 p-4">
-                                                        <p className="text-xs font-black uppercase text-indigo-500">{type.slug}</p>
+                                                        <p className="text-xs font-black uppercase text-[#720101]">{type.slug}</p>
                                                         <h4 className="mt-1 font-bold text-gray-900">{type.label}</h4>
                                                         <p className="text-sm text-gray-600 line-clamp-2">{type.description || 'No description'}</p>
                                                         <div className="mt-3 flex gap-2">
                                                             <button onClick={() => startEditingEventType(type)} className="rounded-lg bg-white px-3 py-2 text-xs font-bold text-gray-700 border border-gray-200 hover:bg-gray-50">Edit</button>
-                                                            <button onClick={() => handleDeleteEventType(type)} className="rounded-lg bg-red-50 px-3 py-2 text-xs font-bold text-red-700 hover:bg-red-100">Delete</button>
+                                                            <button onClick={() => handleArchiveEventType(type)} className="rounded-lg bg-red-50 px-3 py-2 text-xs font-bold text-red-700 hover:bg-red-100">Archive</button>
                                                         </div>
                                                     </div>
                                                 ))}
@@ -4533,7 +4502,7 @@ const DashboardAdmin = () => {
                                                         <button
                                                             key={category}
                                                             onClick={() => setActiveMenuCategory(category)}
-                                                            className={`whitespace-nowrap py-3 px-1 border-b-2 font-bold text-sm capitalize transition-colors ${activeMenuCategory === category ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}`}
+                                                            className={`whitespace-nowrap py-3 px-1 border-b-2 font-bold text-sm capitalize transition-colors ${activeMenuCategory === category ? 'border-[#720101] text-[#720101]' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}`}
                                                         >
                                                             {category}
                                                         </button>
@@ -4549,18 +4518,18 @@ const DashboardAdmin = () => {
 
                                                                 return (
                                                                     <div key={item.id} className="overflow-hidden border border-gray-200 rounded-2xl bg-white flex flex-col hover:shadow-xl hover:-translate-y-1 transition-all duration-300 shadow-md relative group">
-                                                                        {/* Delete button for custom items */}
-                                                                        {item._isCustom && (
+                                                                        {/* Archive button for custom items */}
+                                                                        {item._isCustom && item.isActive && (
                                                                             <button
-                                                                                onClick={() => handleDeleteMenuItem(item._dbId)}
+                                                                                onClick={() => handleArchiveMenuItem(item._dbId)}
                                                                                 className="absolute top-3 left-3 z-20 bg-red-600 hover:bg-red-700 text-white p-1.5 rounded-lg shadow-lg opacity-0 group-hover:opacity-100 transition-opacity duration-200"
-                                                                                title="Delete this menu item"
+                                                                                title="Archive this menu item"
                                                                             >
                                                                                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
                                                                             </button>
                                                                         )}
                                                                         <div className="h-48 w-full relative">
-                                                                            <img src={item.image} alt={item.name} className="object-cover w-full h-full" />
+                                                                            <SmartImage src={item.image} alt={item.name} aspectRatio="1 / 1" containerClassName="h-full w-full" />
                                                                             <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent"></div>
                                                                             {item._isCustom && (
                                                                                 <div className="absolute top-3 right-3 bg-emerald-600 text-white text-[10px] font-bold px-2.5 py-1.5 rounded shadow-lg uppercase tracking-wider border border-emerald-400">
@@ -4568,7 +4537,7 @@ const DashboardAdmin = () => {
                                                                                 </div>
                                                                             )}
                                                                             {!item._isCustom && pricingOverrides[overrideId] !== undefined && (
-                                                                                <div className="absolute top-3 right-3 bg-indigo-600 text-white text-[10px] font-bold px-2.5 py-1.5 rounded shadow-lg uppercase tracking-wider border border-indigo-400">
+                                                                                <div className="absolute top-3 right-3 bg-[#720101] text-white text-[10px] font-bold px-2.5 py-1.5 rounded shadow-lg uppercase tracking-wider border border-[#720101]/25">
                                                                                     Custom Price
                                                                                 </div>
                                                                             )}
@@ -4578,7 +4547,7 @@ const DashboardAdmin = () => {
                                                                             <p className="text-sm text-gray-500 mb-4 flex-grow line-clamp-2">{item.description}</p>
                                                                             
                                                                             <div className="mt-auto flex items-center justify-between gap-3 pt-4 border-t border-gray-100">
-                                                                                <div className="flex-1 flex items-center bg-gray-50 rounded-xl px-4 py-2.5 border border-gray-200 focus-within:border-indigo-500 focus-within:ring-2 focus-within:ring-indigo-200 focus-within:bg-white transition-all shadow-inner">
+                                                                                <div className="flex-1 flex items-center bg-gray-50 rounded-xl px-4 py-2.5 border border-gray-200 focus-within:border-[#720101] focus-within:ring-2 focus-within:ring-[#720101]/10 focus-within:bg-white transition-all shadow-inner">
                                                                                     <span className="text-gray-400 font-bold text-base mr-1">+₱</span>
                                                                                     <input
                                                                                         type="number"
@@ -4592,7 +4561,7 @@ const DashboardAdmin = () => {
                                                                                         const el = document.getElementById(`price_input_${item.id}`);
                                                                                         handlePricingUpdate('dish', item.id, el.value);
                                                                                     }}
-                                                                                    className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-sm rounded-xl transition-colors shadow-md hover:shadow-lg active:transform active:scale-95"
+                                                                                    className="px-5 py-2.5 bg-[#720101] hover:bg-[#5a0101] text-white font-bold text-sm rounded-xl transition-colors shadow-md hover:shadow-lg active:transform active:scale-95"
                                                                                 >
                                                                                     Save
                                                                                 </button>
@@ -4612,7 +4581,7 @@ const DashboardAdmin = () => {
                                     </>
                                 )}
                             </div>
-                        </div>
+                        </AdminPageSurface>
                     )}
                     {
                         activeTab === 'reports' && (
@@ -4660,7 +4629,7 @@ const DashboardAdmin = () => {
                                     <div className="admin-report-manage-actions">
                                         <button type="button" onClick={createNewSavedReport} className="admin-mini-button">Start New</button>
                                         <button type="button" onClick={duplicateSavedReport} className="admin-mini-button" disabled={!reportTemplateId}>Save As Copy</button>
-                                        <button type="button" onClick={deleteSavedReport} className="admin-mini-button admin-mini-button-danger" disabled={!reportTemplateId}>Delete Saved Report</button>
+                                        <button type="button" onClick={archiveSavedReport} className="admin-mini-button admin-mini-button-danger" disabled={!reportTemplateId}>Archive Saved Report</button>
                                     </div>
                                     <div className="admin-report-filter-grid">
                                         <label className="admin-field-label">
@@ -4944,23 +4913,23 @@ const DashboardAdmin = () => {
                         )
                     }
                     {activeTab === 'messages-inquiries' && (
-                        <div className="animate-fadeIn space-y-5">
-                            <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-[#720101]/10 bg-white px-4 py-3 shadow-sm">
+                        <div className="admin-messages-page-surface animate-fadeIn">
+                            <div className="admin-flat-strip">
                                 {[
                                     ['Open conversations', adminMessageMetrics.open],
                                     ['Needs admin attention', adminMessageMetrics.needsAttention],
                                     ['Unassigned', adminMessageMetrics.unassigned],
                                     ['Resolved today', adminMessageMetrics.resolvedToday],
                                 ].map(([label, value]) => (
-                                    <div key={label} className="rounded-xl border border-[#720101]/10 bg-[#faf7f2] px-3 py-2">
-                                        <span className="text-lg font-black text-gray-950">{value}</span>
-                                        <span className="ml-2 text-[11px] font-black uppercase tracking-wider text-slate-400">{label}</span>
+                                    <div key={label} className="admin-flat-strip-item">
+                                        <strong>{value}</strong>
+                                        <span>{label}</span>
                                     </div>
                                 ))}
                                 <button
                                     type="button"
                                     onClick={() => setMessageRefreshToken((value) => value + 1)}
-                                    className="ml-auto inline-flex h-11 w-11 items-center justify-center rounded-xl border border-[#720101]/15 bg-white text-[#720101] transition hover:bg-[#fff7ed]"
+                                    className="admin-flat-strip-item admin-flat-strip-action inline-flex justify-center text-[#720101] transition hover:bg-[#fff7ed]"
                                     aria-label="Refresh conversations"
                                     title="Refresh conversations"
                                 >
@@ -4970,16 +4939,17 @@ const DashboardAdmin = () => {
                             <Suspense fallback={<StaffSkeleton variant="panel" rows={6} label="Loading message desk" />}>
                                 <StaffMessaging
                                     variant="admin-oversight"
+                                    surfaceMode="admin-full"
                                     refreshToken={messageRefreshToken}
                                     onMetricsChange={setAdminMessageMetrics}
                                 />
                             </Suspense>
                         </div>
                     )}
-                    {activeTab === 'public-content' && (
-                        <Suspense fallback={<StaffSkeleton variant="panel" rows={3} label="Loading content tools" />}>
-                            <AnnouncementManager variant="admin" user={user} />
-                        </Suspense>
+                    {activeTab === 'settings' && (
+                        <AdminPageSurface className="admin-settings-surface">
+                            <RoleSettingsPanel role="admin" onNavigate={setActiveTab} />
+                        </AdminPageSurface>
                     )}
                     {activeTab === 'profile' && (
                         <div className="animate-fadeIn admin-profile-page">
@@ -5040,8 +5010,8 @@ const DashboardAdmin = () => {
                         </div>
                     )}
                     {activeTab === 'availability' && (
-                        <div className="animate-fadeIn grid gap-6 lg:grid-cols-[1fr_360px]">
-                            <form onSubmit={saveAvailabilityOverride} className="rounded-2xl border border-gray-100 bg-white p-6 shadow-sm">
+                        <AdminPageSurface className="grid gap-0 lg:grid-cols-[minmax(0,1fr)_22rem]">
+                            <form onSubmit={saveAvailabilityOverride} className="bg-white p-6">
                                 <div className="mb-6">
                                     <div>
                                         <p className="admin-kicker">Selected date</p>
@@ -5112,14 +5082,14 @@ const DashboardAdmin = () => {
                                 </div>
                             </form>
 
-                            <aside className="rounded-2xl border border-gray-100 bg-white p-5 shadow-sm">
+                            <aside className="border-t border-[#720101]/10 bg-white p-5 lg:border-l lg:border-t-0">
                                 <div className="mb-4 space-y-4">
                                     <div className="flex items-center justify-between">
                                         <div>
                                             <h3 className="text-sm font-black uppercase tracking-widest text-gray-900">Date changes</h3>
                                             <p className="mt-1 text-sm font-bold text-gray-500">{formatMonthLabel(availabilityMonth)}</p>
                                         </div>
-                                        <span className="rounded-full bg-indigo-50 px-3 py-1 text-xs font-black text-indigo-700">{availabilityOverrides.length}</span>
+                                        <span className="rounded-full bg-[#fff7e8] px-3 py-1 text-xs font-black text-[#720101]">{availabilityOverrides.length}</span>
                                     </div>
                                     <div className="grid grid-cols-2 gap-2">
                                         <button type="button" onClick={() => moveAvailabilityMonth(-1)} className="admin-button-secondary px-3 py-2 text-xs">Previous month</button>
@@ -5177,14 +5147,14 @@ const DashboardAdmin = () => {
                                         <div>
                                             <div className="mb-3 flex items-center justify-between">
                                                 <h4 className="text-xs font-black uppercase tracking-widest text-gray-500">Date changes</h4>
-                                                <span className="rounded-full bg-indigo-50 px-3 py-1 text-xs font-black text-indigo-700">{availabilityOverrides.length}</span>
+                                                <span className="rounded-full bg-[#fff7e8] px-3 py-1 text-xs font-black text-[#720101]">{availabilityOverrides.length}</span>
                                             </div>
                                             {availabilityOverrides.length === 0 ? (
                                                 <p className="rounded-xl bg-gray-50 p-4 text-sm font-bold text-gray-500">No date changes for this month.</p>
                                             ) : (
                                                 <div className="space-y-3">
                                                     {availabilityOverrides.map((item) => (
-                                                        <button key={item.id} type="button" onClick={() => selectAvailabilityDate(item.date)} className={`w-full rounded-xl border p-4 text-left transition ${availabilityDate === item.date ? 'border-indigo-300 bg-indigo-50' : 'border-gray-100 bg-gray-50 hover:bg-white'}`}>
+                                                        <button key={item.id} type="button" onClick={() => selectAvailabilityDate(item.date)} className={`w-full rounded-xl border p-4 text-left transition ${availabilityDate === item.date ? 'border-[#720101]/25 bg-[#fff7e8]' : 'border-gray-100 bg-gray-50 hover:bg-white'}`}>
                                                             <div className="flex items-center justify-between">
                                                                 <span className="text-sm font-black text-gray-950">{formatDate(item.date)}</span>
                                                                 <span className={`rounded-full px-2.5 py-1 text-[10px] font-black uppercase ${item.is_locked ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>{item.is_locked ? 'Closed' : 'Limited'}</span>
@@ -5199,24 +5169,23 @@ const DashboardAdmin = () => {
                                     </div>
                                 )}
                             </aside>
-                        </div>
+                        </AdminPageSurface>
                     )}
                     {
                         activeTab === 'accounts' && (
-                            <div className="animate-fadeIn">
-                                <div className="admin-compact-command mb-4">
+                            <AdminPageSurface>
+                                <AdminCommandStrip>
                                     <div>
-                                        <p className="admin-kicker">Accounts</p>
-                                        <h3 className="mt-1 text-xl font-black text-gray-950">Access and customer account controls</h3>
-                                        <p>Manage staff access, customer account status, temporary passwords, and reactivation.</p>
+                                        <p className="admin-kicker">Access controls</p>
+                                        <p className="admin-command-copy">Staff access, customer account status, temporary passwords, and reactivation.</p>
                                     </div>
                                     <button onClick={() => openEmpModal('add')} className="inline-flex items-center justify-center gap-2 rounded-xl bg-[#720101] px-4 py-3 text-sm font-black text-white shadow-sm transition-colors hover:bg-[#5a0101]">
                                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
                                         Add staff account
                                     </button>
-                                </div>
+                                </AdminCommandStrip>
 
-                                <div className="admin-stat-strip mb-4">
+                                <div className="admin-stat-strip border-b border-[#720101]/10">
                                     {[
                                         { label: 'Active staff', value: employeeAccountStats.active },
                                         { label: 'Need password change', value: employeeAccountStats.password },
@@ -5230,7 +5199,7 @@ const DashboardAdmin = () => {
                                     ))}
                                 </div>
 
-                                <details className="admin-help-disclosure mb-4">
+                                <details className="admin-help-disclosure m-0 rounded-none border-x-0 border-t-0 shadow-none">
                                     <summary>Account action guide</summary>
                                     <div className="mt-3 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                                         <div>
@@ -5243,7 +5212,7 @@ const DashboardAdmin = () => {
                                     </div>
                                 </details>
 
-                                <div className="mb-5 inline-flex rounded-2xl border border-[#720101]/10 bg-white p-1 shadow-sm">
+                                <AdminCommandStrip>
                                     {[
                                         { value: 'staff', label: 'Staff Accounts', count: employees.length },
                                         { value: 'customers', label: 'Customer Accounts', count: customerAccountStats.shown },
@@ -5257,18 +5226,18 @@ const DashboardAdmin = () => {
                                             {segment.label}<span className="ml-2 rounded-full bg-white/20 px-2 py-0.5 text-xs">{segment.count}</span>
                                         </button>
                                     ))}
-                                </div>
+                                </AdminCommandStrip>
 
-                                <div className="space-y-8">
-                                    {accountSegment === 'staff' && <div>
-                                        <div className="flex items-center justify-between mb-3">
+                                <div>
+                                    {accountSegment === 'staff' && <AdminSurfaceSection className="border-t-0">
+                                        <div className="mb-3 flex items-center justify-between">
                                             <div>
                                                 <h3 className="text-sm font-bold text-gray-900 uppercase tracking-wide">Staff Accounts</h3>
                                                 <p className="text-xs text-gray-500 mt-1">Marketing and Accounting personnel accounts.</p>
                                             </div>
-                                            <span className="text-xs font-bold text-indigo-700 bg-indigo-50 border border-indigo-100 rounded-full px-3 py-1">{employees.length} staff</span>
+                                            <span className="text-xs font-bold text-[#720101] bg-[#fff7e8] border border-[#720101]/10 rounded-full px-3 py-1">{employees.length} staff</span>
                                         </div>
-                                        <div className="mb-4 grid gap-3 rounded-2xl border border-indigo-50 bg-white p-4 md:grid-cols-[minmax(220px,1fr)_160px_170px_190px]">
+                                        <AdminCommandStrip className="-mx-4 mb-0 border-x-0 md:grid md:grid-cols-[minmax(220px,1fr)_160px_170px_190px]">
                                             <input
                                                 type="search"
                                                 value={employeeFilters.search}
@@ -5292,9 +5261,9 @@ const DashboardAdmin = () => {
                                                 <option value="1">Password change needed</option>
                                                 <option value="0">Password current</option>
                                             </select>
-                                        </div>
+                                        </AdminCommandStrip>
 
-                                        <div className="staff-table-wrap rounded-2xl border border-[#720101]/10 bg-white shadow-sm">
+                                        <AdminResponsiveTable className="-mx-4">
                                             {empLoading ? (
                                                 <StaffSkeleton rows={6} label="Loading staff accounts" />
                                             ) : employees.length === 0 ? (
@@ -5316,7 +5285,7 @@ const DashboardAdmin = () => {
                                                             <tr key={emp.id} className="hover:bg-gray-50/80 transition-colors">
                                                                 <td className="px-6 py-4 whitespace-nowrap">
                                                                     <div className="flex items-center">
-                                                                        <div className="flex-shrink-0 h-8 w-8 rounded-full bg-gradient-to-br from-indigo-100 to-blue-200 flex items-center justify-center text-indigo-700 font-bold">
+                                                                        <div className="flex-shrink-0 h-8 w-8 rounded-full bg-gradient-to-br from-[#fff7e8] to-[#f8d58b] flex items-center justify-center text-[#720101] font-bold">
                                                                             {(emp.full_name || emp.username).charAt(0).toUpperCase()}
                                                                         </div>
                                                                         <div className="ml-4">
@@ -5380,14 +5349,14 @@ const DashboardAdmin = () => {
                                                     </tbody>
                                                 </table>
                                             )}
-                                        </div>
+                                        </AdminResponsiveTable>
                                         {!empLoading && employees.length > 0 && (
                                             <PaginationControls pageInfo={paginatedEmployees} onPageChange={setEmployeePage} />
                                         )}
-                                    </div>}
+                                    </AdminSurfaceSection>}
 
-                                    {accountSegment === 'customers' && <div>
-                                        <div className="flex items-center justify-between mb-3">
+                                    {accountSegment === 'customers' && <AdminSurfaceSection className="border-t-0">
+                                        <div className="mb-3 flex items-center justify-between">
                                             <div>
                                                 <h3 className="text-sm font-bold text-gray-900 uppercase tracking-wide">Customer Accounts</h3>
                                                 <p className="text-xs text-gray-500 mt-1">Active customer accounts by default. Deactivated customers are preserved for booking and payment history.</p>
@@ -5410,7 +5379,7 @@ const DashboardAdmin = () => {
                                                 <span className="text-xs font-bold text-rose-700 bg-rose-50 border border-rose-100 rounded-full px-3 py-1">{customers.length} shown</span>
                                             </div>
                                         </div>
-                                        <div className="mb-4 grid gap-3 rounded-2xl border border-rose-50 bg-white p-4 md:grid-cols-[minmax(220px,1fr)_190px]">
+                                        <AdminCommandStrip className="-mx-4 mb-0 border-x-0 md:grid md:grid-cols-[minmax(220px,1fr)_190px]">
                                             <input
                                                 type="search"
                                                 value={customerFilters.search}
@@ -5423,9 +5392,9 @@ const DashboardAdmin = () => {
                                                 <option value="with_bookings">With bookings</option>
                                                 <option value="without_bookings">No bookings</option>
                                             </select>
-                                        </div>
+                                        </AdminCommandStrip>
 
-                                        <div className="staff-table-wrap rounded-2xl border border-[#720101]/10 bg-white shadow-sm">
+                                        <AdminResponsiveTable className="-mx-4">
                                             {customerLoading ? (
                                                 <StaffSkeleton rows={6} label="Loading customer accounts" />
                                             ) : customers.length === 0 ? (
@@ -5493,24 +5462,19 @@ const DashboardAdmin = () => {
                                                     </tbody>
                                                 </table>
                                             )}
-                                        </div>
+                                        </AdminResponsiveTable>
                                         {!customerLoading && customers.length > 0 && (
                                             <PaginationControls pageInfo={paginatedCustomers} onPageChange={setCustomerPage} />
                                         )}
-                                    </div>}
+                                    </AdminSurfaceSection>}
                                 </div>
-                            </div>
+                            </AdminPageSurface>
                         )
                     }
                     {
                         activeTab === 'bookings-intake' && (
-                            <div className="animate-fadeIn">
-                                <div className="admin-compact-command admin-booking-command mb-4">
-                                    <div>
-                                        <p className="admin-kicker">Admin override</p>
-                                        <h3>Booking action desk</h3>
-                                        <p>Create assisted bookings, approve requests, and review adjustments from one queue.</p>
-                                    </div>
+                            <AdminPageSurface>
+                                <AdminCommandStrip className="admin-booking-command">
                                     <div className="admin-stat-strip admin-booking-stat-strip">
                                         {[
                                             { label: 'Current', value: bookingStats.total },
@@ -5527,10 +5491,10 @@ const DashboardAdmin = () => {
                                     <button type="button" onClick={() => setAssistedBookingOpen(true)} className="admin-button-primary admin-booking-command-button inline-flex items-center justify-center px-4 py-2.5 text-sm font-black">
                                         Create booking
                                     </button>
-                                </div>
+                                </AdminCommandStrip>
 
-                                <div className="mb-4 rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
-                                    <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+                                <AdminCommandStrip>
+                                    <div className="flex w-full flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
                                         <div className="relative flex-1">
                                             <svg className="pointer-events-none absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-4.35-4.35m1.85-5.15a7 7 0 11-14 0 7 7 0 0114 0z" />
@@ -5540,7 +5504,7 @@ const DashboardAdmin = () => {
                                                 value={bookingSearch}
                                                 onChange={(e) => setBookingSearch(e.target.value)}
                                                 placeholder="Search booking ref, client, email, phone, event type..."
-                                                className="w-full rounded-lg border border-gray-200 bg-gray-50 py-3 pl-10 pr-4 text-sm font-medium text-gray-800 outline-none transition-all focus:border-indigo-500 focus:bg-white focus:ring-2 focus:ring-indigo-100"
+                                                className="w-full rounded-lg border border-gray-200 bg-gray-50 py-3 pl-10 pr-4 text-sm font-medium text-gray-800 outline-none transition-all focus:border-[#720101] focus:bg-white focus:ring-2 focus:ring-[#720101]/10"
                                             />
                                         </div>
                                         <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
@@ -5550,7 +5514,7 @@ const DashboardAdmin = () => {
                                                         key={filter}
                                                         type="button"
                                                         onClick={() => setBookingStatusFilter(filter)}
-                                                        className={`rounded-md px-4 py-2 text-xs font-black uppercase tracking-wider transition-colors ${bookingStatusFilter === filter ? 'bg-white text-indigo-700 shadow-sm' : 'text-gray-500 hover:text-gray-900'}`}
+                                                        className={`rounded-md px-4 py-2 text-xs font-black uppercase tracking-wider transition-colors ${bookingStatusFilter === filter ? 'bg-white text-[#720101] shadow-sm' : 'text-gray-500 hover:text-gray-900'}`}
                                                     >
                                                         {filter}
                                                     </button>
@@ -5559,7 +5523,7 @@ const DashboardAdmin = () => {
                                             <select
                                                 value={bookingSort}
                                                 onChange={(e) => setBookingSort(e.target.value)}
-                                                className="rounded-lg border border-gray-200 bg-white px-4 py-2.5 text-sm font-bold text-gray-700 outline-none transition-all focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+                                                className="rounded-lg border border-gray-200 bg-white px-4 py-2.5 text-sm font-bold text-gray-700 outline-none transition-all focus:border-[#720101] focus:ring-2 focus:ring-[#720101]/10"
                                             >
                                                 <option value="latest">Latest to Oldest</option>
                                                 <option value="oldest">Oldest to Latest</option>
@@ -5569,7 +5533,7 @@ const DashboardAdmin = () => {
                                             <select
                                                 value={bookingSourceFilter}
                                                 onChange={(e) => setBookingSourceFilter(e.target.value)}
-                                                className="rounded-lg border border-gray-200 bg-white px-4 py-2.5 text-sm font-bold text-gray-700 outline-none transition-all focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+                                                className="rounded-lg border border-gray-200 bg-white px-4 py-2.5 text-sm font-bold text-gray-700 outline-none transition-all focus:border-[#720101] focus:ring-2 focus:ring-[#720101]/10"
                                             >
                                                 <option value="all">All sources</option>
                                                 <option value="customer">Customer submitted</option>
@@ -5579,9 +5543,9 @@ const DashboardAdmin = () => {
                                             </select>
                                         </div>
                                     </div>
-                                </div>
+                                </AdminCommandStrip>
 
-                                <div className="staff-table-wrap rounded-2xl border border-[#720101]/10 bg-white shadow-sm">
+                                <AdminResponsiveTable className="admin-bookings-table-wrap">
                                     {bookingsLoading ? (
                                         <StaffSkeleton rows={7} label="Loading bookings" />
                                     ) : visibleBookings.length === 0 ? (
@@ -5593,55 +5557,64 @@ const DashboardAdmin = () => {
                                             <p className="mt-1 text-sm text-gray-500">Try clearing the search or switching filters.</p>
                                         </div>
                                     ) : (
-                                        <table className="staff-table">
+                                        <table className="staff-table admin-bookings-table">
+                                            <colgroup>
+                                                <col className="admin-bookings-col-ref" />
+                                                <col className="admin-bookings-col-client" />
+                                                <col className="admin-bookings-col-event" />
+                                                <col className="admin-bookings-col-total" />
+                                                <col className="admin-bookings-col-status" />
+                                                <col className="admin-bookings-col-actions" />
+                                            </colgroup>
                                             <thead>
                                                 <tr>
-                                                    <th className="px-6 py-3 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Booking</th>
-                                                    <th className="px-6 py-3 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Client</th>
-                                                    <th className="px-6 py-3 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Event</th>
-                                                    <th className="px-6 py-3 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Total</th>
-                                                    <th className="px-6 py-3 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Status</th>
-                                                    <th className="px-6 py-3 text-right text-xs font-bold text-gray-500 uppercase tracking-wider">Actions</th>
+                                                    <th>Booking</th>
+                                                    <th>Client</th>
+                                                    <th>Event</th>
+                                                    <th className="text-right">Total</th>
+                                                    <th className="text-center">Status</th>
+                                                    <th className="text-right">Actions</th>
                                                 </tr>
                                             </thead>
                                             <tbody>
                                                 {paginatedBookings.items.map(booking => {
                                                     const status = normalizeStatus(booking.status);
                                                     return (
-                                                    <tr key={booking.id} className="hover:bg-gray-50/80 transition-colors cursor-pointer" onClick={() => setEventDetailsModal({ open: true, data: booking })}>
-                                                        <td className="px-6 py-4">
-                                                            <div className="text-sm font-black text-gray-900">{formatBookingRef(booking.id)}</div>
-                                                            <div className="text-xs font-medium text-gray-500">Submitted {formatDate(booking.created_at)}</div>
+                                                    <tr key={booking.id} className="cursor-pointer transition-colors" onClick={() => setEventDetailsModal({ open: true, data: booking })}>
+                                                        <td>
+                                                            <div className="admin-booking-ref">{formatBookingRef(booking.id)}</div>
+                                                            <div className="admin-booking-muted">Submitted {formatDate(booking.created_at)}</div>
                                                             {booking.booking_source && booking.booking_source !== 'customer' && (
-                                                                <div className="mt-1 inline-flex rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-black uppercase tracking-wider text-amber-700">
+                                                                <div className="admin-booking-source">
                                                                     {booking.created_by_staff_label || 'Created by staff'}
                                                                 </div>
                                                             )}
                                                         </td>
-                                                        <td className="px-6 py-4">
-                                                            <div className="text-sm font-bold text-gray-900">{eventDisplayName(booking)}</div>
-                                                            <div className="text-xs font-semibold text-gray-500">{booking.client_full_name || booking.client_name || booking.username || 'Unnamed client'}</div>
-                                                            <div className="text-xs text-gray-500">{booking.client_email || booking.user_email || 'No email'} / {booking.client_phone || booking.user_phone || 'No phone'}</div>
+                                                        <td>
+                                                            <div className="admin-booking-primary">{booking.client_full_name || booking.client_name || booking.username || 'Unnamed client'}</div>
+                                                            <div className="admin-booking-muted admin-booking-truncate">{booking.client_email || booking.user_email || 'No email'}</div>
+                                                            <div className="admin-booking-muted">{booking.client_phone || booking.user_phone || 'No phone'}</div>
                                                         </td>
-                                                        <td className="px-6 py-4">
-                                                            <div className="text-sm font-bold text-gray-900">{formatDate(booking.event_date)} / {formatTime(booking.event_time)}</div>
-                                    <div className="text-xs text-gray-500">{booking.event_type || 'Event'} / {booking.pax} guests</div>
+                                                        <td>
+                                                            <div className="admin-booking-primary admin-booking-truncate">{eventDisplayName(booking)}</div>
+                                                            <div className="admin-booking-date">{formatDate(booking.event_date)} / {formatTime(booking.event_time)}</div>
+                                                            <div className="admin-booking-muted">{booking.event_type || 'Event'} / {booking.pax} guests</div>
                                                         </td>
-                                                        <td className="px-6 py-4">
-                                                            <div className="text-sm font-black text-gray-900">{formatCurrency(getBookingTotal(booking))}</div>
+                                                        <td className="text-right">
+                                                            <div className="admin-booking-money">{formatCurrency(getBookingTotal(booking))}</div>
                                                             {Number(booking.discount_value || 0) > 0 && (
-                                                                <div className="mt-1 inline-flex rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-black uppercase tracking-wider text-emerald-700">
+                                                                <div className="admin-booking-discount">
                                                                     Discounted
                                                                 </div>
                                                             )}
                                                         </td>
-                                                        <td className="px-6 py-4">
-                                                            <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-black uppercase tracking-wider ${bookingStatusStyles[status] || 'bg-gray-100 text-gray-700 border-gray-200'}`}>
+                                                        <td className="text-center">
+                                                            <span className={`admin-booking-status ${bookingStatusStyles[status] || 'bg-gray-100 text-gray-700 border-gray-200'}`}>
                                                                 {status === 'confirmed' ? 'Active' : booking.status}
                                                             </span>
                                                         </td>
-                                                        <td className="px-6 py-4 text-right" onClick={(e) => e.stopPropagation()}>
-                                                            <div className="flex justify-end gap-2">
+                                                        <td className="text-right" onClick={(e) => e.stopPropagation()}>
+                                                            <div className="admin-booking-actions">
                                                                 {status === 'pending' && (
                                                                     <button
                                                                         onClick={(e) => {
@@ -5649,7 +5622,7 @@ const DashboardAdmin = () => {
                                                                             handleApproveBooking(booking);
                                                                         }}
                                                                         disabled={approvingBookingId === booking.id}
-                                                                        className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-black text-white shadow-sm transition-colors hover:bg-emerald-700 disabled:opacity-60"
+                                                                        className="admin-booking-action admin-booking-action-approve"
                                                                     >
                                                                         {approvingBookingId === booking.id ? 'Approving...' : 'Approve'}
                                                                     </button>
@@ -5660,7 +5633,7 @@ const DashboardAdmin = () => {
                                                                         setDiscountForm({ discount_type: booking.discount_type || 'fixed', discount_value: booking.discount_value || 0 });
                                                                         setDiscountModal({ open: true, data: booking });
                                                                     }}
-                                                                    className="rounded-lg bg-indigo-50 px-3 py-2 text-xs font-black text-indigo-700 transition-colors hover:bg-indigo-100"
+                                                                    className="admin-booking-action admin-booking-action-discount"
                                                                 >
                                                                     Discount
                                                                 </button>
@@ -5672,16 +5645,16 @@ const DashboardAdmin = () => {
                                             </tbody>
                                         </table>
                                     )}
-                                </div>
+                                </AdminResponsiveTable>
                                 {!bookingsLoading && visibleBookings.length > 0 && (
                                     <PaginationControls pageInfo={paginatedBookings} onPageChange={setBookingPage} />
                                 )}
-                            </div>
+                            </AdminPageSurface>
                         )
                     }
                     {activeTab === 'calendar' && (
-                        <div className="animate-fadeIn space-y-4">
-                            <div className="admin-panel p-3">
+                        <AdminPageSurface>
+                            <AdminCommandStrip>
                                 <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                                     <div className="flex min-w-0 flex-wrap items-center gap-2 lg:flex-nowrap">
                                         <button type="button" onClick={() => changeAdminCalendarMonth(-1)} className="admin-icon-action" aria-label="Previous month" title="Previous month">
@@ -5720,10 +5693,10 @@ const DashboardAdmin = () => {
                                         </div>
                                     </div>
                                 </div>
-                            </div>
+                            </AdminCommandStrip>
 
                             {adminCalendarView === 'month' ? (
-                                <div className="grid grid-cols-7 overflow-hidden rounded-2xl border border-[#720101]/10 bg-[#f4e7df] shadow-sm">
+                                <div className="grid grid-cols-7 overflow-hidden border-t border-[#720101]/10 bg-[#f4e7df]">
                                     {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((day) => (
                                         <div key={day} className="bg-[#fffaf3] py-3 text-center text-xs font-black uppercase tracking-wide text-slate-500">{day}</div>
                                     ))}
@@ -5753,7 +5726,7 @@ const DashboardAdmin = () => {
                                     })}
                                 </div>
                             ) : (
-                                <div className="staff-table-wrap rounded-2xl border border-[#720101]/10 bg-white shadow-sm">
+                                <AdminResponsiveTable>
                                     <table className="staff-table">
                                         <thead>
                                             <tr>
@@ -5782,29 +5755,38 @@ const DashboardAdmin = () => {
                                             )}
                                         </tbody>
                                     </table>
-                                </div>
+                                </AdminResponsiveTable>
                             )}
                             {bookingsLoading && (
                                 <p className="rounded-xl bg-[#fffaf3] p-4 text-sm font-bold text-slate-500">Loading calendar events...</p>
                             )}
-                        </div>
+                        </AdminPageSurface>
                     )}
                     {activeTab === 'handoff' && (
-                        <div className="animate-fadeIn">
+                        <AdminPageSurface>
                             <Suspense fallback={<StaffSkeleton variant="panel" rows={3} label="Loading handoff board" />}>
-                                <PreparationBoard />
+                                <PreparationBoard surfaceMode="admin-full" />
                             </Suspense>
-                        </div>
+                        </AdminPageSurface>
+                    )}
+                    {activeTab === 'tastings' && (
+                        <AdminPageSurface>
+                            <Suspense fallback={<StaffSkeleton variant="panel" rows={4} label="Loading food tasting queue" />}>
+                                <FoodTastingQueue onToast={showToast} surfaceMode="admin-full" />
+                            </Suspense>
+                        </AdminPageSurface>
                     )}
                     {activeTab === 'history' && (
-                        <EventHistoryPanel role="admin" onToast={showToast} />
+                        <AdminPageSurface>
+                            <EventHistoryPanel role="admin" onToast={showToast} surfaceMode="admin-full" />
+                        </AdminPageSurface>
                     )}
                     {
                         activeTab === 'finance' && (
-                            <div className="animate-fadeIn space-y-3">
-                                <div className="rounded-2xl border border-[#720101]/10 bg-white px-3 py-3 shadow-sm">
-                                    <div className="grid gap-3 2xl:grid-cols-[18rem_minmax(0,1fr)] 2xl:items-center">
-                                        <div className="inline-flex h-11 w-full rounded-xl border border-slate-200 bg-slate-50 p-1">
+                            <AdminPageSurface>
+                                <AdminCommandStrip className="admin-finance-strip">
+                                    <div className="grid w-full gap-0 2xl:grid-cols-[18rem_minmax(0,1fr)] 2xl:items-stretch">
+                                        <div className="inline-flex h-full min-h-14 w-full border-r border-[#720101]/10 bg-slate-50 p-1">
                                             {[
                                                 { id: 'payments', label: 'Payments', count: financePaymentRows.length },
                                                 { id: 'refunds', label: 'Refunds', count: refundStats.count },
@@ -5819,7 +5801,7 @@ const DashboardAdmin = () => {
                                                 </button>
                                             ))}
                                         </div>
-                                        <div className="grid min-w-0 grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-5">
+                                        <div className="grid min-w-0 grid-cols-2 md:grid-cols-3 xl:grid-cols-5">
                                             {[
                                                 { label: 'Expected', value: formatCurrency(financeStats.totalExposure), emphasis: true },
                                                 { label: 'Collected', value: formatCurrency(financeStats.paid), emphasis: true },
@@ -5827,16 +5809,16 @@ const DashboardAdmin = () => {
                                                 { label: 'Review', value: financeStats.pendingPayments },
                                                 { label: 'Overdue', value: financeStats.overdue },
                                             ].map((stat) => (
-                                                <span key={stat.label} className="flex h-14 min-w-0 flex-col justify-center overflow-hidden rounded-xl border border-[#720101]/10 bg-[#fbf8f2] px-3">
+                                                <span key={stat.label} className="flex h-14 min-w-0 flex-col justify-center overflow-hidden border-r border-[#720101]/10 bg-[#fbf8f2] px-3 last:border-r-0">
                                                     <em className="text-[10px] font-black uppercase not-italic tracking-widest text-slate-400">{stat.label}</em>
                                                     <strong className="mt-1 truncate text-lg font-black leading-none text-gray-950">{stat.value}</strong>
                                                 </span>
                                             ))}
                                         </div>
                                     </div>
-                                </div>
+                                </AdminCommandStrip>
 
-                                {activeFinanceSegment === 'payments' && <div className="admin-panel overflow-hidden">
+                                {activeFinanceSegment === 'payments' && <div className="admin-surface-grid overflow-hidden">
                                     <div className="flex flex-col gap-3 border-b border-gray-100 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
                                         <div className="min-w-0">
                                             <h3 className="text-base font-black text-gray-950">Payment work queue</h3>
@@ -5861,7 +5843,7 @@ const DashboardAdmin = () => {
                                             </div>
                                         </div>
                                     ) : (
-                                        <div className="staff-table-wrap">
+                                        <AdminResponsiveTable>
                                             <table className="staff-table">
                                                 <thead>
                                                     <tr>
@@ -5890,7 +5872,7 @@ const DashboardAdmin = () => {
                                                             </td>
                                                             <td className="text-right font-black text-gray-950">{formatCurrency(payment.amount)}</td>
                                                             <td>
-                                                                <span className={`inline-flex rounded-full px-3 py-1 text-xs font-black ${queueLabel === 'Overdue' ? 'bg-red-50 text-red-700' : queueLabel === 'Exception' ? 'bg-amber-50 text-amber-700' : 'bg-indigo-50 text-indigo-700'}`}>
+                                                                <span className={`inline-flex rounded-full px-3 py-1 text-xs font-black ${queueLabel === 'Overdue' ? 'bg-red-50 text-red-700' : queueLabel === 'Exception' ? 'bg-amber-50 text-amber-700' : 'bg-[#fff7e8] text-[#720101]'}`}>
                                                                     {statusLabel}
                                                                 </span>
                                                             </td>
@@ -5907,11 +5889,11 @@ const DashboardAdmin = () => {
                                                     ))}
                                                 </tbody>
                                             </table>
-                                        </div>
+                                        </AdminResponsiveTable>
                                     )}
                                 </div>}
 
-                                {activeFinanceSegment === 'refunds' && <div className="admin-panel overflow-hidden">
+                                {activeFinanceSegment === 'refunds' && <div className="admin-surface-grid overflow-hidden">
                                     <div className="flex flex-col gap-3 border-b border-gray-100 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
                                         <div className="min-w-0">
                                             <h3 className="text-base font-black text-gray-950">Cancelled bookings with refundable payments</h3>
@@ -5952,7 +5934,7 @@ const DashboardAdmin = () => {
                                             </div>
                                         </div>
                                     ) : (
-                                        <div className="staff-table-wrap">
+                                        <AdminResponsiveTable>
                                             <table className="staff-table">
                                                 <thead>
                                                     <tr>
@@ -5985,15 +5967,16 @@ const DashboardAdmin = () => {
                                                                 <td className="px-6 py-4 text-right">
                                                                     <div className="text-sm font-black text-[#720101]">{formatCurrency(refundAmount)}</div>
                                                                     <div className="text-xs font-semibold text-gray-400">{formatCurrency(penalty)} retained</div>
+                                                                    <div className="mt-1 text-[10px] font-black uppercase tracking-wide text-gray-500">{item.refund_status || 'Needs Review'}</div>
                                                                 </td>
                                                                 <td className="px-6 py-4 text-right">
                                                                     <button
                                                                         type="button"
-                                                                        onClick={() => handleProcessRefund(item.booking_id)}
+                                                                        onClick={() => handleProcessRefund(item)}
                                                                         disabled={processingRefundId === item.booking_id}
                                                                         className="rounded-lg bg-[#720101] px-4 py-2 text-xs font-black text-white transition-colors hover:bg-[#5f0101] disabled:opacity-60"
                                                                     >
-                                                                        {processingRefundId === item.booking_id ? 'Processing...' : 'Process Refund'}
+                                                                        {processingRefundId === item.booking_id ? 'Processing...' : item.refund_cases?.[0]?.next_actions?.includes('retry_provider_refund') ? 'Retry Provider' : 'Process Refund'}
                                                                     </button>
                                                                 </td>
                                                             </tr>
@@ -6001,28 +5984,28 @@ const DashboardAdmin = () => {
                                                     })}
                                                 </tbody>
                                             </table>
-                                        </div>
+                                        </AdminResponsiveTable>
                                     )}
                                 </div>}
-                            </div>
+                            </AdminPageSurface>
                         )
                     }
                     {
                         activeTab === 'system-audit' && (
-                            <div className="animate-fadeIn space-y-5">
-                                <div className="flex justify-end">
+                            <AdminPageSurface>
+                                <AdminCommandStrip className="justify-end">
                                     <button onClick={() => { bustAdminCache('/api/admin/audits?per_page=25'); fetchAudits(); }} className="admin-button-secondary px-4 py-2 text-sm font-bold">
                                         Refresh Logs
                                     </button>
-                                </div>
+                                </AdminCommandStrip>
 
-                                <div className="admin-panel p-4">
+                                <AdminCommandStrip>
                                     <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
                                         <div className="relative flex-1">
                                             <svg className="pointer-events-none absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-4.35-4.35m1.85-5.15a7 7 0 11-14 0 7 7 0 0114 0z" />
                                             </svg>
-                                            <input value={auditSearch} onChange={(e) => setAuditSearch(e.target.value)} placeholder="Search staff member, activity, or workspace..." className="w-full border border-gray-200 bg-white py-3 pl-10 pr-4 text-sm font-medium outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100" />
+                                            <input value={auditSearch} onChange={(e) => setAuditSearch(e.target.value)} placeholder="Search staff member, activity, or workspace..." className="w-full border border-gray-200 bg-white py-3 pl-10 pr-4 text-sm font-medium outline-none focus:border-[#720101] focus:ring-2 focus:ring-[#720101]/10" />
                                         </div>
                                         <select value={auditRoleFilter} onChange={(e) => setAuditRoleFilter(e.target.value)} className="admin-select px-4 py-3 text-sm font-bold outline-none">
                                             <option value="All">All Roles</option>
@@ -6044,9 +6027,9 @@ const DashboardAdmin = () => {
                                             {auditResultOptions.map((result) => <option key={result} value={result}>{result}</option>)}
                                         </select>
                                     </div>
-                                </div>
+                                </AdminCommandStrip>
 
-                                <div className="admin-panel overflow-hidden">
+                                <div className="admin-surface-grid overflow-hidden">
                                     {auditLoading ? (
                                         <StaffSkeleton rows={7} label="Loading activity log" />
                                     ) : visibleAudits.length === 0 ? (
@@ -6094,7 +6077,7 @@ const DashboardAdmin = () => {
                                 {!auditLoading && visibleAudits.length > 0 && (
                                     <PaginationControls pageInfo={paginatedAudits} onPageChange={setAuditPage} />
                                 )}
-                            </div>
+                            </AdminPageSurface>
                         )
                     }
                 </div>
@@ -6128,24 +6111,24 @@ const DashboardAdmin = () => {
                                     {empModal.data?.role !== 'Client' && (
                                         <div>
                                             <label className="block text-xs font-bold text-gray-700 mb-1 uppercase tracking-wide">Full Name</label>
-                                            <input type="text" required value={empForm.full_name} onChange={e => setEmpForm({ ...empForm, full_name: e.target.value })} className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:bg-white focus:ring-2 focus:ring-indigo-500 outline-none transition-all text-sm font-medium" />
+                                            <input type="text" required value={empForm.full_name} onChange={e => setEmpForm({ ...empForm, full_name: e.target.value })} className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:bg-white focus:ring-2 focus:ring-[#720101] outline-none transition-all text-sm font-medium" />
                                             {empFormErrors.full_name && <p className="mt-1 text-xs font-bold text-red-600">{empFormErrors.full_name[0]}</p>}
                                         </div>
                                     )}
                                     <div>
                                         <label className="block text-xs font-bold text-gray-700 mb-1 uppercase tracking-wide">Username</label>
-                                        <input type="text" required value={empForm.username} onChange={e => setEmpForm({ ...empForm, username: e.target.value })} className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:bg-white focus:ring-2 focus:ring-indigo-500 outline-none transition-all text-sm font-medium" />
+                                        <input type="text" required value={empForm.username} onChange={e => setEmpForm({ ...empForm, username: e.target.value })} className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:bg-white focus:ring-2 focus:ring-[#720101] outline-none transition-all text-sm font-medium" />
                                         {empFormErrors.username && <p className="mt-1 text-xs font-bold text-red-600">{empFormErrors.username[0]}</p>}
                                     </div>
                                     <div className="grid grid-cols-2 gap-4">
                                         <div>
                                             <label className="block text-xs font-bold text-gray-700 mb-1 uppercase tracking-wide">Email (Optional)</label>
-                                            <input type="email" value={empForm.email} onChange={e => setEmpForm({ ...empForm, email: e.target.value })} className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:bg-white focus:ring-2 focus:ring-indigo-500 outline-none transition-all text-sm" />
+                                            <input type="email" value={empForm.email} onChange={e => setEmpForm({ ...empForm, email: e.target.value })} className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:bg-white focus:ring-2 focus:ring-[#720101] outline-none transition-all text-sm" />
                                             {empFormErrors.email && <p className="mt-1 text-xs font-bold text-red-600">{empFormErrors.email[0]}</p>}
                                         </div>
                                         <div>
                                             <label className="block text-xs font-bold text-gray-700 mb-1 uppercase tracking-wide">Phone (Optional)</label>
-                                            <input type="text" value={empForm.phone} onChange={e => setEmpForm({ ...empForm, phone: e.target.value })} className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:bg-white focus:ring-2 focus:ring-indigo-500 outline-none transition-all text-sm" />
+                                            <input type="text" value={empForm.phone} onChange={e => setEmpForm({ ...empForm, phone: e.target.value })} className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:bg-white focus:ring-2 focus:ring-[#720101] outline-none transition-all text-sm" />
                                             {empFormErrors.phone && <p className="mt-1 text-xs font-bold text-red-600">{empFormErrors.phone[0]}</p>}
                                         </div>
                                     </div>
@@ -6157,7 +6140,7 @@ const DashboardAdmin = () => {
                                     {empModal.mode === 'edit' && (
                                         <div>
                                             <label className="block text-xs font-bold text-gray-700 mb-1 uppercase tracking-wide">New Password</label>
-                                            <input type="text" minLength="6" value={empForm.password} onChange={e => setEmpForm({ ...empForm, password: e.target.value })} placeholder="Leave blank to keep current" className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:bg-white focus:ring-2 focus:ring-indigo-500 outline-none transition-all text-sm" />
+                                            <input type="text" minLength="6" value={empForm.password} onChange={e => setEmpForm({ ...empForm, password: e.target.value })} placeholder="Leave blank to keep current" className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:bg-white focus:ring-2 focus:ring-[#720101] outline-none transition-all text-sm" />
                                             {empFormErrors.password && <p className="mt-1 text-xs font-bold text-red-600">{empFormErrors.password[0]}</p>}
                                         </div>
                                     )}
@@ -6197,7 +6180,7 @@ const DashboardAdmin = () => {
                                 </div>
                                 <div className="mt-8 flex justify-end gap-3">
                                     <button type="button" onClick={() => setEmpModal({ open: false, mode: 'add', data: null })} className="px-5 py-2.5 text-sm font-bold text-gray-600 hover:bg-gray-100 rounded-lg transition-colors">Cancel</button>
-                                    <button type="submit" disabled={empFormLoading} className="px-5 py-2.5 text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg shadow-sm transition-colors disabled:opacity-50">
+                                    <button type="submit" disabled={empFormLoading} className="px-5 py-2.5 text-sm font-bold text-white bg-[#720101] hover:bg-[#5a0101] rounded-lg shadow-sm transition-colors disabled:opacity-50">
                                         {empFormLoading ? 'Configuring...' : empModal.mode === 'add' ? 'Create Account' : 'Update Account'}
                                     </button>
                                 </div>
@@ -6222,11 +6205,11 @@ const DashboardAdmin = () => {
                                     <div>
                                         <label className="block text-xs font-bold text-gray-700 mb-2 uppercase tracking-wide">Discount Type</label>
                                         <div className="grid grid-cols-2 gap-3">
-                                            <label className={`border rounded-lg p-3 flex cursor-pointer transition-colors ${discountForm.discount_type === 'fixed' ? 'bg-indigo-50 border-indigo-500 text-indigo-700' : 'bg-gray-50 border-gray-200 text-gray-600 hover:bg-gray-100'}`}>
+                                            <label className={`border rounded-lg p-3 flex cursor-pointer transition-colors ${discountForm.discount_type === 'fixed' ? 'bg-[#fff7e8] border-[#720101] text-[#720101]' : 'bg-gray-50 border-gray-200 text-gray-600 hover:bg-gray-100'}`}>
                                                 <input type="radio" name="discount_type" value="fixed" checked={discountForm.discount_type === 'fixed'} onChange={() => setDiscountForm({ ...discountForm, discount_type: 'fixed' })} className="hidden" />
                                                 <div className="font-bold text-sm text-center w-full">Fixed Amount (₱)</div>
                                             </label>
-                                            <label className={`border rounded-lg p-3 flex cursor-pointer transition-colors ${discountForm.discount_type === 'percentage' ? 'bg-indigo-50 border-indigo-500 text-indigo-700' : 'bg-gray-50 border-gray-200 text-gray-600 hover:bg-gray-100'}`}>
+                                            <label className={`border rounded-lg p-3 flex cursor-pointer transition-colors ${discountForm.discount_type === 'percentage' ? 'bg-[#fff7e8] border-[#720101] text-[#720101]' : 'bg-gray-50 border-gray-200 text-gray-600 hover:bg-gray-100'}`}>
                                                 <input type="radio" name="discount_type" value="percentage" checked={discountForm.discount_type === 'percentage'} onChange={() => setDiscountForm({ ...discountForm, discount_type: 'percentage' })} className="hidden" />
                                                 <div className="font-bold text-sm text-center w-full">Percentage (%)</div>
                                             </label>
@@ -6242,7 +6225,7 @@ const DashboardAdmin = () => {
                                                 min="0"
                                                 value={discountForm.discount_value}
                                                 onChange={e => setDiscountForm({ ...discountForm, discount_value: parseFloat(e.target.value) || 0 })}
-                                                className={`w-full ${discountForm.discount_type === 'fixed' ? 'pl-8' : 'px-4'} py-3 bg-gray-50 border border-gray-200 rounded-lg focus:bg-white focus:ring-2 focus:ring-indigo-500 outline-none transition-all text-lg font-bold`}
+                                                className={`w-full ${discountForm.discount_type === 'fixed' ? 'pl-8' : 'px-4'} py-3 bg-gray-50 border border-gray-200 rounded-lg focus:bg-white focus:ring-2 focus:ring-[#720101] outline-none transition-all text-lg font-bold`}
                                             />
                                             {discountForm.discount_type === 'percentage' && <span className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-500 font-bold">%</span>}
                                         </div>
@@ -6250,7 +6233,7 @@ const DashboardAdmin = () => {
                                 </div>
                                 <div className="mt-8 flex justify-end gap-3">
                                     <button type="button" onClick={() => setDiscountModal({ open: false, data: null })} className="px-5 py-2.5 text-sm font-bold text-gray-600 hover:bg-gray-100 rounded-lg transition-colors">Cancel</button>
-                                    <button type="submit" disabled={discountLoading} className="px-5 py-2.5 text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg shadow-sm transition-colors disabled:opacity-50">
+                                    <button type="submit" disabled={discountLoading} className="px-5 py-2.5 text-sm font-bold text-white bg-[#720101] hover:bg-[#5a0101] rounded-lg shadow-sm transition-colors disabled:opacity-50">
                                         {discountLoading ? 'Applying...' : 'Apply Discount'}
                                     </button>
                                 </div>
@@ -6336,7 +6319,7 @@ const DashboardAdmin = () => {
                                                         <td className="px-4 py-3 text-center text-gray-600">{staffPaymentStatus(payment.status, payment.due_date).label}</td>
                                                         <td className="px-4 py-3 text-right">
                                                             {payment.status === 'Pending' || payment.status === 'Rejected' ? (
-                                                                <button onClick={() => setEditPaymentModal({ isOpen: true, payment, booking: eventDetailsModal.data })} className="rounded-lg bg-indigo-50 px-3 py-2 text-xs font-black text-indigo-700 transition-colors hover:bg-indigo-100">Edit Term</button>
+                                                                <button onClick={() => setEditPaymentModal({ isOpen: true, payment, booking: eventDetailsModal.data })} className="rounded-lg bg-[#fff7e8] px-3 py-2 text-xs font-black text-[#720101] transition-colors hover:bg-[#fff1d3]">Edit term</button>
                                                             ) : (
                                                                 <span className="text-xs font-semibold text-gray-400">Locked</span>
                                                             )}
@@ -6408,7 +6391,7 @@ const DashboardAdmin = () => {
                     <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto animate-fadeIn">
                         <div className="flex items-center justify-between p-6 border-b border-gray-100">
                             <h3 className="text-lg font-bold text-gray-900 flex items-center gap-2">
-                                <svg className="w-5 h-5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={menuItemModal.mode === 'edit' ? 'M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z' : 'M12 4v16m8-8H4'} /></svg>
+                                <svg className="w-5 h-5 text-[#720101]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={menuItemModal.mode === 'edit' ? 'M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z' : 'M12 4v16m8-8H4'} /></svg>
                                 {menuItemModal.mode === 'edit' ? 'Edit Menu Item' : 'Add New Menu Item'}
                             </h3>
                             <button onClick={() => setMenuItemModal({ open: false, mode: 'add', data: null })} className="text-gray-400 hover:text-gray-600 transition-colors">
@@ -6426,7 +6409,7 @@ const DashboardAdmin = () => {
                                     value={menuItemForm.name}
                                     onChange={e => setMenuItemForm({ ...menuItemForm, name: e.target.value })}
                                     placeholder="e.g. Garlic Butter Shrimp"
-                                    className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-indigo-200 focus:border-indigo-500 outline-none transition-all text-sm"
+                                    className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-[#720101]/10 focus:border-[#720101] outline-none transition-all text-sm"
                                 />
                             </div>
 
@@ -6436,7 +6419,7 @@ const DashboardAdmin = () => {
                                 <select
                                     value={menuItemForm.category}
                                     onChange={e => setMenuItemForm({ ...menuItemForm, category: e.target.value })}
-                                    className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-indigo-200 focus:border-indigo-500 outline-none transition-all text-sm bg-white capitalize"
+                                    className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-[#720101]/10 focus:border-[#720101] outline-none transition-all text-sm bg-white capitalize"
                                 >
                                     <option value="starter">Starter</option>
                                     <option value="main">Main</option>
@@ -6458,7 +6441,7 @@ const DashboardAdmin = () => {
                                         value={menuItemForm.cost_per_head}
                                         onChange={e => setMenuItemForm({ ...menuItemForm, cost_per_head: e.target.value })}
                                         placeholder="0"
-                                        className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-indigo-200 focus:border-indigo-500 outline-none transition-all text-sm"
+                                        className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-[#720101]/10 focus:border-[#720101] outline-none transition-all text-sm"
                                     />
                                 </div>
                                 <div>
@@ -6470,7 +6453,7 @@ const DashboardAdmin = () => {
                                         value={menuItemForm.price_adj}
                                         onChange={e => setMenuItemForm({ ...menuItemForm, price_adj: e.target.value })}
                                         placeholder="0"
-                                        className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-indigo-200 focus:border-indigo-500 outline-none transition-all text-sm"
+                                        className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-[#720101]/10 focus:border-[#720101] outline-none transition-all text-sm"
                                     />
                                 </div>
                             </div>
@@ -6483,7 +6466,7 @@ const DashboardAdmin = () => {
                                     value={menuItemForm.image}
                                     onChange={e => setMenuItemForm({ ...menuItemForm, image: e.target.value })}
                                     placeholder="https://images.unsplash.com/..."
-                                    className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-indigo-200 focus:border-indigo-500 outline-none transition-all text-sm"
+                                    className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-[#720101]/10 focus:border-[#720101] outline-none transition-all text-sm"
                                 />
                                 <p className="text-xs text-gray-400 mt-1">Leave blank to use a standard menu image.</p>
                             </div>
@@ -6496,7 +6479,7 @@ const DashboardAdmin = () => {
                                     value={menuItemForm.description}
                                     onChange={e => setMenuItemForm({ ...menuItemForm, description: e.target.value })}
                                     placeholder="A brief description of the dish..."
-                                    className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-indigo-200 focus:border-indigo-500 outline-none transition-all text-sm resize-none"
+                                    className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-[#720101]/10 focus:border-[#720101] outline-none transition-all text-sm resize-none"
                                 />
                             </div>
 
@@ -6506,7 +6489,7 @@ const DashboardAdmin = () => {
                                     type="checkbox"
                                     checked={menuItemForm.is_best_seller}
                                     onChange={e => setMenuItemForm({ ...menuItemForm, is_best_seller: e.target.checked })}
-                                    className="w-5 h-5 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                                    className="w-5 h-5 rounded border-gray-300 text-[#720101] focus:ring-[#720101]"
                                 />
                                 <span className="text-sm font-medium text-gray-700">Mark as Best Seller</span>
                             </label>
@@ -6523,9 +6506,9 @@ const DashboardAdmin = () => {
                                 <button
                                     type="submit"
                                     disabled={menuItemFormLoading}
-                                    className="px-6 py-2.5 text-sm font-bold text-white bg-indigo-600 rounded-xl hover:bg-indigo-700 transition-colors shadow-md disabled:opacity-50"
+                                    className="px-6 py-2.5 text-sm font-bold text-white bg-[#720101] rounded-xl hover:bg-[#5a0101] transition-colors shadow-md disabled:opacity-50"
                                 >
-                                    {menuItemFormLoading ? (menuItemModal.mode === 'edit' ? 'Saving...' : 'Adding...') : (menuItemModal.mode === 'edit' ? 'Save Changes' : 'Add Menu Item')}
+                                    {menuItemFormLoading ? (menuItemModal.mode === 'edit' ? 'Saving...' : 'Adding...') : (menuItemModal.mode === 'edit' ? 'Save changes' : 'Create menu item')}
                                 </button>
                             </div>
                         </form>

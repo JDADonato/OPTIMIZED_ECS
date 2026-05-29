@@ -51,4 +51,31 @@ class PostgresBooleanModelTest extends TestCase
         $this->assertSame('false', $feedback->getAttributes()['testimonial_permission']);
         $this->assertSame('true', $feedback->getAttributes()['follow_up_required']);
     }
+
+    public function test_public_catalog_controllers_do_not_compare_boolean_columns_to_integers(): void
+    {
+        $controllers = [
+            app_path('Http/Controllers/PackageController.php'),
+            app_path('Http/Controllers/EventTypeController.php'),
+            app_path('Http/Controllers/BookingController.php'),
+        ];
+
+        foreach ($controllers as $controller) {
+            $source = file_get_contents($controller);
+
+            $this->assertStringNotContainsString("where('is_active', true", $source, $controller);
+            $this->assertStringNotContainsString('where("is_active", true', $source, $controller);
+            $this->assertStringNotContainsString("where('is_active', DB::raw", $source, $controller);
+            $this->assertStringNotContainsString("where('is_active', \\Illuminate\\Support\\Facades\\DB::raw", $source, $controller);
+        }
+    }
+
+    public function test_notification_resource_version_does_not_aggregate_uuid_ids(): void
+    {
+        $source = file_get_contents(app_path('Http/Controllers/NotificationController.php'));
+
+        $this->assertStringNotContainsString("max('id')", $source);
+        $this->assertStringNotContainsString('max("id")', $source);
+        $this->assertStringContainsString("value('id')", $source);
+    }
 }

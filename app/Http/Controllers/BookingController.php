@@ -16,7 +16,10 @@ use App\Notifications\NewBookingNotification;
 use App\Services\BookingValidationService;
 use App\Services\CalendarAvailabilityService;
 use App\Services\ConversionEventService;
+use App\Services\NotificationRecipientService;
+use App\Services\OperationalBroadcastService;
 use App\Services\PaymentEventService;
+use App\Services\UploadRegistryService;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -24,7 +27,6 @@ use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
-use Illuminate\Support\Facades\Notification;
 use Illuminate\Support\Facades\Schema;
 
 /**
@@ -186,12 +188,14 @@ class BookingController extends Controller
         // ─── Send Notifications ───
         try {
             // Notify admins/marketing of new booking
-            $admins = User::whereIn('role', ['Admin', 'Marketing'])->get();
-            Notification::send($admins, new NewBookingNotification($booking));
+            app(NotificationRecipientService::class)
+                ->sendToRoles(['Admin', 'Marketing'], new NewBookingNotification($booking), 'new_booking');
         } catch (\Exception $e) {
             Log::error("Notification sending failed: {$e->getMessage()}");
             // Don't fail the booking if notifications fail
         }
+        app(OperationalBroadcastService::class)
+            ->bookingChanged($booking->fresh(), 'created', 'New booking submitted.');
 
         return response()->json([
             'message'   => 'Booking created successfully!',
@@ -244,14 +248,16 @@ class BookingController extends Controller
             ]);
 
         try {
-            $staff = User::whereIn('role', ['Admin', 'Marketing'])->get();
-            Notification::send($staff, new NewBookingNotification($booking));
+            app(NotificationRecipientService::class)
+                ->sendToRoles(['Admin', 'Marketing'], new NewBookingNotification($booking), 'clarification_received');
         } catch (\Throwable $e) {
             Log::warning('Clarification response notification failed.', [
                 'booking_id' => $booking->id,
                 'error' => $e->getMessage(),
             ]);
         }
+        app(OperationalBroadcastService::class)
+            ->bookingChanged($booking->fresh(), 'clarification_received', 'Customer sent requested booking details.');
 
         return response()->json([
             'message' => 'Your response was sent to the team.',
@@ -416,6 +422,9 @@ class BookingController extends Controller
             $themeUploads = json_encode($themeUploads);
         }
 
+        app(UploadRegistryService::class)
+            ->attachBookingThemeUploads($booking, $themeUploads, $request->user());
+
         $booking->update([
             'reservation_time'      => $request->reservation_time,
             'serving_time'          => $request->serving_time,
@@ -444,6 +453,9 @@ class BookingController extends Controller
                 'metadata' => ['booking_id' => $booking->id, 'event' => 'booking_details_updated'],
             ]);
         }
+
+        app(OperationalBroadcastService::class)
+            ->bookingChanged($booking->fresh(), 'event_details_updated', 'Booking details updated.');
 
         return response()->json(['message' => 'Event details updated successfully!']);
     }
@@ -493,7 +505,7 @@ class BookingController extends Controller
             return response()->json(['error' => 'Please select at least one dish.'], 422);
         }
 
-        $menuItems = MenuItem::whereIn('id', $menuItemIds)->where('is_active', \Illuminate\Support\Facades\DB::raw('true'))->get()->keyBy('id');
+        $menuItems = MenuItem::whereIn('id', $menuItemIds)->whereRaw('is_active is true')->get()->keyBy('id');
         if ($menuItems->count() !== $menuItemIds->unique()->count()) {
             return response()->json(['error' => 'One or more selected dishes are unavailable. Please refresh your menu.'], 422);
         }
@@ -506,10 +518,12 @@ class BookingController extends Controller
 
         DB::transaction(function () use ($booking, $selectedMenu, $newTotal) {
             $paidTotal = $booking->payments()
+                ->active()
                 ->whereIn('status', ['Paid', 'Verified'])
                 ->sum('amount');
 
             $pendingPayments = $booking->payments()
+                ->active()
                 ->whereIn('status', ['Pending', 'Failed', 'Rejected'])
                 ->orderByRaw("CASE payment_type WHEN 'Reservation' THEN 1 WHEN 'DownPayment' THEN 2 WHEN 'Final' THEN 3 ELSE 4 END")
                 ->get();
@@ -543,16 +557,15 @@ class BookingController extends Controller
         });
 
         $booking->refresh()->load('user');
-        if ($booking->user) {
-            $booking->user->notify(new \App\Notifications\ClientMenuUpdatedNotification($booking, $newTotal));
-        }
+        app(NotificationRecipientService::class)
+            ->sendToUser($booking->user, new \App\Notifications\ClientMenuUpdatedNotification($booking, $newTotal), 'client_menu_updated');
 
-        $staff = \App\Models\User::whereIn('role', ['Marketing', 'Accounting', 'Admin'])->get();
-        foreach ($staff as $user) {
-            $user->notify(new \App\Notifications\StaffMenuUpdatedNotification($booking, $newTotal, $oldTotal));
-        }
+        app(NotificationRecipientService::class)
+            ->sendToRoles(['Marketing', 'Accounting', 'Admin'], new \App\Notifications\StaffMenuUpdatedNotification($booking, $newTotal, $oldTotal), 'staff_menu_updated');
 
         $this->recordCustomerMenuUpdate($request, $booking, $oldTotal, (float) $newTotal);
+        app(OperationalBroadcastService::class)
+            ->bookingChanged($booking->fresh(), 'menu_updated', 'Menu and pricing updated.');
 
         if ($request->wantsJson()) {
             return response()->json([
@@ -575,7 +588,7 @@ class BookingController extends Controller
         }
 
         $menuItems = MenuItem::whereIn('id', $menuItemIds)
-            ->where('is_active', DB::raw('true'))
+            ->whereRaw('is_active is true')
             ->get()
             ->keyBy('id');
 
@@ -597,10 +610,12 @@ class BookingController extends Controller
 
         DB::transaction(function () use ($booking, $newTotal, &$affectedPayments, &$paidTotal) {
             $paidTotal = (float) $booking->payments()
+                ->active()
                 ->whereIn('status', ['Paid', 'Verified'])
                 ->sum('amount');
 
             $pendingPayments = $booking->payments()
+                ->active()
                 ->whereIn('status', ['Pending', 'Failed', 'Rejected'])
                 ->orderByRaw("CASE payment_type WHEN 'Reservation' THEN 1 WHEN 'DownPayment' THEN 2 WHEN 'Final' THEN 3 ELSE 4 END")
                 ->get();
@@ -728,17 +743,42 @@ class BookingController extends Controller
     }
 
     /**
-     * Remove a booking from the user's history (soft delete or simply hide).
+     * Hide an inactive booking from the customer's own history without deleting business records.
      */
-    public function removeHistory(int $id)
+    public function hideFromHistory(int $id)
     {
         $userId = Auth::id();
-        $booking = Booking::where('id', $id)->where('user_id', $userId)->first();
-        if ($booking) {
-            // Either delete permanently or set a hidden flag
-            $booking->delete(); // Assuming SoftDeletes is used, otherwise maybe we just delete it or add a hidden_from_history column.
+        $booking = Booking::with(['payments' => fn ($query) => $query->active(), 'refundCases', 'preparationTasks'])
+            ->where('id', $id)
+            ->where('user_id', $userId)
+            ->first();
+
+        if (!$booking) {
+            return response()->json(['error' => 'Booking not found.'], 404);
         }
-        return response()->json(['message' => 'History removed.']);
+
+        $status = strtolower((string) $booking->status);
+        $eventDate = $booking->event_date ? Carbon::parse($booking->event_date)->startOfDay() : null;
+        $isInactive = in_array($status, ['cancelled', 'canceled', 'completed', 'expired'], true)
+            || ($eventDate && $eventDate->isPast() && !in_array($status, ['pending', 'confirmed'], true));
+        $hasOpenPayments = $booking->payments->contains(fn ($payment) => !in_array($payment->status, ['Paid', 'Verified', 'Refunded'], true));
+        $hasOpenRefunds = $booking->refundCases->contains(fn ($case) => !in_array($case->status, ['Refunded', 'Completed', 'Closed', 'Manual Refunded', 'Forfeited', 'No Refund Due', 'Rejected', 'Cancelled'], true));
+        $hasOpenPreparation = $booking->preparationTasks->contains(fn ($task) => !in_array($task->status, ['Done', 'Completed', 'done', 'completed'], true));
+
+        if (!$isInactive || $hasOpenPayments || $hasOpenRefunds || $hasOpenPreparation) {
+            return response()->json([
+                'error' => 'Only inactive bookings with no open payment, refund, or preparation work can be hidden from history.',
+            ], 422);
+        }
+
+        $booking->forceFill(['hidden_from_customer_history_at' => now()])->save();
+
+        return response()->json(['message' => 'Booking hidden from your history.']);
+    }
+
+    public function removeHistory(int $id)
+    {
+        return $this->hideFromHistory($id);
     }
 
     /**
@@ -769,6 +809,8 @@ class BookingController extends Controller
         }
 
         $booking->update(['status' => 'Cancelled']);
+        app(OperationalBroadcastService::class)
+            ->bookingChanged($booking->fresh(), 'cancelled', 'Booking cancelled.');
 
         return response()->json(['message' => 'Booking cancelled successfully.']);
     }
@@ -843,7 +885,9 @@ class BookingController extends Controller
             }
         }
 
-        $booking->load(['user', 'assignee', 'reviewTasks', 'preparationTasks', 'payments']);
+        $booking->load(['user', 'assignee', 'reviewTasks', 'preparationTasks', 'payments' => fn ($query) => $query->active()]);
+        app(OperationalBroadcastService::class)
+            ->bookingChanged($booking->fresh(), 'updated', 'Booking details updated.');
 
         return response()->json([
             'message' => 'Booking updated successfully.',
@@ -878,6 +922,7 @@ class BookingController extends Controller
         $payment = null;
         if ($request->filled('payment_id')) {
             $payment = Payment::where('id', $request->integer('payment_id'))
+                ->active()
                 ->where('booking_id', $booking->id)
                 ->first();
         }
@@ -906,7 +951,7 @@ class BookingController extends Controller
 
     public function preview(Booking $booking)
     {
-        $booking->load(['user', 'assignee', 'payments', 'reviewTasks', 'preparationTasks']);
+        $booking->load(['user', 'assignee', 'payments' => fn ($query) => $query->active(), 'reviewTasks', 'preparationTasks']);
 
         return response()->json([
             'preview' => true,

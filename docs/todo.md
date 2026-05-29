@@ -60,6 +60,14 @@ Done when:
 - Failed mail attempts are visible in logs.
 - Staff can trust announcement and reminder sends.
 
+Production operations checklist:
+
+- Queue worker is running for queued email and notification jobs.
+- Laravel scheduler is running so due announcements publish and event lifecycle jobs execute.
+- Reverb is running for realtime chat updates.
+- PayMongo webhook endpoint is reachable over HTTPS and signature verification is enabled.
+- Mail delivery has been verified with real sender/domain credentials.
+
 ## 3. Browser Role Smoke Tests
 
 Run a real browser pass after the latest backend and dashboard changes.
@@ -225,4 +233,3 @@ These are still useful product improvements, but they should come after payment,
   - PayMongo reconciliation
   - feedback requests
   - scheduled announcement publishing
-

@@ -3,6 +3,7 @@ import { useAuth } from '../context/AuthContext';
 import { router } from '@inertiajs/react';
 import ReceiptModal from '../Components/common/ReceiptModal';
 import ConfirmModal from '../Components/common/ConfirmModal';
+import PromptModal from '../Components/common/PromptModal';
 import PaymentTermEditorModal from '../Components/finance/PaymentTermEditorModal';
 import useDebouncedValue from '../hooks/useDebouncedValue';
 import useSmartRefresh from '../hooks/useSmartRefresh';
@@ -16,10 +17,12 @@ import EventHistoryPanel from '../Components/staff/EventHistoryPanel';
 import EventDetailDrawer from '../Components/staff/EventDetailDrawer';
 import NextActionPanel from '../Components/staff/NextActionPanel';
 import StaffStatusBadge from '../Components/staff/StaffStatusBadge';
+import RoleSettingsPanel from '../Components/staff/RoleSettingsPanel';
 import StaffSkeleton, { StaffWorkspaceSkeleton } from '../Components/staff/StaffSkeleton';
 import { staffPaymentStatus } from '../utils/statusLabels';
 import csrfFetch from '../utils/csrf';
 import { clearSmartCacheForPrefix, fetchSmartResource, getUserScopedCacheKey, readSmartCache } from '../utils/smartResource';
+import { operationalChannelsForUser } from '../utils/liveChannels';
 
 const PAYMENT_TYPE_LABELS = {
     Reservation: { label: 'Reservation Fee', pct: '10%', icon: 'R' },
@@ -28,10 +31,11 @@ const PAYMENT_TYPE_LABELS = {
 };
 
 const eventDisplayName = (booking) => booking?.event_display_name || booking?.event_name || booking?.event_type || booking?.package_name || (booking?.id ? `Booking #${booking.id}` : 'Eloquente event');
-const ACCOUNTING_WORKSPACE_TABS = ['today', 'payments', 'refunds', 'ledger', 'history'];
+const ACCOUNTING_WORKSPACE_TABS = ['today', 'payments', 'reconciliation', 'refunds', 'ledger', 'settings', 'history'];
 const ACCOUNTING_TAB_ALIASES = {
     bookings: 'payments',
-    reconciliation: 'payments',
+    exceptions: 'reconciliation',
+    settings: 'settings',
 };
 
 const readInitialAccountingSegment = () => {
@@ -42,14 +46,16 @@ const readInitialAccountingSegment = () => {
 
 const DashboardAccounting = () => {
     const { user, logout } = useAuth();
+    const accountingWorkspacePrefs = user?.profile_preferences?.staff_workspace?.accounting || {};
+    const accountingDefaultTab = ACCOUNTING_WORKSPACE_TABS.includes(accountingWorkspacePrefs.default_tab) ? accountingWorkspacePrefs.default_tab : 'today';
     const [activeTab, setActiveTab] = useStaffWorkspaceState({
         storageKey: 'ecs:staff-workspace:accounting',
-        defaultTab: 'today',
+        defaultTab: accountingDefaultTab,
         allowedTabs: ACCOUNTING_WORKSPACE_TABS,
         tabAliases: ACCOUNTING_TAB_ALIASES,
     });
-    const [paymentSegment, setPaymentSegment] = useState(readInitialAccountingSegment);
-    const [refundSegment, setRefundSegment] = useState('needs_review');
+    const [paymentSegment, setPaymentSegment] = useState(() => accountingWorkspacePrefs.payment_segment || readInitialAccountingSegment());
+    const [refundSegment, setRefundSegment] = useState(accountingWorkspacePrefs.refund_segment || 'needs_review');
     const [bookings, setBookings] = useState([]);
     const [accountingSummary, setAccountingSummary] = useState(null);
     const [ledgerPayments, setLedgerPayments] = useState([]);
@@ -59,7 +65,8 @@ const DashboardAccounting = () => {
     const [expandedBooking, setExpandedBooking] = useState(null);
     const [receiptModal, setReceiptModal] = useState({ isOpen: false, payment: null, booking: null });
     const [editPaymentModal, setEditPaymentModal] = useState({ isOpen: false, payment: null, booking: null });
-    const [refundConfirm, setRefundConfirm] = useState({ isOpen: false, bookingId: null, refundAmount: 0 });
+    const [refundConfirm, setRefundConfirm] = useState({ isOpen: false, bookingId: null, refundAmount: 0, action: 'process', refundCaseId: null });
+    const [refundActionPrompt, setRefundActionPrompt] = useState({ isOpen: false, bookingId: null, refundCaseId: null, action: '', title: '', message: '', busy: false });
     const [refundProcessing, setRefundProcessing] = useState(false);
     const [remindingPaymentId, setRemindingPaymentId] = useState(null);
     const [selectedFinanceBooking, setSelectedFinanceBooking] = useState(null);
@@ -84,6 +91,7 @@ const DashboardAccounting = () => {
     const [bookingPagination, setBookingPagination] = useState(null);
     const debouncedBookingSearchQuery = useDebouncedValue(bookingSearchQuery, 250);
     const smartCacheKey = (resourceKey) => getUserScopedCacheKey(user, resourceKey);
+    const liveChannels = useMemo(() => operationalChannelsForUser(user), [user?.id, user?.role]);
 
     useEffect(() => {
         if (activeTab === 'today') {
@@ -97,6 +105,8 @@ const DashboardAccounting = () => {
             fetchReconciliation({ silent: true });
         } else if (activeTab === 'ledger') {
             fetchLedger();
+        } else if (activeTab === 'reconciliation') {
+            fetchReconciliation();
         } else if (activeTab === 'refunds') {
             fetchRefundQueue();
         }
@@ -129,6 +139,8 @@ const DashboardAccounting = () => {
         enabled: true,
         interval: activeTab === 'ledger' ? 120000 : 90000,
         idleAfter: 180000,
+        channels: liveChannels,
+        resources: ['finance', 'bookings', 'payments', 'refunds'],
         refresh: ({ silent = false } = {}) => {
             if (activeTab === 'payments') {
                 fetchBookings({ silent });
@@ -338,7 +350,18 @@ const DashboardAccounting = () => {
     };
 
     const openRefundConfirm = (bookingId, refundAmount) => {
-        setRefundConfirm({ isOpen: true, bookingId, refundAmount });
+        setRefundConfirm({ isOpen: true, bookingId, refundAmount, action: 'process', refundCaseId: null });
+    };
+
+    const openRefundRetryConfirm = (item, refundAmount) => {
+        const refundCase = item.refund_cases?.[0] || null;
+        setRefundConfirm({
+            isOpen: true,
+            bookingId: item.booking_id,
+            refundAmount,
+            action: 'retry_provider_refund',
+            refundCaseId: refundCase?.id || null,
+        });
     };
 
     const handleProcessRefund = async () => {
@@ -347,16 +370,18 @@ const DashboardAccounting = () => {
         setRefundProcessing(true);
         try {
             // Session auth - no token needed
-            const res = await csrfFetch(`/api/accounting/refund/${bookingId}`, {
+            const isRetry = refundConfirm.action === 'retry_provider_refund';
+            const res = await csrfFetch(isRetry ? `/api/accounting/refund/${bookingId}/retry_provider_refund` : `/api/accounting/refund/${bookingId}`, {
                 method: 'POST',
-                headers: { }
+                headers: { 'Content-Type': 'application/json' },
+                body: isRetry ? JSON.stringify({ refund_case_id: refundConfirm.refundCaseId }) : undefined,
             });
 
             const data = await res.json().catch(() => null);
 
             if (res.ok) {
                 setToast({ message: data?.message || 'Refund processed successfully!', type: 'success' });
-                setRefundConfirm({ isOpen: false, bookingId: null, refundAmount: 0 });
+                setRefundConfirm({ isOpen: false, bookingId: null, refundAmount: 0, action: 'process', refundCaseId: null });
                 clearSmartCacheForPrefix(smartCacheKey('accounting:'));
                 fetchRefundQueue();
                 fetchBookings({ silent: true, force: true });
@@ -420,6 +445,42 @@ const DashboardAccounting = () => {
         return true;
     };
 
+    const openRefundActionPrompt = (item, action) => {
+        const firstCase = item.refund_cases?.[0] || null;
+        const labels = {
+            mark_manually_refunded: ['Mark manually refunded?', 'Describe the manual refund reference or settlement details.'],
+            mark_forfeited: ['Mark as forfeited?', 'Explain why the paid amount is non-refundable.'],
+            close_no_refund_due: ['Close with no refund due?', 'Explain why no refund is due for this case.'],
+            reopen_manual_review: ['Reopen manual review?', 'Add context for why this refund case needs review again.'],
+        };
+        const [title, message] = labels[action] || ['Update refund case', 'Add a note for the refund audit trail.'];
+        setRefundActionPrompt({ isOpen: true, bookingId: item.booking_id, refundCaseId: firstCase?.id || null, action, title, message, busy: false });
+    };
+
+    const submitRefundAction = async (notes) => {
+        const { bookingId, refundCaseId, action } = refundActionPrompt;
+        if (!bookingId || !action) return;
+        setRefundActionPrompt(prev => ({ ...prev, busy: true }));
+        try {
+            const res = await csrfFetch(`/api/accounting/refund/${bookingId}/${action}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ refund_case_id: refundCaseId, notes }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(data.error || 'Could not update refund case.');
+            setToast({ message: data.message || 'Refund case updated.', type: 'success' });
+            setRefundActionPrompt({ isOpen: false, bookingId: null, refundCaseId: null, action: '', title: '', message: '', busy: false });
+            clearSmartCacheForPrefix(smartCacheKey('accounting:'));
+            fetchRefundQueue();
+            fetchBookings({ silent: true, force: true });
+            fetchLedger({ silent: true });
+        } catch (error) {
+            setToast({ message: error.message || 'Could not update refund case.', type: 'error' });
+            setRefundActionPrompt(prev => ({ ...prev, busy: false }));
+        }
+    };
+
     const paymentQueueCounts = useMemo(() => {
         const pending = bookings.filter((booking) => paymentMatchesSegment(booking, 'needs_verification')).length;
         const overdue = bookings.filter((booking) => paymentMatchesSegment(booking, 'overdue')).length;
@@ -437,8 +498,10 @@ const DashboardAccounting = () => {
     const tabMeta = {
         today: 'Today',
         payments: 'Payments',
+        reconciliation: 'Reconciliation',
         ledger: 'Ledger & Receipts',
         refunds: 'Refunds',
+        settings: 'Settings',
         history: 'Event History',
     };
 
@@ -955,7 +1018,7 @@ const DashboardAccounting = () => {
                 roleLabel="Finance team"
                 label="Preparing accounting workspace"
                 navGroups={[
-                    { label: 'Daily work', items: ['Today', 'Payments', 'Refunds', 'Ledger & Receipts', 'Event History'] },
+                    { label: 'Daily work', items: ['Today', 'Payments', 'Refunds', 'Ledger & Receipts', 'Settings', 'Event History'] },
                 ]}
                 rows={5}
             />
@@ -970,14 +1033,17 @@ const DashboardAccounting = () => {
             active={activeTab}
             onNavigate={setActiveTab}
             onLogout={handleLogout}
+            roleKey="accounting"
             navGroups={[
                 {
                     label: 'Daily work',
                     items: [
                         { id: 'today', label: 'Today', count: dashboardSummary.pending + dashboardSummary.overdue + dashboardSummary.exceptions + dashboardSummary.refunds },
                         { id: 'payments', label: 'Payments', count: dashboardSummary.pending + dashboardSummary.overdue + dashboardSummary.exceptions },
+                        { id: 'reconciliation', label: 'Reconciliation', count: dashboardSummary.exceptions },
                         { id: 'refunds', label: 'Refunds', count: dashboardSummary.refunds },
                         { id: 'ledger', label: 'Ledger & Receipts' },
+                        { id: 'settings', label: 'Settings' },
                         { id: 'history', label: 'Event History' },
                     ],
                 },
@@ -1322,7 +1388,7 @@ const DashboardAccounting = () => {
                                                                     className="bg-[#720101]/10 hover:bg-[#720101]/15 text-[#720101] px-3 py-1.5 rounded-lg text-xs font-bold shadow-sm transition-colors flex items-center gap-1.5 uppercase tracking-wide"
                                                                 >
                                                                     <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
-                                                                    Edit Term
+                                                                    Edit term
                                                                 </button>
                                                                 <div className="text-xs font-bold text-slate-400">
                                                                     {'#' + booking.id + ' / ' + booking.status}
@@ -1747,6 +1813,7 @@ const DashboardAccounting = () => {
                                             // Deduct 10% penalty for late cancellation
                                             const penalty = item.total_paid * 0.10;
                                             const refundAmount = item.total_paid - penalty;
+                                            const canRetryProvider = item.refund_cases?.[0]?.next_actions?.includes('retry_provider_refund');
 
                                             return (
                                                 <tr key={item.booking_id} className="border-b border-amber-50 hover:bg-[#fffaf3] transition-colors">
@@ -1762,14 +1829,24 @@ const DashboardAccounting = () => {
                                                     <td className="px-6 py-4 text-right font-bold text-[#720101]">
                                                         PHP {refundAmount > 0 ? refundAmount.toLocaleString() : '0'}
                                                         <div className="text-[10px] text-slate-400 font-normal mt-1">(PHP {penalty.toLocaleString()} fee deducted)</div>
+                                                        <div className="mt-1 text-[10px] font-black uppercase tracking-wide text-slate-500">{item.refund_status || 'Needs Review'}</div>
+                                                        {item.refund_cases?.[0]?.notes && <div className="mt-1 max-w-[14rem] text-right text-[10px] font-semibold text-slate-400">{item.refund_cases[0].notes}</div>}
                                                     </td>
                                                     <td className="px-6 py-4 text-right">
-                                                        <button
-                                                            onClick={() => openRefundConfirm(item.booking_id, refundAmount)}
-                                                            className="marketing-primary-btn px-4 py-2 text-sm whitespace-nowrap"
-                                                        >
-                                                            Process Refund
-                                                        </button>
+                                                        <div className="flex flex-wrap justify-end gap-2">
+                                                            <button
+                                                                onClick={() => canRetryProvider ? openRefundRetryConfirm(item, refundAmount) : openRefundConfirm(item.booking_id, refundAmount)}
+                                                                className="marketing-primary-btn px-4 py-2 text-sm whitespace-nowrap"
+                                                            >
+                                                                {canRetryProvider ? 'Retry Provider' : 'Process Refund'}
+                                                            </button>
+                                                            {item.refund_cases?.length > 0 && (
+                                                                <>
+                                                                    <button type="button" onClick={() => openRefundActionPrompt(item, 'mark_manually_refunded')} className="staff-row-action text-xs">Manual</button>
+                                                                    <button type="button" onClick={() => openRefundActionPrompt(item, 'mark_forfeited')} className="staff-row-action text-xs">Forfeit</button>
+                                                                </>
+                                                            )}
+                                                        </div>
                                                     </td>
                                                 </tr>
                                             );
@@ -1784,6 +1861,9 @@ const DashboardAccounting = () => {
                 )}
                 {activeTab === 'history' && (
                     <EventHistoryPanel role="accounting" onToast={(message, type) => setToast({ message, type })} />
+                )}
+                {activeTab === 'settings' && (
+                    <RoleSettingsPanel role="accounting" onNavigate={setActiveTab} />
                 )}
             {/* Receipt Modal */}
             <ReceiptModal
@@ -1809,13 +1889,27 @@ const DashboardAccounting = () => {
 
             <ConfirmModal
                 isOpen={refundConfirm.isOpen}
-                title={`Process refund for booking #${refundConfirm.bookingId || ''}?`}
-                message={`Accounting will create a refund case, retain the non-refundable reservation fee, and refund ${'P' + Number(refundConfirm.refundAmount || 0).toLocaleString()} where payment references are available.`}
-                confirmText="Process Refund"
+                title={`${refundConfirm.action === 'retry_provider_refund' ? 'Retry provider refund' : 'Process refund'} for booking #${refundConfirm.bookingId || ''}?`}
+                message={refundConfirm.action === 'retry_provider_refund'
+                    ? `Accounting will retry the PayMongo refund for ${'P' + Number(refundConfirm.refundAmount || 0).toLocaleString()} and keep the case in review if the provider fails again.`
+                    : `Accounting will create a refund case, retain the non-refundable reservation fee, and refund ${'P' + Number(refundConfirm.refundAmount || 0).toLocaleString()} where payment references are available.`}
+                confirmText={refundConfirm.action === 'retry_provider_refund' ? 'Retry Refund' : 'Process Refund'}
                 tone="danger"
                 busy={refundProcessing}
-                onCancel={() => setRefundConfirm({ isOpen: false, bookingId: null, refundAmount: 0 })}
+                onCancel={() => setRefundConfirm({ isOpen: false, bookingId: null, refundAmount: 0, action: 'process', refundCaseId: null })}
                 onConfirm={handleProcessRefund}
+            />
+            <PromptModal
+                isOpen={refundActionPrompt.isOpen}
+                title={refundActionPrompt.title}
+                message={refundActionPrompt.message}
+                label="Refund note"
+                placeholder="Add provider reference, settlement details, or policy reason."
+                minLength={5}
+                confirmText="Save"
+                busy={refundActionPrompt.busy}
+                onCancel={() => setRefundActionPrompt({ isOpen: false, bookingId: null, refundCaseId: null, action: '', title: '', message: '', busy: false })}
+                onConfirm={submitRefundAction}
             />
 
             {toast && (

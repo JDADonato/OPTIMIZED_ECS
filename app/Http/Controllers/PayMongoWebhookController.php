@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Events\PaymentProcessed;
 use App\Models\Payment;
+use App\Services\OperationalBroadcastService;
 use App\Services\PaymentCalculationService;
 use App\Services\PaymentEventService;
 use Illuminate\Http\Request;
@@ -136,7 +137,17 @@ class PayMongoWebhookController extends Controller
                     $paymentCalculation->updateBookingMilestone($booking);
                 }
 
-                broadcast(new PaymentProcessed($payment->fresh()))->toOthers();
+                try {
+                    broadcast(new PaymentProcessed($payment->fresh()))->toOthers();
+                } catch (\Throwable $broadcastException) {
+                    Log::warning('Payment webhook realtime broadcast skipped.', [
+                        'payment_id' => $payment->id,
+                        'message' => $broadcastException->getMessage(),
+                    ]);
+                }
+
+                app(OperationalBroadcastService::class)
+                    ->financeChanged($booking, 'payment', $payment->id, 'webhook_paid', 'Payment confirmed.');
 
                 return ['status' => 'processed', 'payment_id' => $payment->id];
             });
@@ -208,7 +219,7 @@ class PayMongoWebhookController extends Controller
         $paymentId = Arr::get($metadata, 'payment_id');
 
         if ($paymentId && ctype_digit((string) $paymentId)) {
-            $payment = Payment::whereKey((int) $paymentId)->lockForUpdate()->first();
+            $payment = Payment::active()->whereKey((int) $paymentId)->lockForUpdate()->first();
 
             if ($payment) {
                 return $payment;
@@ -216,7 +227,7 @@ class PayMongoWebhookController extends Controller
         }
 
         if ($referenceNumber && preg_match('/^ECS-\d+-P(\d+)$/', $referenceNumber, $matches)) {
-            $payment = Payment::whereKey((int) $matches[1])->lockForUpdate()->first();
+            $payment = Payment::active()->whereKey((int) $matches[1])->lockForUpdate()->first();
 
             if ($payment) {
                 return $payment;
@@ -224,7 +235,7 @@ class PayMongoWebhookController extends Controller
         }
 
         if ($eventType === 'checkout_session.payment.paid' && $resourceId) {
-            $payment = Payment::where('paymongo_checkout_session_id', $resourceId)->lockForUpdate()->first();
+            $payment = Payment::active()->where('paymongo_checkout_session_id', $resourceId)->lockForUpdate()->first();
 
             if ($payment) {
                 return $payment;
@@ -232,7 +243,7 @@ class PayMongoWebhookController extends Controller
         }
 
         if ($eventType === 'payment.paid' && $resourceId) {
-            $payment = Payment::where('paymongo_payment_id', $resourceId)->lockForUpdate()->first();
+            $payment = Payment::active()->where('paymongo_payment_id', $resourceId)->lockForUpdate()->first();
 
             if ($payment) {
                 return $payment;
@@ -240,7 +251,7 @@ class PayMongoWebhookController extends Controller
         }
 
         if ($paymentIntentId) {
-            return Payment::where('paymongo_payment_intent_id', $paymentIntentId)->lockForUpdate()->first();
+            return Payment::active()->where('paymongo_payment_intent_id', $paymentIntentId)->lockForUpdate()->first();
         }
 
         return null;

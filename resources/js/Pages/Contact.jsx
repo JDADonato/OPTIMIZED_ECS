@@ -4,6 +4,9 @@ import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import ClientNavbar from '../Components/common/ClientNavbar';
 import Footer from '../Components/common/Footer';
+import csrfFetch from '../utils/csrf';
+import { FieldError, FormErrorSummary } from '../Components/common/FormFeedback';
+import { focusFirstInvalidField } from '../utils/validation';
 
 const initialForm = (user) => ({
     full_name: user?.full_name || user?.username || '',
@@ -15,6 +18,7 @@ const initialForm = (user) => ({
     concern_type: user ? 'active_booking' : 'planning',
     subject: '',
     message: '',
+    website: '',
 });
 
 const safeErrorMessage = (errors = {}) => {
@@ -32,8 +36,6 @@ const fieldClass = (errors, field, extra = '') => (
         errors[field] ? 'border-[#720101] bg-red-50 ring-2 ring-[#720101]/15' : 'border-transparent'
     }`
 );
-
-const FieldError = ({ message }) => message ? <p className="mt-1.5 text-xs font-bold text-[#720101]">{Array.isArray(message) ? message[0] : message}</p> : null;
 
 const Contact = () => {
     const { user, logout } = useAuth();
@@ -60,14 +62,10 @@ const Contact = () => {
         setErrors({});
 
         try {
-            const response = await fetch('/api/contact-inquiries', {
+            const response = await csrfFetch('/api/contact-inquiries', {
                 method: 'POST',
-                credentials: 'same-origin',
                 headers: {
                     'Content-Type': 'application/json',
-                    Accept: 'application/json',
-                    'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '',
-                    'X-Requested-With': 'XMLHttpRequest',
                 },
                 body: JSON.stringify({
                     ...form,
@@ -78,9 +76,10 @@ const Contact = () => {
 
             const payload = await response.json().catch(() => ({}));
             if (!response.ok) {
-                const validationErrors = payload.errors || {};
-                setErrors(validationErrors);
-                toast.error(safeErrorMessage(validationErrors));
+                const result = { payload, errors: payload.errors || {}, message: safeErrorMessage(payload.errors || {}) };
+                setErrors(result.errors);
+                toast.error(result.message);
+                focusFirstInvalidField(result.errors);
                 return;
             }
 
@@ -171,6 +170,7 @@ const Contact = () => {
                                 <h2 className="font-display text-2xl font-bold text-[#1a1a1a]">Send a Planning Inquiry</h2>
                                 <p className="mt-2 text-sm font-medium leading-6 text-gray-500">These details become a staff-visible inquiry so the team can follow up with the right context.</p>
                                 <form className="mt-6 space-y-5" onSubmit={handleSubmit}>
+                                    <input type="text" name="website" value={form.website} onChange={(e) => updateField('website', e.target.value)} tabIndex="-1" autoComplete="off" className="hidden" aria-hidden="true" />
                                     <div className="grid gap-5 sm:grid-cols-2">
                                         <div>
                                             <input required value={form.full_name} onChange={(e) => updateField('full_name', e.target.value)} className={fieldClass(errors, 'full_name', 'w-full')} placeholder="Full name" />
@@ -221,9 +221,9 @@ const Contact = () => {
                                         <textarea required rows="6" value={form.message} onChange={(e) => updateField('message', e.target.value)} className={fieldClass(errors, 'message', 'w-full resize-none')} placeholder="Tell us about your event, timeline, guest count, or question." />
                                         <FieldError message={errors.message} />
                                     </div>
-                                    {Object.keys(errors).length > 0 && <p className="text-sm font-bold text-[#720101]">{safeErrorMessage(errors)}</p>}
+                                    <FormErrorSummary errors={errors} message={Object.keys(errors).length > 0 ? safeErrorMessage(errors) : ''} />
                                     <button type="submit" disabled={!canSubmit || submitting} className="rounded-xl bg-[#720101] px-7 py-3 text-sm font-black uppercase tracking-widest text-white shadow-sm hover:bg-[#5a0101] disabled:cursor-not-allowed disabled:opacity-50">
-                                        {submitting ? 'Sending...' : 'Send Inquiry'}
+                                        {submitting ? 'Sending...' : 'Send inquiry'}
                                     </button>
                                 </form>
                             </>

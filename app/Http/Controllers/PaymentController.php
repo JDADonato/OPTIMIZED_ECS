@@ -6,6 +6,7 @@ use App\Events\PaymentProcessed;
 use App\Models\Booking;
 use App\Models\Payment;
 use App\Services\ConversionEventService;
+use App\Services\OperationalBroadcastService;
 use App\Services\PaymentCalculationService;
 use App\Services\PaymentEventService;
 use App\Services\PayMongoService;
@@ -36,13 +37,13 @@ class PaymentController extends Controller
             'payment_id' => ['required', 'integer', 'exists:payments,id'],
         ]);
 
-        $booking = Booking::with(['user', 'payments'])
+        $booking = Booking::with(['user', 'payments' => fn ($query) => $query->active()])
             ->where('id', $validated['booking_id'])
             ->where('user_id', Auth::id())
             ->firstOrFail();
 
         $paymentCalculation->syncPendingTranches($booking);
-        $booking->load(['user', 'payments']);
+        $booking->load(['user', 'payments' => fn ($query) => $query->active()]);
 
         $payment = $booking->payments
             ->firstWhere('id', (int) $validated['payment_id']);
@@ -153,6 +154,7 @@ class PaymentController extends Controller
         ]);
 
         $payment = Payment::with('booking.payments')
+            ->active()
             ->whereKey($validated['payment_id'])
             ->where('booking_id', $validated['booking_id'])
             ->whereHas('booking', fn ($query) => $query->where('user_id', Auth::id()))
@@ -197,7 +199,16 @@ class PaymentController extends Controller
                         }
                     });
 
-                    broadcast(new PaymentProcessed($payment->fresh()))->toOthers();
+                    try {
+                        broadcast(new PaymentProcessed($payment->fresh()))->toOthers();
+                    } catch (\Throwable $broadcastException) {
+                        Log::warning('Payment checkout realtime broadcast skipped.', [
+                            'payment_id' => $payment->id,
+                            'message' => $broadcastException->getMessage(),
+                        ]);
+                    }
+                    app(OperationalBroadcastService::class)
+                        ->financeChanged($payment->booking, 'payment', $payment->id, 'confirmed', 'Payment confirmed.');
 
                     ConversionEventService::record('payment_confirmed', [
                         'booking' => $payment->booking,
@@ -261,6 +272,7 @@ class PaymentController extends Controller
 
         $nextPayment = $booking->payments
             ->whereIn('status', ['Pending', 'Failed', 'Rejected'])
+            ->whereNull('voided_at')
             ->sortBy(fn (Payment $candidate) => $this->milestoneOrder($candidate->payment_type))
             ->first();
 

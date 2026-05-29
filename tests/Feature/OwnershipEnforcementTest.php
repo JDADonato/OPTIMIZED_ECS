@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Models\Booking;
 use App\Models\BookingReviewTask;
 use App\Models\Conversation;
+use App\Models\ConversationParticipant;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
@@ -188,6 +189,66 @@ class OwnershipEnforcementTest extends TestCase
             ->postJson("/api/chat/conversations/{$conversation->id}/transfer-owner", ['new_staff_id' => $collaborator->id])
             ->assertOk()
             ->assertJsonPath('conversation.staff_id', $collaborator->id);
+    }
+
+    public function test_removed_chat_collaborator_is_soft_removed_and_loses_reply_access(): void
+    {
+        $client = $this->user('Client');
+        $owner = $this->user('Marketing');
+        $collaborator = $this->user('Marketing');
+        $conversation = Conversation::create(['client_id' => $client->id, 'staff_id' => $owner->id, 'status' => 'active']);
+
+        $this->actingAs($owner)
+            ->postJson("/api/chat/conversations/{$conversation->id}/collaborators", ['user_id' => $collaborator->id])
+            ->assertOk();
+
+        $this->actingAs($owner)
+            ->deleteJson("/api/chat/conversations/{$conversation->id}/collaborators/{$collaborator->id}")
+            ->assertOk()
+            ->assertJsonCount(0, 'conversation.collaborators');
+
+        $participant = ConversationParticipant::where('conversation_id', $conversation->id)
+            ->where('user_id', $collaborator->id)
+            ->firstOrFail();
+
+        $this->assertNotNull($participant->removed_at);
+        $this->assertSame($owner->id, $participant->removed_by);
+        $this->assertSame('removed_by_staff', $participant->removal_reason);
+
+        $this->actingAs($collaborator)
+            ->postJson("/api/chat/conversations/{$conversation->id}/messages", ['message' => 'Still here?'])
+            ->assertForbidden();
+    }
+
+    public function test_rejoining_chat_reactivates_existing_removed_participant_row(): void
+    {
+        $client = $this->user('Client');
+        $owner = $this->user('Marketing');
+        $collaborator = $this->user('Marketing');
+        $conversation = Conversation::create(['client_id' => $client->id, 'staff_id' => $owner->id, 'status' => 'active']);
+
+        $this->actingAs($owner)
+            ->postJson("/api/chat/conversations/{$conversation->id}/collaborators", ['user_id' => $collaborator->id])
+            ->assertOk();
+
+        $this->actingAs($owner)
+            ->deleteJson("/api/chat/conversations/{$conversation->id}/collaborators/{$collaborator->id}")
+            ->assertOk();
+
+        $this->actingAs($owner)
+            ->postJson("/api/chat/conversations/{$conversation->id}/collaborators", ['user_id' => $collaborator->id])
+            ->assertOk()
+            ->assertJsonCount(1, 'conversation.collaborators');
+
+        $participants = ConversationParticipant::where('conversation_id', $conversation->id)
+            ->where('user_id', $collaborator->id)
+            ->get();
+
+        $this->assertCount(1, $participants);
+        $this->assertNull($participants->first()->removed_at);
+        $this->assertNull($participants->first()->removed_by);
+        $this->assertNull($participants->first()->removal_reason);
+        $this->assertSame('collaborator', $participants->first()->role);
     }
 
     private function user(string $role): User

@@ -127,12 +127,23 @@ class AnalyticsDemoSeeder extends Seeder
             $clients[] = [
                 'name' => $name,
                 'user' => User::create([
+                    'full_name' => $name,
                     'username' => 'ecs_demo_client_' . str_pad((string) $i, 3, '0', STR_PAD_LEFT),
                     'password' => 'password123',
                     'role' => 'Client',
                     'email' => 'client' . str_pad((string) $i, 3, '0', STR_PAD_LEFT) . '@' . self::DEMO_DOMAIN,
                     'phone' => '09' . str_pad((string) (170000000 + $i * 713), 9, '0', STR_PAD_LEFT),
                     'email_verified_at' => now(),
+                    'account_status' => 'active',
+                    'preferred_contact_method' => 'email',
+                    'notification_preferences' => [
+                        'email_enabled' => true,
+                        'sound_enabled' => false,
+                        'quiet_mode' => false,
+                        'chat_email_enabled' => true,
+                        'payment_email_enabled' => true,
+                    ],
+                    'profile_preferences' => [],
                     'created_at' => now()->subDays(260 - ($i % 180)),
                     'updated_at' => now(),
                 ]),

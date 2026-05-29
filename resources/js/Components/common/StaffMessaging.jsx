@@ -1,10 +1,13 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from 'react';
 import { useAuth } from '../../context/AuthContext';
-import useSmartRefresh from '../../hooks/useSmartRefresh';
+import useLiveResource from '../../hooks/useLiveResource';
 import ConfirmModal from './ConfirmModal';
 import ErrorModal from './ErrorModal';
+import PromptModal from './PromptModal';
 import StaffSkeleton from '../staff/StaffSkeleton';
 import csrfFetch from '../../utils/csrf';
+import { operationalChannelsForUser } from '../../utils/liveChannels';
+import { LiveSyncIndicator, SoftRefreshBoundary, UpdatedRowPulse } from './LiveFeedback';
 
 /**
  * Phase 2: Staff Messaging — WebSocket-powered Ticket/Claiming System.
@@ -24,10 +27,11 @@ const sortMessagesOldestFirst = (items = []) => [...items].sort((a, b) => {
     return left - right;
 });
 
-const StaffMessaging = ({ variant = 'staff', refreshToken = 0, onMetricsChange = null }) => {
+const StaffMessaging = ({ variant = 'staff', refreshToken = 0, onMetricsChange = null, surfaceMode = 'default' }) => {
     const { user } = useAuth();
     const hasRealtime = typeof window !== 'undefined' && Boolean(window.Echo);
     const isAdminOversight = variant === 'admin-oversight' && user?.role === 'Admin';
+    const isAdminFullSurface = isAdminOversight && surfaceMode === 'admin-full';
     const [sidebarTab, setSidebarTab] = useState(isAdminOversight ? 'needs-attention' : 'unassigned');
     const [unassigned, setUnassigned] = useState([]);
     const [myChats, setMyChats] = useState([]);
@@ -51,8 +55,12 @@ const StaffMessaging = ({ variant = 'staff', refreshToken = 0, onMetricsChange =
     const [editingText, setEditingText] = useState('');
     const [openActionMessageId, setOpenActionMessageId] = useState(null);
     const [showAdminActions, setShowAdminActions] = useState(false);
-    const messagesEndRef = useRef(null);
+    const [internalNoteModal, setInternalNoteModal] = useState({ isOpen: false, conversation: null, busy: false });
+    const [deleteConfirmModal, setDeleteConfirmModal] = useState({ isOpen: false, message: null, busy: false });
+    const [moderationDeleteModal, setModerationDeleteModal] = useState({ isOpen: false, message: null, busy: false });
+    const messagesContainerRef = useRef(null);
     const shouldScrollToBottomRef = useRef(false);
+    const preserveOlderScrollRef = useRef(null);
     const echoChannelsRef = useRef({});
     const selectedConvRef = useRef(null);
 
@@ -65,28 +73,40 @@ const StaffMessaging = ({ variant = 'staff', refreshToken = 0, onMetricsChange =
 
     // ─── Data Fetching ───
 
-    const fetchConversations = useCallback(async () => {
-        try {
-            const res = await fetch('/api/chat/conversations');
-            if (res.ok) {
-                const d = await res.json();
-                setUnassigned(d.unassigned || []);
-                setMyChats(d.my_chats || []);
-                setAdminNeedsAttention(d.needs_attention || []);
-                setAdminAllActive(d.all_active || d.all_chats || []);
-                setAdminResolved(d.resolved || []);
-                if (typeof onMetricsChange === 'function') {
-                    onMetricsChange({
-                        open: d.summary?.open_conversations ?? (d.all_active || d.all_chats || []).length,
-                        needsAttention: d.summary?.needs_attention ?? (d.needs_attention || []).length,
-                        unassigned: d.summary?.unassigned ?? (d.unassigned || []).length,
-                        resolvedToday: d.summary?.resolved_today ?? (d.resolved || []).length,
-                    });
-                }
-            }
-        } catch (e) { /* silent */ }
-        finally { setLoading(false); }
+    const liveChannels = useMemo(() => operationalChannelsForUser(user), [user?.id, user?.role]);
+    const conversationsResource = useLiveResource('/api/chat/conversations', {
+        cacheKey: 'chat:conversations',
+        channels: liveChannels,
+        eventNames: ['.operational.resource.changed', '.conversation.created', '.conversation.claimed'],
+        resources: ['chat'],
+        interval: hasRealtime ? 60000 : 15000,
+        select: (payload) => payload,
+    });
+
+    const applyConversationsPayload = useCallback((d) => {
+        if (!d || d.data === null) return;
+        setUnassigned(d.unassigned || []);
+        setMyChats(d.my_chats || []);
+        setAdminNeedsAttention(d.needs_attention || []);
+        setAdminAllActive(d.all_active || d.all_chats || []);
+        setAdminResolved(d.resolved || []);
+        if (typeof onMetricsChange === 'function') {
+            onMetricsChange({
+                open: d.summary?.open_conversations ?? (d.all_active || d.all_chats || []).length,
+                needsAttention: d.summary?.needs_attention ?? (d.needs_attention || []).length,
+                unassigned: d.summary?.unassigned ?? (d.unassigned || []).length,
+                resolvedToday: d.summary?.resolved_today ?? (d.resolved || []).length,
+            });
+        }
+        setLoading(false);
     }, [onMetricsChange]);
+
+    const fetchConversations = useCallback(async ({ silent = true, force = true } = {}) => {
+        const payload = await conversationsResource.refetch({ silent, force, reason: 'manual' });
+        applyConversationsPayload(payload);
+        setLoading(false);
+        return payload;
+    }, [applyConversationsPayload, conversationsResource.refetch]);
 
     const normalizeMessagesResponse = (payload) => {
         if (Array.isArray(payload)) {
@@ -114,47 +134,38 @@ const StaffMessaging = ({ variant = 'staff', refreshToken = 0, onMetricsChange =
     const loadOlderMessages = useCallback(async () => {
         if (!selectedConv?.id || !messages.length || loadingOlderMessages) return;
         setLoadingOlderMessages(true);
+        let prependedOlderMessages = false;
+        if (messagesContainerRef.current) {
+            preserveOlderScrollRef.current = {
+                scrollTop: messagesContainerRef.current.scrollTop,
+                scrollHeight: messagesContainerRef.current.scrollHeight,
+            };
+        }
 
         try {
             const res = await fetch(`/api/chat/conversations/${selectedConv.id}/messages?limit=30&before_id=${messages[0].id}`);
             if (res.ok) {
                 const d = normalizeMessagesResponse(await res.json());
+                prependedOlderMessages = true;
                 setMessages(prev => sortMessagesOldestFirst([...d.data, ...prev]));
                 setHasOlderMessages(Boolean(d.pagination?.has_more));
             }
         } catch (e) { /* silent */ }
-        finally { setLoadingOlderMessages(false); }
+        finally {
+            if (!prependedOlderMessages) preserveOlderScrollRef.current = null;
+            setLoadingOlderMessages(false);
+        }
     }, [selectedConv?.id, messages, loadingOlderMessages]);
 
     // ─── Initial Load + Echo Setup ───
 
     useEffect(() => {
-        fetchConversations();
+        applyConversationsPayload(conversationsResource.data);
+    }, [applyConversationsPayload, conversationsResource.data]);
 
-        // Listen on the staff.queue channel for new/claimed conversations
-        if (window.Echo) {
-            window.Echo.private('staff.queue')
-                .listen('.conversation.created', () => {
-                    fetchConversations();
-                })
-                .listen('.conversation.claimed', () => {
-                    fetchConversations();
-                });
-        }
-
-        return () => {
-            if (window.Echo) {
-                window.Echo.leave('staff.queue');
-            }
-        };
-    }, [fetchConversations]);
-
-    useSmartRefresh({
-        enabled: true,
-        interval: hasRealtime ? 60000 : 15000,
-        idleAfter: 180000,
-        refresh: fetchConversations,
-    });
+    useEffect(() => {
+        if (!conversationsResource.loading) setLoading(false);
+    }, [conversationsResource.loading]);
 
     useEffect(() => {
         if (refreshToken > 0) {
@@ -201,11 +212,21 @@ const StaffMessaging = ({ variant = 'staff', refreshToken = 0, onMetricsChange =
         };
     }, [selectedConv, fetchConversations]);
 
-    // Auto-scroll
-    useEffect(() => {
+    // Keep scrolling scoped to the message list so parent panels and headers never get pulled out of view.
+    useLayoutEffect(() => {
+        const container = messagesContainerRef.current;
+        if (!container) return;
+
+        if (preserveOlderScrollRef.current) {
+            const previous = preserveOlderScrollRef.current;
+            preserveOlderScrollRef.current = null;
+            container.scrollTop = container.scrollHeight - previous.scrollHeight + previous.scrollTop;
+            return;
+        }
+
         if (!shouldScrollToBottomRef.current) return;
         shouldScrollToBottomRef.current = false;
-        if (messagesEndRef.current) messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
+        container.scrollTop = container.scrollHeight;
     }, [messages]);
 
     // ─── Actions ───
@@ -440,13 +461,23 @@ const StaffMessaging = ({ variant = 'staff', refreshToken = 0, onMetricsChange =
         setEditingText(msg.message);
     };
 
-    const handleInternalNote = async () => {
+    const handleInternalNote = () => {
         if (!selectedConv) return;
-        const note = window.prompt('Internal note for staff only', selectedConv.internal_notes || '');
-        if (note === null) return;
+        setShowAdminActions(false);
+        setInternalNoteModal({ isOpen: true, conversation: selectedConv, busy: false });
+    };
 
+    const closeInternalNoteModal = () => {
+        setInternalNoteModal({ isOpen: false, conversation: null, busy: false });
+    };
+
+    const saveInternalNote = async (note) => {
+        const conversation = internalNoteModal.conversation;
+        if (!conversation) return;
+
+        setInternalNoteModal(prev => ({ ...prev, busy: true }));
         try {
-            const res = await csrfFetch(`/api/chat/conversations/${selectedConv.id}/internal-notes`, {
+            const res = await csrfFetch(`/api/chat/conversations/${conversation.id}/internal-notes`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
                 body: JSON.stringify({ internal_notes: note }),
@@ -454,8 +485,10 @@ const StaffMessaging = ({ variant = 'staff', refreshToken = 0, onMetricsChange =
             const payload = await res.json().catch(() => ({}));
             if (!res.ok) throw new Error(payload.error || 'Failed to save internal note.');
             setSelectedConv(prev => prev ? { ...prev, internal_notes: payload.internal_notes || note } : prev);
+            closeInternalNoteModal();
             fetchConversations();
         } catch (e) {
+            setInternalNoteModal(prev => ({ ...prev, busy: false }));
             setErrorModal({ isOpen: true, message: e.message || 'Failed to save internal note.' });
         }
     };
@@ -484,11 +517,16 @@ const StaffMessaging = ({ variant = 'staff', refreshToken = 0, onMetricsChange =
         }
     };
 
-    const deleteMessage = async (msg) => {
+    const requestDeleteMessage = (msg) => {
         setOpenActionMessageId(null);
-        const reason = msg.is_mine ? '' : window.prompt('Reason for moderation delete?') || '';
-        if (!msg.is_mine && !reason.trim()) return;
-        if (msg.is_mine && !window.confirm('Delete this message?')) return;
+        if (msg.is_mine) {
+            setDeleteConfirmModal({ isOpen: true, message: msg, busy: false });
+            return;
+        }
+        setModerationDeleteModal({ isOpen: true, message: msg, busy: false });
+    };
+
+    const deleteMessage = async (msg, reason = '') => {
         try {
             const res = await csrfFetch(`/api/chat/messages/${msg.id}`, {
                 method: 'DELETE',
@@ -498,10 +536,28 @@ const StaffMessaging = ({ variant = 'staff', refreshToken = 0, onMetricsChange =
             const payload = await res.json().catch(() => ({}));
             if (!res.ok) throw new Error(payload.error || 'Could not delete message.');
             setMessages(prev => prev.map(item => item.id === msg.id ? payload.data : item));
+            setDeleteConfirmModal({ isOpen: false, message: null, busy: false });
+            setModerationDeleteModal({ isOpen: false, message: null, busy: false });
             fetchConversations();
         } catch (e) {
+            setDeleteConfirmModal(prev => prev.isOpen ? { ...prev, busy: false } : prev);
+            setModerationDeleteModal(prev => prev.isOpen ? { ...prev, busy: false } : prev);
             setErrorModal({ isOpen: true, message: e.message || 'Could not delete message.' });
         }
+    };
+
+    const confirmOwnMessageDelete = () => {
+        const msg = deleteConfirmModal.message;
+        if (!msg) return;
+        setDeleteConfirmModal(prev => ({ ...prev, busy: true }));
+        deleteMessage(msg);
+    };
+
+    const confirmModerationDelete = (reason) => {
+        const msg = moderationDeleteModal.message;
+        if (!msg) return;
+        setModerationDeleteModal(prev => ({ ...prev, busy: true }));
+        deleteMessage(msg, reason);
     };
 
     // ─── Sidebar Helpers ───
@@ -530,6 +586,7 @@ const StaffMessaging = ({ variant = 'staff', refreshToken = 0, onMetricsChange =
     const selectedOwnerName = selectedConv?.owner?.name || selectedConv?.staff_name;
     const getDisplayOwnerName = (conv) => conv?.owner?.name || conv?.staff_name || null;
     const getConversationOwnerLabel = (conv) => {
+        if (conv.client_is_deactivated) return 'Archived due to deactivation';
         if (conv.status === 'resolved') return 'Resolved';
         if (conv.admin_observers?.length) return 'Admin joined';
         if (conv.owner?.name || conv.staff_name) return `Handled by ${conv.owner?.name || conv.staff_name}`;
@@ -538,6 +595,9 @@ const StaffMessaging = ({ variant = 'staff', refreshToken = 0, onMetricsChange =
     const getAdminConversationChips = (conv) => {
         const chips = [];
         if (!conv) return chips;
+        if (conv.client_is_deactivated) {
+            chips.push(['Deactivated customer', 'bg-slate-100 text-slate-700 border-slate-200']);
+        }
         if (conv.status === 'resolved') {
             chips.push(['Resolved', 'bg-emerald-50 text-emerald-700 border-emerald-100']);
         } else if (!conv.staff_id) {
@@ -582,16 +642,49 @@ const StaffMessaging = ({ variant = 'staff', refreshToken = 0, onMetricsChange =
                 ? `Handled by ${selectedOwnerName}`
                 : 'Unassigned';
 
+        const containerClass = isAdminFullSurface
+            ? 'admin-full-chat overflow-hidden bg-white'
+            : 'overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm';
+        const containerStyle = isAdminFullSurface ? undefined : { height: '640px' };
+        const listRailClass = isAdminFullSurface
+            ? 'admin-chat-list-rail flex min-h-0 w-[18rem] flex-shrink-0 flex-col border-r border-gray-200 bg-white'
+            : 'flex min-h-0 w-[19rem] flex-shrink-0 flex-col border-r border-gray-200 bg-white';
+        const listHeaderClass = isAdminFullSurface
+            ? 'border-b border-gray-100 bg-white px-5 py-4'
+            : 'border-b border-gray-100 bg-gray-50/80 px-4 py-3';
+        const threadClass = isAdminFullSurface
+            ? 'admin-chat-thread flex min-h-0 min-w-0 flex-1 flex-col bg-white'
+            : 'flex min-h-0 min-w-0 flex-1 flex-col bg-gray-50/30';
+        const emptyCardClass = isAdminFullSurface
+            ? 'max-w-md text-center'
+            : 'max-w-md rounded-2xl border border-gray-200 bg-white p-6 text-center shadow-sm';
+        const messagePaneClass = isAdminFullSurface
+            ? 'min-h-0 flex-1 space-y-4 overflow-y-auto bg-white px-8 py-7'
+            : 'min-h-0 flex-1 space-y-3 overflow-y-auto px-5 py-6';
+        const contextRailClass = isAdminFullSurface
+            ? 'admin-context-rail w-[19rem] flex-shrink-0'
+            : 'min-h-0 w-72 flex-shrink-0 overflow-y-auto border-l border-gray-200 bg-white p-4';
+
         return (
-            <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm" style={{ height: '640px' }}>
-                <div className="flex h-full">
-                    <aside className="w-[19rem] flex-shrink-0 border-r border-gray-200 bg-white">
-                        <div className="border-b border-gray-100 bg-gray-50/80 px-4 py-3">
+            <div className={containerClass} style={containerStyle}>
+                <div className="flex h-full min-h-0">
+                    <aside className={listRailClass}>
+                        <div className={listHeaderClass}>
                             <div className="flex items-center justify-between gap-3">
                                 <h3 className="text-sm font-black text-gray-950">Conversation oversight</h3>
-                                {totalUnread > 0 && (
-                                    <span className="rounded-full bg-primary-600 px-2 py-0.5 text-[10px] font-black text-white">{totalUnread} new</span>
-                                )}
+                                <div className="flex items-center gap-2">
+                                    <LiveSyncIndicator
+                                        state={conversationsResource.syncState}
+                                        refreshing={conversationsResource.refreshing}
+                                        lastSyncedAt={conversationsResource.lastSyncedAt}
+                                        error={conversationsResource.error}
+                                        onRetry={conversationsResource.refetch}
+                                        compact
+                                    />
+                                    {totalUnread > 0 && (
+                                        <span className="rounded-full bg-primary-600 px-2 py-0.5 text-[10px] font-black text-white">{totalUnread} new</span>
+                                    )}
+                                </div>
                             </div>
                             <div className="mt-3 grid grid-cols-2 gap-2">
                                 {adminFilterOptions.map(([id, label, count]) => (
@@ -608,7 +701,12 @@ const StaffMessaging = ({ variant = 'staff', refreshToken = 0, onMetricsChange =
                             </div>
                         </div>
 
-                        <div className="h-[calc(100%-5.75rem)] overflow-y-auto">
+                        <SoftRefreshBoundary
+                            loading={loading}
+                            refreshing={conversationsResource.refreshing}
+                            hasData={currentList.length > 0}
+                            className="min-h-0 flex-1 overflow-y-auto"
+                        >
                             {loading ? (
                                 <div className="p-4">
                                     <StaffSkeleton rows={5} label="Loading conversations" />
@@ -622,14 +720,17 @@ const StaffMessaging = ({ variant = 'staff', refreshToken = 0, onMetricsChange =
                             ) : (
                                 <div className="divide-y divide-gray-100">
                                     {currentList.map(conv => (
-                                        <button
+                                        <UpdatedRowPulse
                                             key={conv.id}
+                                            as="button"
+                                            watchKey={`${conv.id}:${conv.last_message_time}:${conv.unread_count}:${conv.status}:${conv.staff_id || ''}`}
+                                            active={conversationsResource.changedKeys.has(conv.id)}
                                             type="button"
                                             onClick={() => selectConversation(conv)}
-                                            className={`w-full px-4 py-3 text-left transition ${selectedConv?.id === conv.id ? 'bg-[#fff8e8]' : 'hover:bg-gray-50'}`}
+                                            className={`w-full px-5 py-4 text-left transition ${selectedConv?.id === conv.id ? 'bg-[#fff8e8]' : 'hover:bg-gray-50'}`}
                                         >
                                             <div className="flex items-start gap-3">
-                                                <div className={`mt-0.5 flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full text-sm font-black ${conv.unread_count > 0 ? 'bg-primary-100 text-primary-700' : 'bg-gray-100 text-slate-500'}`}>
+                                                <div className={`mt-0.5 flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full text-sm font-black ${conv.unread_count > 0 ? 'bg-primary-100 text-primary-700' : 'bg-gray-100 text-slate-500'}`}>
                                                     {conv.client_name?.charAt(0).toUpperCase()}
                                                 </div>
                                                 <div className="min-w-0 flex-1">
@@ -646,17 +747,17 @@ const StaffMessaging = ({ variant = 'staff', refreshToken = 0, onMetricsChange =
                                                     <p className="mt-1 truncate text-xs text-slate-500">{conv.last_message || 'No messages yet'}</p>
                                                 </div>
                                             </div>
-                                        </button>
+                                        </UpdatedRowPulse>
                                     ))}
                                 </div>
                             )}
-                        </div>
+                        </SoftRefreshBoundary>
                     </aside>
 
-                    <main className="flex min-w-0 flex-1 flex-col bg-gray-50/30">
+                    <main className={threadClass}>
                         {!selectedConv ? (
                             <div className="flex flex-1 items-center justify-center p-8">
-                                <div className="max-w-md rounded-2xl border border-gray-200 bg-white p-6 text-center shadow-sm">
+                                <div className={emptyCardClass}>
                                     <svg className="mx-auto mb-4 h-12 w-12 text-gray-200" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" /></svg>
                                     <p className="text-base font-black text-gray-900">Select a conversation to monitor</p>
                                     <p className="mt-2 text-sm font-semibold leading-relaxed text-slate-500">Review ownership, read the thread, and step in only when escalation is needed.</p>
@@ -664,7 +765,7 @@ const StaffMessaging = ({ variant = 'staff', refreshToken = 0, onMetricsChange =
                             </div>
                         ) : (
                             <>
-                                <div className="flex items-center justify-between gap-4 border-b border-gray-200 bg-white px-5 py-3">
+                                <div className="flex shrink-0 items-center justify-between gap-4 border-b border-gray-200 bg-white px-7 py-4">
                                     <div className="flex min-w-0 items-center gap-3">
                                         <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-primary-100 text-sm font-black text-primary-700">{selectedConv.client_name?.charAt(0).toUpperCase()}</div>
                                         <div className="min-w-0">
@@ -677,13 +778,13 @@ const StaffMessaging = ({ variant = 'staff', refreshToken = 0, onMetricsChange =
                                         </div>
                                     </div>
                                     <div className="flex flex-shrink-0 items-center gap-2">
-                                        {!canReply && selectedConv.status !== 'resolved' && selectedConv.staff_id && (
+                                        {!selectedConv.client_is_deactivated && !canReply && selectedConv.status !== 'resolved' && selectedConv.staff_id && (
                                             <button onClick={handleAdminJoin} disabled={claiming}
                                                 className="rounded-xl border border-primary-200 bg-primary-50 px-4 py-2 text-xs font-black text-primary-700 transition hover:bg-primary-100 disabled:opacity-60">
                                                 {claiming ? 'Joining...' : 'Join conversation'}
                                             </button>
                                         )}
-                                        {!selectedConv.staff_id && selectedConv.status !== 'resolved' && (
+                                        {!selectedConv.client_is_deactivated && !selectedConv.staff_id && selectedConv.status !== 'resolved' && (
                                             <button onClick={handleClaim} disabled={claiming}
                                                 className="rounded-xl bg-primary-600 px-4 py-2 text-xs font-black text-white transition hover:bg-primary-700 disabled:opacity-60">
                                                 {claiming ? 'Taking over...' : 'Take over'}
@@ -693,8 +794,8 @@ const StaffMessaging = ({ variant = 'staff', refreshToken = 0, onMetricsChange =
                                 </div>
 
                                 <div className="flex min-h-0 flex-1">
-                                    <section className="flex min-w-0 flex-1 flex-col">
-                                        <div className="flex-1 space-y-3 overflow-y-auto p-5">
+                                    <section className="flex min-h-0 min-w-0 flex-1 flex-col">
+                                        <div ref={messagesContainerRef} className={messagePaneClass}>
                                             {hasOlderMessages && (
                                                 <div className="flex justify-center">
                                                     <button
@@ -715,7 +816,7 @@ const StaffMessaging = ({ variant = 'staff', refreshToken = 0, onMetricsChange =
                                             ) : (
                                                 messages.map(msg => (
                                                     <div key={msg.id} className={`group flex ${msg.is_mine ? 'justify-end' : 'justify-start'}`}>
-                                                        <div className={`relative max-w-[70%] rounded-2xl px-4 py-2.5 ${msg.is_mine ? 'bg-primary-600 text-white rounded-br-md' : 'bg-white text-gray-800 rounded-bl-md shadow-sm border border-gray-100'}`}>
+                                                        <div className={`relative max-w-[76%] rounded-2xl px-5 py-3 ${msg.is_mine ? 'bg-primary-600 text-white rounded-br-md' : 'bg-white text-gray-800 rounded-bl-md shadow-sm border border-gray-100'}`}>
                                                             {!msg.is_mine && <p className="mb-0.5 text-[10px] font-bold text-primary-600">{msg.sender_name}</p>}
                                                             {editingMessageId === msg.id ? (
                                                                 <div className="space-y-2">
@@ -753,7 +854,7 @@ const StaffMessaging = ({ variant = 'staff', refreshToken = 0, onMetricsChange =
                                                                                 </button>
                                                                             )}
                                                                             {canDeleteMessage(msg) && (
-                                                                                <button type="button" onClick={() => deleteMessage(msg)} className="block w-full px-3 py-2 text-left text-xs font-black text-red-700 transition hover:bg-red-50">
+                                                                                <button type="button" onClick={() => requestDeleteMessage(msg)} className="block w-full px-3 py-2 text-left text-xs font-black text-red-700 transition hover:bg-red-50">
                                                                                     Delete message
                                                                                 </button>
                                                                             )}
@@ -765,11 +866,17 @@ const StaffMessaging = ({ variant = 'staff', refreshToken = 0, onMetricsChange =
                                                     </div>
                                                 ))
                                             )}
-                                            <div ref={messagesEndRef} />
                                         </div>
 
-                                        {canReply ? (
-                                            <form onSubmit={handleSend} className="flex items-center gap-3 border-t border-gray-200 bg-white px-4 py-3">
+                                        {selectedConv.client_is_deactivated ? (
+                                            <div className="shrink-0 border-t border-gray-200 bg-white px-7 py-4">
+                                                <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+                                                    <p className="text-sm font-black text-slate-700">Archived due to deactivation.</p>
+                                                    <p className="mt-1 text-xs font-semibold text-slate-500">This conversation is preserved for review. Replies and ownership changes are disabled.</p>
+                                                </div>
+                                            </div>
+                                        ) : canReply ? (
+                                            <form onSubmit={handleSend} className="flex shrink-0 items-center gap-3 border-t border-gray-200 bg-white px-7 py-4">
                                                 <input type="text" value={newMessage} onChange={(e) => setNewMessage(e.target.value)}
                                                     placeholder="Type your reply..." maxLength={2000} autoFocus
                                                     className="flex-1 rounded-xl border border-gray-200 bg-gray-100 px-4 py-2.5 text-sm outline-none transition-all focus:border-primary-300 focus:bg-white focus:ring-2 focus:ring-primary-500/20" />
@@ -779,7 +886,7 @@ const StaffMessaging = ({ variant = 'staff', refreshToken = 0, onMetricsChange =
                                                 </button>
                                             </form>
                                         ) : (
-                                            <div className="border-t border-gray-200 bg-white px-4 py-3">
+                                            <div className="shrink-0 border-t border-gray-200 bg-white px-7 py-4">
                                                 <div className="flex items-center justify-between gap-3 rounded-xl border border-amber-100 bg-amber-50 px-4 py-3">
                                                     <p className="text-sm font-bold text-amber-800">Monitoring only. Join to reply.</p>
                                                     {selectedConv?.staff_id ? (
@@ -798,8 +905,8 @@ const StaffMessaging = ({ variant = 'staff', refreshToken = 0, onMetricsChange =
                                         )}
                                     </section>
 
-                                    <aside className="w-72 flex-shrink-0 border-l border-gray-200 bg-white p-4">
-                                        <div className="flex items-start justify-between gap-3">
+                                    <aside className={contextRailClass}>
+                                        <div className={isAdminFullSurface ? 'admin-context-head flex items-start justify-between gap-3' : 'flex items-start justify-between gap-3'}>
                                             <div>
                                                 <p className="text-[10px] font-black uppercase tracking-widest text-amber-700">Admin context</p>
                                                 <h4 className="mt-1 text-sm font-black text-gray-950">{selectedOwnerLabel}</h4>
@@ -847,27 +954,51 @@ const StaffMessaging = ({ variant = 'staff', refreshToken = 0, onMetricsChange =
                                             </div>
                                         </div>
 
-                                        <div className="mt-4 space-y-3">
-                                            <div className="rounded-xl border border-gray-100 bg-gray-50 px-3 py-3">
-                                                <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Conversation</p>
-                                                <p className="mt-1 text-sm font-black text-gray-900">{selectedConv.status === 'resolved' ? 'Resolved' : selectedConv.conversation_context || 'Active'}</p>
-                                                <p className="mt-1 text-xs font-semibold text-slate-500">{selectedConv.last_message_time}</p>
+                                        {isAdminFullSurface ? (
+                                            <div>
+                                                <div className="admin-context-section">
+                                                    <p className="admin-context-label">Conversation</p>
+                                                    <p className="admin-context-value">{selectedConv.status === 'resolved' ? 'Resolved' : selectedConv.conversation_context || 'Active'}</p>
+                                                    <p className="admin-context-note">{selectedConv.last_message_time}</p>
+                                                </div>
+                                                <div className="admin-context-section">
+                                                    <p className="admin-context-label">Customer</p>
+                                                    <p className="admin-context-value truncate">{selectedConv.client_name}</p>
+                                                    <p className="admin-context-note truncate">{selectedConv.client_is_deactivated ? 'Deactivated customer' : (selectedConv.client_email || 'No email on file')}</p>
+                                                </div>
+                                                <div className="admin-context-section">
+                                                    <p className="admin-context-label">Booking context</p>
+                                                    <p className="admin-context-value">{selectedConv.booking_label || 'General inquiry'}</p>
+                                                    <p className="admin-context-note">{selectedConv.booking_status || 'No booking status'}</p>
+                                                </div>
+                                                <div className="admin-context-section">
+                                                    <p className="admin-context-label">Internal note</p>
+                                                    <p className="admin-context-note">{selectedConv.internal_notes || 'No internal note yet.'}</p>
+                                                </div>
                                             </div>
-                                            <div className="rounded-xl border border-gray-100 bg-gray-50 px-3 py-3">
-                                                <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Customer</p>
-                                                <p className="mt-1 truncate text-sm font-black text-gray-900">{selectedConv.client_name}</p>
-                                                <p className="mt-1 truncate text-xs font-semibold text-slate-500">{selectedConv.client_email || 'No email on file'}</p>
+                                        ) : (
+                                            <div className="mt-4 space-y-3">
+                                                <div className="rounded-xl border border-gray-100 bg-gray-50 px-3 py-3">
+                                                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Conversation</p>
+                                                    <p className="mt-1 text-sm font-black text-gray-900">{selectedConv.status === 'resolved' ? 'Resolved' : selectedConv.conversation_context || 'Active'}</p>
+                                                    <p className="mt-1 text-xs font-semibold text-slate-500">{selectedConv.last_message_time}</p>
+                                                </div>
+                                                <div className="rounded-xl border border-gray-100 bg-gray-50 px-3 py-3">
+                                                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Customer</p>
+                                                    <p className="mt-1 truncate text-sm font-black text-gray-900">{selectedConv.client_name}</p>
+                                                    <p className="mt-1 truncate text-xs font-semibold text-slate-500">{selectedConv.client_is_deactivated ? 'Deactivated customer' : (selectedConv.client_email || 'No email on file')}</p>
+                                                </div>
+                                                <div className="rounded-xl border border-gray-100 bg-gray-50 px-3 py-3">
+                                                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Booking context</p>
+                                                    <p className="mt-1 text-sm font-black text-gray-900">{selectedConv.booking_label || 'General inquiry'}</p>
+                                                    <p className="mt-1 text-xs font-semibold text-slate-500">{selectedConv.booking_status || 'No booking status'}</p>
+                                                </div>
+                                                <div className="rounded-xl border border-gray-100 bg-gray-50 px-3 py-3">
+                                                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Internal note</p>
+                                                    <p className="mt-1 text-xs font-semibold leading-relaxed text-slate-500">{selectedConv.internal_notes || 'No internal note yet.'}</p>
+                                                </div>
                                             </div>
-                                            <div className="rounded-xl border border-gray-100 bg-gray-50 px-3 py-3">
-                                                <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Booking context</p>
-                                                <p className="mt-1 text-sm font-black text-gray-900">{selectedConv.booking_label || 'General inquiry'}</p>
-                                                <p className="mt-1 text-xs font-semibold text-slate-500">{selectedConv.booking_status || 'No booking status'}</p>
-                                            </div>
-                                            <div className="rounded-xl border border-gray-100 bg-gray-50 px-3 py-3">
-                                                <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Internal note</p>
-                                                <p className="mt-1 text-xs font-semibold leading-relaxed text-slate-500">{selectedConv.internal_notes || 'No internal note yet.'}</p>
-                                            </div>
-                                        </div>
+                                        )}
                                     </aside>
                                 </div>
                             </>
@@ -888,22 +1019,66 @@ const StaffMessaging = ({ variant = 'staff', refreshToken = 0, onMetricsChange =
                     message={errorModal.message}
                     onClose={() => setErrorModal({ isOpen: false, message: '' })}
                 />
+                <PromptModal
+                    isOpen={internalNoteModal.isOpen}
+                    title="Internal note"
+                    message="Keep private context for staff reviewing this conversation."
+                    label="Internal note for staff only"
+                    placeholder="Add booking context, customer preferences, or follow-up reminders."
+                    initialValue={internalNoteModal.conversation?.internal_notes || ''}
+                    confirmText="Save note"
+                    busy={internalNoteModal.busy}
+                    onCancel={closeInternalNoteModal}
+                    onConfirm={saveInternalNote}
+                />
+                <ConfirmModal
+                    isOpen={deleteConfirmModal.isOpen}
+                    title="Delete this message?"
+                    message="The message will be replaced with Message deleted."
+                    confirmText="Delete"
+                    tone="danger"
+                    busy={deleteConfirmModal.busy}
+                    onCancel={() => setDeleteConfirmModal({ isOpen: false, message: null, busy: false })}
+                    onConfirm={confirmOwnMessageDelete}
+                />
+                <PromptModal
+                    isOpen={moderationDeleteModal.isOpen}
+                    title="Delete message as moderation?"
+                    message="Add a short reason for the audit trail before removing another person's message."
+                    label="Moderation reason"
+                    placeholder="Example: Removed inappropriate language."
+                    minLength={3}
+                    confirmText="Delete message"
+                    busy={moderationDeleteModal.busy}
+                    onCancel={() => setModerationDeleteModal({ isOpen: false, message: null, busy: false })}
+                    onConfirm={confirmModerationDelete}
+                />
             </div>
         );
     }
 
     return (
         <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden" style={{ height: '600px' }}>
-            <div className="flex h-full">
+            <div className="flex h-full min-h-0">
                 {/* Sidebar */}
-                <div className="w-80 border-r border-gray-200 flex flex-col flex-shrink-0">
+                <div className="w-80 border-r border-gray-200 flex flex-col flex-shrink-0 min-h-0">
                     {/* Sidebar Header */}
                     <div className="px-4 py-3 border-b border-gray-100 bg-gray-50">
                         <div className="flex items-center justify-between mb-2">
                             <h3 className="text-sm font-bold text-gray-900">{isAdminOversight ? 'Conversation Oversight' : 'Client Messages'}</h3>
-                            {totalUnread > 0 && (
-                                <span className="bg-primary-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-full">{totalUnread} new</span>
-                            )}
+                            <div className="flex items-center gap-2">
+                                <LiveSyncIndicator
+                                    state={conversationsResource.syncState}
+                                    refreshing={conversationsResource.refreshing}
+                                    lastSyncedAt={conversationsResource.lastSyncedAt}
+                                    error={conversationsResource.error}
+                                    onRetry={conversationsResource.refetch}
+                                    compact
+                                />
+                                {totalUnread > 0 && (
+                                    <span className="bg-primary-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-full">{totalUnread} new</span>
+                                )}
+                            </div>
                         </div>
                         {/* Tab Switcher */}
                         <div className={`grid gap-1 bg-gray-100 rounded-lg p-0.5 ${isAdminOversight ? 'grid-cols-2' : 'grid-cols-2'}`}>
@@ -934,7 +1109,12 @@ const StaffMessaging = ({ variant = 'staff', refreshToken = 0, onMetricsChange =
                     </div>
 
                     {/* Conversation List */}
-                    <div className="flex-1 overflow-y-auto">
+                    <SoftRefreshBoundary
+                        loading={loading}
+                        refreshing={conversationsResource.refreshing}
+                        hasData={currentList.length > 0}
+                        className="flex-1 overflow-y-auto"
+                    >
                         {loading ? (
                             <div className="p-4">
                                 <StaffSkeleton rows={5} label="Loading conversations" />
@@ -948,7 +1128,13 @@ const StaffMessaging = ({ variant = 'staff', refreshToken = 0, onMetricsChange =
                         ) : (
                             <div className="divide-y divide-gray-50">
                                 {currentList.map(conv => (
-                                    <button key={conv.id} onClick={() => selectConversation(conv)}
+                                    <UpdatedRowPulse
+                                        key={conv.id}
+                                        as="button"
+                                        type="button"
+                                        watchKey={`${conv.id}:${conv.last_message_time}:${conv.unread_count}:${conv.status}:${conv.staff_id || ''}`}
+                                        active={conversationsResource.changedKeys.has(conv.id)}
+                                        onClick={() => selectConversation(conv)}
                                         className={`w-full flex items-center gap-3 px-4 py-3 transition-colors text-left ${selectedConv?.id === conv.id ? 'bg-primary-50 border-l-[3px] border-l-primary-500' : 'hover:bg-gray-50'}`}>
                                         <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm flex-shrink-0 ${conv.unread_count > 0 ? 'bg-primary-100 text-primary-700' : 'bg-gray-100 text-gray-500'}`}>
                                             {conv.client_name?.charAt(0).toUpperCase()}
@@ -967,15 +1153,15 @@ const StaffMessaging = ({ variant = 'staff', refreshToken = 0, onMetricsChange =
                                         {conv.unread_count > 0 && (
                                             <span className="min-w-[20px] h-[20px] flex items-center justify-center bg-primary-600 text-white text-[10px] font-bold rounded-full px-1 flex-shrink-0">{conv.unread_count}</span>
                                         )}
-                                    </button>
+                                    </UpdatedRowPulse>
                                 ))}
                             </div>
                         )}
-                    </div>
+                    </SoftRefreshBoundary>
                 </div>
 
                 {/* Chat Area */}
-                <div className="flex-1 flex flex-col">
+                <div className="flex-1 flex min-h-0 flex-col">
                     {!selectedConv ? (
                         <div className="flex-1 flex items-center justify-center">
                             <div className="text-center">
@@ -987,7 +1173,7 @@ const StaffMessaging = ({ variant = 'staff', refreshToken = 0, onMetricsChange =
                     ) : (
                         <>
                             {/* Chat Header */}
-                            <div className="px-5 py-3 border-b border-gray-200 bg-gray-50 flex items-center justify-between">
+                            <div className="px-5 py-3 border-b border-gray-200 bg-gray-50 flex shrink-0 items-center justify-between">
                                 <div className="flex items-center gap-3">
                                     <div className="w-9 h-9 rounded-full bg-primary-100 text-primary-700 flex items-center justify-center font-bold text-sm">{selectedConv.client_name?.charAt(0).toUpperCase()}</div>
                                     <div>
@@ -1013,13 +1199,13 @@ const StaffMessaging = ({ variant = 'staff', refreshToken = 0, onMetricsChange =
                                 {/* Actions (only when claimed) */}
                                 {isAdminOversight && selectedConv && (
                                     <div className="flex items-center gap-2">
-                                        {!canReply && selectedConv.status !== 'resolved' && selectedConv.staff_id && (
+                                        {!selectedConv.client_is_deactivated && !canReply && selectedConv.status !== 'resolved' && selectedConv.staff_id && (
                                             <button onClick={handleAdminJoin} disabled={claiming}
                                                 className="rounded-lg border border-primary-200 bg-primary-50 px-3 py-1.5 text-xs font-bold text-primary-700 transition-colors hover:bg-primary-100">
                                                 {claiming ? 'Joining...' : 'Join conversation'}
                                             </button>
                                         )}
-                                        {!selectedConv.staff_id && selectedConv.status !== 'resolved' && (
+                                        {!selectedConv.client_is_deactivated && !selectedConv.staff_id && selectedConv.status !== 'resolved' && (
                                             <button onClick={handleClaim} disabled={claiming}
                                                 className="rounded-lg border border-primary-200 bg-primary-600 px-3 py-1.5 text-xs font-bold text-white transition-colors hover:bg-primary-700">
                                                 {claiming ? 'Taking over...' : 'Take over'}
@@ -1100,7 +1286,7 @@ const StaffMessaging = ({ variant = 'staff', refreshToken = 0, onMetricsChange =
                             </div>
 
                             {/* Messages */}
-                            <div className="flex-1 overflow-y-auto p-5 space-y-3 bg-gray-50/30">
+                            <div ref={messagesContainerRef} className="min-h-0 flex-1 overflow-y-auto px-5 py-6 space-y-3 bg-gray-50/30">
                                 {hasOlderMessages && (
                                     <div className="flex justify-center">
                                         <button
@@ -1159,7 +1345,7 @@ const StaffMessaging = ({ variant = 'staff', refreshToken = 0, onMetricsChange =
                                                                     </button>
                                                                 )}
                                                                 {canDeleteMessage(msg) && (
-                                                                    <button type="button" onClick={() => deleteMessage(msg)} className="block w-full px-3 py-2 text-left text-xs font-black text-red-700 transition hover:bg-red-50">
+                                                                    <button type="button" onClick={() => requestDeleteMessage(msg)} className="block w-full px-3 py-2 text-left text-xs font-black text-red-700 transition hover:bg-red-50">
                                                                         Delete message
                                                                     </button>
                                                                 )}
@@ -1171,12 +1357,15 @@ const StaffMessaging = ({ variant = 'staff', refreshToken = 0, onMetricsChange =
                                         </div>
                                     ))
                                 )}
-                                <div ref={messagesEndRef} />
                             </div>
 
                             {/* Input Area OR Claim Button */}
-                            {isClaimedByMe ? (
-                                <form onSubmit={handleSend} className="border-t border-gray-200 px-4 py-3 flex items-center gap-3 bg-white">
+                            {selectedConv.client_is_deactivated ? (
+                                <div className="shrink-0 border-t border-gray-200 px-4 py-4 bg-slate-50">
+                                    <p className="text-center text-sm font-bold text-slate-600">Archived due to deactivation. Replies are disabled.</p>
+                                </div>
+                            ) : isClaimedByMe ? (
+                                <form onSubmit={handleSend} className="shrink-0 border-t border-gray-200 px-4 py-3 flex items-center gap-3 bg-white">
                                     <input type="text" value={newMessage} onChange={(e) => setNewMessage(e.target.value)}
                                         placeholder="Type your reply..." maxLength={2000} autoFocus
                                         className="flex-1 text-sm px-4 py-2.5 rounded-lg bg-gray-100 focus:bg-white focus:ring-2 focus:ring-primary-500/20 border border-gray-200 focus:border-primary-300 outline-none transition-all" />
@@ -1187,7 +1376,7 @@ const StaffMessaging = ({ variant = 'staff', refreshToken = 0, onMetricsChange =
                                     </button>
                                 </form>
                             ) : (
-                                <div className="border-t border-gray-200 px-4 py-4 bg-amber-50/50">
+                                <div className="shrink-0 border-t border-gray-200 px-4 py-4 bg-amber-50/50">
                                     {isAdminOversight && selectedConv?.staff_id ? (
                                         <>
                                             <button onClick={handleAdminJoin} disabled={claiming || selectedConv?.status === 'resolved'}
@@ -1234,6 +1423,40 @@ const StaffMessaging = ({ variant = 'staff', refreshToken = 0, onMetricsChange =
                 title="Chat action failed"
                 message={errorModal.message}
                 onClose={() => setErrorModal({ isOpen: false, message: '' })}
+            />
+            <PromptModal
+                isOpen={internalNoteModal.isOpen}
+                title="Internal note"
+                message="Keep private context for staff reviewing this conversation."
+                label="Internal note for staff only"
+                placeholder="Add booking context, customer preferences, or follow-up reminders."
+                initialValue={internalNoteModal.conversation?.internal_notes || ''}
+                confirmText="Save note"
+                busy={internalNoteModal.busy}
+                onCancel={closeInternalNoteModal}
+                onConfirm={saveInternalNote}
+            />
+            <ConfirmModal
+                isOpen={deleteConfirmModal.isOpen}
+                title="Delete this message?"
+                message="The message will be replaced with Message deleted."
+                confirmText="Delete"
+                tone="danger"
+                busy={deleteConfirmModal.busy}
+                onCancel={() => setDeleteConfirmModal({ isOpen: false, message: null, busy: false })}
+                onConfirm={confirmOwnMessageDelete}
+            />
+            <PromptModal
+                isOpen={moderationDeleteModal.isOpen}
+                title="Delete message as moderation?"
+                message="Add a short reason for the audit trail before removing another person's message."
+                label="Moderation reason"
+                placeholder="Example: Removed inappropriate language."
+                minLength={3}
+                confirmText="Delete message"
+                busy={moderationDeleteModal.busy}
+                onCancel={() => setModerationDeleteModal({ isOpen: false, message: null, busy: false })}
+                onConfirm={confirmModerationDelete}
             />
         </div>
     );

@@ -1080,6 +1080,7 @@ class AdminReportService
     private function paymentQuery(array $filters)
     {
         return Payment::query()
+            ->active()
             ->leftJoin('bookings', 'payments.booking_id', '=', 'bookings.id')
             ->when($filters['date_from'] ?? null, fn ($q, $date) => $q->where('bookings.event_date', '>=', $date))
             ->when($filters['date_to'] ?? null, fn ($q, $date) => $q->where('bookings.event_date', '<=', $date))

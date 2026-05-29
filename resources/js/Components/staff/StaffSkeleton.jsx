@@ -21,7 +21,9 @@ export const StaffWorkspaceSkeleton = ({
                         <p>{group.label}</p>
                         {group.items.map((item) => (
                             <div key={item} className="staff-sidebar-item staff-skeleton-nav-item">
-                                <span>{item}</span>
+                                <span className="staff-sidebar-item-main">
+                                    <span className="staff-sidebar-item-label">{item}</span>
+                                </span>
                             </div>
                         ))}
                     </section>
@@ -39,6 +41,8 @@ export const StaffWorkspaceSkeleton = ({
                 </div>
             </div>
         </aside>
+
+        <span className="staff-sidebar-edge-toggle staff-sidebar-edge-toggle-skeleton" aria-hidden="true" />
 
         <div className="staff-workspace-main">
             <main>

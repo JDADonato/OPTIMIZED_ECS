@@ -27,22 +27,22 @@ class ClientDashboardController extends Controller
         $userId = Auth::id();
 
         $allBookings = Booking::where('user_id', $userId)
-            ->with('payments')
+            ->with(['payments' => fn ($query) => $query->active()])
             ->orderBy('event_date', 'desc')
             ->get();
 
         $allBookings->each(fn ($booking) => $paymentService->syncPendingTranches($booking));
-        $allBookings->load('payments');
+        $allBookings->load(['payments' => fn ($query) => $query->active()]);
 
         $bookingIdsForVersion = $allBookings->pluck('id');
         $latestUpdatedAt = collect([
             $allBookings->max('updated_at'),
-            Payment::whereIn('booking_id', $bookingIdsForVersion)->max('updated_at'),
+            Payment::active()->whereIn('booking_id', $bookingIdsForVersion)->max('updated_at'),
             FoodTasting::where('user_id', $userId)->max('updated_at'),
         ])->filter()->max();
         $versionMeta = ResourceVersion::make(
             $allBookings->count()
-                + Payment::whereIn('booking_id', $bookingIdsForVersion)->count()
+                + Payment::active()->whereIn('booking_id', $bookingIdsForVersion)->count()
                 + FoodTasting::where('user_id', $userId)->count(),
             $latestUpdatedAt,
             $bookingIdsForVersion->max()
@@ -80,6 +80,7 @@ class ClientDashboardController extends Controller
             ->values();
         $historyBookings = $allBookings
             ->filter(fn ($booking) => in_array($booking['status'] ?? null, $historyStatuses, true))
+            ->reject(fn ($booking) => !empty($booking['hidden_from_customer_history_at']))
             ->values();
 
         $tastings = FoodTasting::where('user_id', $userId)
@@ -88,6 +89,7 @@ class ClientDashboardController extends Controller
 
         $bookingIds = $allBookings->pluck('id');
         $payments = Payment::whereIn('booking_id', $bookingIds)
+            ->active()
             ->with('booking:id,event_date,event_name,event_type,client_full_name,total_cost')
             ->orderBy('booking_id')
             ->orderByRaw("CASE payment_type WHEN 'Reservation' THEN 1 WHEN 'DownPayment' THEN 2 WHEN 'Final' THEN 3 END")
@@ -141,9 +143,9 @@ class ClientDashboardController extends Controller
             'non_refundable_amount' => $nonRefundableAmount,
             'refundable_amount' => $refundableAmount,
             'message' => $refundableAmount > 0
-                ? "Warning: Because your event is > 7 days away, the 10% Reservation Fee (â‚±" . number_format($reservationFee, 2) . ") is forfeited. The remaining â‚±" . number_format($refundableAmount, 2) . " will be flagged for refund."
+                ? "Warning: Because your event is more than 7 days away, the 10% Reservation Fee (PHP " . number_format($reservationFee, 2) . ") is forfeited. The remaining PHP " . number_format($refundableAmount, 2) . " will be flagged for refund."
                 : ($daysUntilEvent <= 7
-                    ? "Warning: Because your event is within 7 days, ALL payments (â‚±" . number_format($nonRefundableAmount, 2) . ") are strictly non-refundable."
+                    ? "Warning: Because your event is within 7 days, all payments (PHP " . number_format($nonRefundableAmount, 2) . ") are strictly non-refundable."
                     : "Warning: Your 10% Reservation Fee is non-refundable. Your paid amount does not exceed this fee."),
         ];
     }
@@ -180,6 +182,7 @@ class ClientDashboardController extends Controller
 
         $bookingIds = $bookings->pluck('id');
         $payments = Payment::whereIn('booking_id', $bookingIds)
+            ->active()
             ->orderBy('booking_id')
             ->orderByRaw("CASE payment_type WHEN 'Reservation' THEN 1 WHEN 'DownPayment' THEN 2 WHEN 'Final' THEN 3 END")
             ->orderBy('due_date')

@@ -45,7 +45,7 @@ class AnnouncementService
     public function deleteDraft(Announcement $announcement): void
     {
         if (!in_array($announcement->status, ['draft', 'scheduled'], true)) {
-            abort(422, 'Only draft or scheduled announcements can be deleted. Published announcements should be archived instead.');
+            abort(422, 'Only draft or scheduled announcements can be discarded. Published announcements should be archived instead.');
         }
 
         $announcement->delete();
@@ -78,7 +78,7 @@ class AnnouncementService
 
     public function resolveRecipients(Announcement $announcement): Collection
     {
-        $query = User::query()->whereNotNull('email');
+        $query = User::query()->reachableForNotifications();
 
         if ($announcement->visibility === 'active_clients') {
             $query->where('role', 'Client')->whereHas('bookings');
@@ -104,6 +104,10 @@ class AnnouncementService
                 ['announcement_id' => $announcement->id, 'user_id' => $user->id],
                 ['email' => $user->email, 'status' => 'pending']
             );
+
+            if ($recipient->status === 'sent') {
+                continue;
+            }
 
             try {
                 Mail::to($user->email)->queue(new AnnouncementEmail($announcement));

@@ -159,4 +159,31 @@ class User extends Authenticatable
     {
         return ($this->account_status ?? 'active') === 'active';
     }
+
+    public function scopeActiveAccounts($query)
+    {
+        return $query->where(fn ($inner) => $inner
+            ->whereNull('account_status')
+            ->orWhere('account_status', 'active'));
+    }
+
+    public function scopeReachableForNotifications($query)
+    {
+        return $query->activeAccounts()
+            ->whereNotNull('email')
+            ->where('email', '!=', '')
+            ->where('email', 'not like', '%@eloquente.invalid');
+    }
+
+    public function hasPlaceholderEmail(): bool
+    {
+        return is_string($this->email) && str_ends_with($this->email, '@eloquente.invalid');
+    }
+
+    public function isReachableForNotifications(): bool
+    {
+        return $this->isActive()
+            && filled($this->email)
+            && !$this->hasPlaceholderEmail();
+    }
 }

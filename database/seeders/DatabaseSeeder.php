@@ -39,26 +39,49 @@ class DatabaseSeeder extends Seeder
             $this->command->info('Skipped analytics demo data outside APP_ENV=local.');
         }
 
-        $this->command->info('✅ Database seeded successfully!');
+        $this->command->info('Database seeded successfully.');
     }
 
     private function seedDefaultUsers(): void
     {
         $defaultUsers = [
-            ['username' => 'admin',      'role' => 'Admin'],
-            ['username' => 'marketing',  'role' => 'Marketing'],
-            ['username' => 'accounting', 'role' => 'Accounting'],
-            ['username' => 'client',     'role' => 'Client'],
+            ['username' => 'admin',      'role' => 'Admin',      'full_name' => 'Eloquente Admin',       'email' => 'admin@demo.eloquente.test',      'phone' => '09000000001'],
+            ['username' => 'marketing',  'role' => 'Marketing',  'full_name' => 'Marketing Demo User',  'email' => 'marketing@demo.eloquente.test',  'phone' => '09000000002'],
+            ['username' => 'accounting', 'role' => 'Accounting', 'full_name' => 'Accounting Demo User', 'email' => 'accounting@demo.eloquente.test', 'phone' => '09000000003'],
+            ['username' => 'client',     'role' => 'Client',     'full_name' => 'Client Demo User',     'email' => 'client@demo.eloquente.test',     'phone' => '09000000004'],
         ];
 
         foreach ($defaultUsers as $userData) {
-            User::firstOrCreate(
-                ['username' => $userData['username']],
-                [
-                    'password' => 'password123',
-                    'role'     => $userData['role'],
-                ]
-            );
+            $user = User::firstOrNew(['username' => $userData['username']]);
+            if (!$user->exists) {
+                $user->password = 'password123';
+            }
+
+            $attributes = [
+                'role' => $userData['role'],
+                'account_status' => 'active',
+                'preferred_contact_method' => $user->preferred_contact_method ?: 'email',
+                'notification_preferences' => array_merge([
+                    'email_enabled' => true,
+                    'sound_enabled' => false,
+                    'quiet_mode' => false,
+                    'chat_email_enabled' => true,
+                    'payment_email_enabled' => true,
+                    'staff_email_enabled' => true,
+                ], $user->notification_preferences ?: []),
+                'profile_preferences' => $user->profile_preferences ?: [],
+            ];
+
+            if ($this->shouldSeedDemoData()) {
+                $attributes = array_merge($attributes, [
+                    'full_name' => $userData['full_name'],
+                    'email' => $userData['email'],
+                    'phone' => $userData['phone'],
+                    'email_verified_at' => $user->email_verified_at ?: now(),
+                ]);
+            }
+
+            $user->forceFill($attributes)->save();
         }
 
         $this->command->info('Seeded 4 default users');

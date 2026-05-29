@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import { fetchMenuItemsFromAPI } from '../../utils/menuUtils';
+import SmartImage from '../common/SmartImage';
 
 const CATEGORY_TABS = [
     { key: 'starter', label: 'Starters' },
@@ -1177,11 +1178,13 @@ const MenuBuilder = ({ bookingData, updateBooking, onNext, onBack, mode = 'full'
                         >
                             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
                         </button>
-                        <img
+                        <SmartImage
                             src={lightboxDish.image}
                             alt={lightboxDish.name}
-                            className="w-full rounded-2xl shadow-2xl object-cover max-h-[70vh]"
-                            onError={(e) => { e.target.onerror = null; e.target.src = 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&q=80&w=800'; }}
+                            loading="eager"
+                            aspectRatio="16 / 10"
+                            containerClassName="rounded-2xl shadow-2xl max-h-[70vh]"
+                            className="max-h-[70vh]"
                         />
                         <div className="absolute bottom-0 left-0 right-0 p-6 bg-gradient-to-t from-black/80 to-transparent rounded-b-2xl">
                             {lightboxDish.isBestSeller && (
@@ -1189,7 +1192,7 @@ const MenuBuilder = ({ bookingData, updateBooking, onNext, onBack, mode = 'full'
                             )}
                             <h3 className="text-white font-bold text-2xl">{lightboxDish.name}</h3>
                             <p className="text-gray-200 text-sm mt-1">{lightboxDish.description}</p>
-                            <p className="text-yellow-300 text-lg font-bold mt-2">₱{getDishCost(lightboxDish)}/head</p>
+                            <p className="text-yellow-300 text-lg font-bold mt-2">{money(getDishCost(lightboxDish))}/head</p>
                         </div>
                     </div>
                 </div>
@@ -1295,11 +1298,12 @@ const MenuBuilder = ({ bookingData, updateBooking, onNext, onBack, mode = 'full'
                                             onClick={() => setLightboxDish(dish)}
                                             title="Click to enlarge"
                                         >
-                                            <img
+                                            <SmartImage
                                                 src={dish.image}
                                                 alt={dish.name}
-                                                className="w-full h-full object-cover transition-transform duration-300 group-hover/img:scale-110"
-                                                onError={(e) => { e.target.onerror = null; e.target.src = 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&q=80&w=400'; }}
+                                                aspectRatio="1 / 1"
+                                                containerClassName="h-full"
+                                                className="transition-transform duration-300 group-hover/img:scale-110"
                                             />
                                             <div className="absolute inset-0 bg-black/0 group-hover/img:bg-black/30 transition-all duration-300 flex items-center justify-center">
                                                 <svg className="w-5 h-5 text-white opacity-0 group-hover/img:opacity-100 transition-opacity duration-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM10 7v3m0 0v3m0-3h3m-3 0H7" /></svg>

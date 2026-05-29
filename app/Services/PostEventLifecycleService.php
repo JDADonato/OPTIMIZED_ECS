@@ -56,7 +56,7 @@ class PostEventLifecycleService
             return 'Active';
         }
 
-        $booking->loadMissing(['payments', 'refundCases', 'feedbackRequest.response']);
+        $booking->loadMissing(['payments' => fn ($query) => $query->active(), 'refundCases', 'feedbackRequest.response']);
 
         $paid = (float) $booking->payments->whereIn('status', ['Paid', 'Verified'])->sum('amount');
         $refunded = (float) $booking->payments->where('status', 'Refunded')->sum('amount');

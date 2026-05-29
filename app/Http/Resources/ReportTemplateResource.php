@@ -15,6 +15,7 @@ class ReportTemplateResource extends JsonResource
             'description' => $this->description,
             'created_by' => $this->created_by,
             'visibility' => $this->visibility,
+            'archived_at' => $this->archived_at,
             'layout_json' => $this->layout_json ?? [],
             'filters_json' => $this->filters_json ?? [],
             'created_at' => $this->created_at,

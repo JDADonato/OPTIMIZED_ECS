@@ -7,9 +7,12 @@ use App\Models\Announcement;
 use App\Models\AnnouncementRead;
 use App\Models\User;
 use App\Services\AnnouncementService;
+use App\Services\OperationalBroadcastService;
+use App\Support\ResourceVersion;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Validation\Rule;
+use Inertia\Inertia;
 
 class AnnouncementController extends Controller
 {
@@ -36,7 +39,29 @@ class AnnouncementController extends Controller
             $query->where('status', $request->status);
         }
 
-        return response()->json($query->get());
+        $versionMeta = ResourceVersion::fromQuery($query);
+        if (ResourceVersion::matches($request, $versionMeta)) {
+            return ResourceVersion::unchanged($versionMeta);
+        }
+
+        if ($request->boolean('paginated') || $request->has('page') || $request->has('per_page')) {
+            $perPage = min(max((int) $request->query('per_page', 25), 1), 75);
+            $paginator = $query->paginate($perPage);
+
+            return response()->json([
+                'data' => $paginator->items(),
+                'meta' => [
+                    'current_page' => $paginator->currentPage(),
+                    'per_page' => $paginator->perPage(),
+                    'total' => $paginator->total(),
+                    'last_page' => $paginator->lastPage(),
+                    ...$versionMeta,
+                    'changed' => true,
+                ],
+            ]);
+        }
+
+        return response()->json($query->limit(200)->get());
     }
 
     public function publicIndex(Request $request)
@@ -64,6 +89,8 @@ class AnnouncementController extends Controller
         $data['updated_by'] = $request->user()->id;
 
         $announcement = Announcement::create($data);
+        app(OperationalBroadcastService::class)
+            ->adminChanged('announcements', 'announcement', $announcement->id, 'created', 'Announcement created.');
 
         return response()->json($announcement->fresh(['creator:id,username']), 201);
     }
@@ -75,6 +102,8 @@ class AnnouncementController extends Controller
         $data['updated_by'] = $request->user()->id;
 
         $announcement->update($data);
+        app(OperationalBroadcastService::class)
+            ->adminChanged('announcements', 'announcement', $announcement->id, 'updated', 'Announcement updated.');
 
         return response()->json($announcement->fresh(['creator:id,username']));
     }
@@ -83,19 +112,29 @@ class AnnouncementController extends Controller
     {
         $this->validatePublishability($announcement);
 
-        return response()->json($this->service->publish($announcement, $request->user()));
+        $payload = $this->service->publish($announcement, $request->user());
+        app(OperationalBroadcastService::class)
+            ->adminChanged('announcements', 'announcement', $announcement->id, 'published', 'Announcement published.');
+
+        return response()->json($payload);
     }
 
     public function archive(Request $request, Announcement $announcement)
     {
-        return response()->json($this->service->archive($announcement, $request->user()));
+        $payload = $this->service->archive($announcement, $request->user());
+        app(OperationalBroadcastService::class)
+            ->adminChanged('announcements', 'announcement', $announcement->id, 'archived', 'Announcement archived.');
+
+        return response()->json($payload);
     }
 
     public function destroy(Announcement $announcement)
     {
         $this->service->deleteDraft($announcement);
+        app(OperationalBroadcastService::class)
+            ->adminChanged('announcements', 'announcement', $announcement->id, 'discarded', 'Announcement discarded.');
 
-        return response()->json(['message' => 'Announcement deleted.']);
+        return response()->json(['message' => 'Announcement discarded.']);
     }
 
     public function audienceUsers(Request $request)
@@ -104,7 +143,7 @@ class AnnouncementController extends Controller
 
         $users = User::query()
             ->select('id', 'username', 'email', 'role')
-            ->whereNotNull('email')
+            ->reachableForNotifications()
             ->when($search !== '', function ($query) use ($search) {
                 $term = '%' . mb_strtolower($search) . '%';
                 $query->where(function ($q) use ($term) {
@@ -127,6 +166,18 @@ class AnnouncementController extends Controller
         Mail::to($data['email'])->queue(new AnnouncementEmail($announcement));
 
         return response()->json(['message' => 'Test email queued.']);
+    }
+
+    public function preview(Announcement $announcement)
+    {
+        return Inertia::render('preview/AnnouncementPreview', [
+            'announcement' => array_merge($this->publicPayload($announcement), [
+                'status' => $announcement->status,
+                'visibility' => $announcement->visibility,
+                'visibility_roles' => $announcement->visibility_roles,
+                'send_email' => $announcement->send_email,
+            ]),
+        ]);
     }
 
     public function customerIndex(Request $request)

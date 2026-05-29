@@ -12,6 +12,7 @@ import StaffEmptyState from '../Components/staff/StaffEmptyState';
 import EventHistoryPanel from '../Components/staff/EventHistoryPanel';
 import EventDetailDrawer from '../Components/staff/EventDetailDrawer';
 import NextActionPanel from '../Components/staff/NextActionPanel';
+import RoleSettingsPanel from '../Components/staff/RoleSettingsPanel';
 import StaffStatusBadge from '../Components/staff/StaffStatusBadge';
 import StaffSkeleton, { StaffWorkspaceSkeleton } from '../Components/staff/StaffSkeleton';
 import { bookingStatusLabel, reviewStatusLabel } from '../utils/statusLabels';
@@ -32,9 +33,11 @@ import {
 const StaffMessaging = lazy(() => import('../Components/common/StaffMessaging'));
 const AnnouncementManager = lazy(() => import('../Components/content/AnnouncementManager'));
 const PreparationBoard = lazy(() => import('../Components/operations/PreparationBoard'));
+const FoodTastingQueue = lazy(() => import('../Components/operations/FoodTastingQueue'));
 import { getListData } from '../utils/apiResponses';
 import csrfFetch from '../utils/csrf';
 import { bustSmartCache, fetchSmartResource, getUserScopedCacheKey, readSmartCache } from '../utils/smartResource';
+import { operationalChannelsForUser } from '../utils/liveChannels';
 
 const PACKAGE_CATEGORY_OPTIONS = [
     { value: 'premium', label: 'Weddings & Debuts' },
@@ -48,13 +51,15 @@ const SECURITY_OPTIONS = [
 ];
 
 const MARKETING_BOOKINGS_URL = '/api/marketing/bookings';
-const MARKETING_WORKSPACE_TABS = ['today', 'bookings', 'leads', 'calendar', 'handoff', 'messages', 'public-content', 'availability', 'history'];
+const MARKETING_WORKSPACE_TABS = ['today', 'bookings', 'leads', 'tastings', 'calendar', 'handoff', 'messages', 'public-content', 'availability', 'settings', 'history'];
 const MARKETING_TAB_ALIASES = {
     intake: 'bookings',
     inquiries: 'bookings',
+    tasting: 'tastings',
+    food: 'tastings',
     preparation: 'handoff',
     content: 'public-content',
-    settings: 'public-content',
+    settings: 'settings',
     documents: 'calendar',
 };
 const BOOKING_BACKED_TABS = ['calendar', 'bookings'];
@@ -142,11 +147,13 @@ const shiftMonthValue = (value, offset) => {
 const DashboardMarketing = () => {
     const { user, logout } = useAuth();
     const toast = useToast();
+    const marketingWorkspacePrefs = user?.profile_preferences?.staff_workspace?.marketing || {};
+    const marketingDefaultTab = MARKETING_WORKSPACE_TABS.includes(marketingWorkspacePrefs.default_tab) ? marketingWorkspacePrefs.default_tab : 'today';
     const [bookings, setBookings] = useState([]);
     const [bookingsScope, setBookingsScope] = useState(null);
     const [calendarBookings, setCalendarBookings] = useState([]);
     const [calendarLoading, setCalendarLoading] = useState(false);
-    const [calendarView, setCalendarView] = useState('month');
+    const [calendarView, setCalendarView] = useState(marketingWorkspacePrefs.calendar_view || 'month');
     const [calendarFilters, setCalendarFilters] = useState({ search: '', status: '', event_type: '', city: '' });
     const bookingRequestRef = useRef(0);
     const calendarRequestRef = useRef(0);
@@ -154,7 +161,7 @@ const DashboardMarketing = () => {
     const [loading, setLoading] = useState(() => !readSmartCache(getUserScopedCacheKey(user, 'marketing:bookings:page')));
     const [activeTab, setActiveTab] = useStaffWorkspaceState({
         storageKey: 'ecs:staff-workspace:marketing',
-        defaultTab: 'today',
+        defaultTab: marketingDefaultTab,
         allowedTabs: MARKETING_WORKSPACE_TABS,
         tabAliases: MARKETING_TAB_ALIASES,
     });
@@ -218,6 +225,7 @@ const DashboardMarketing = () => {
         `${selectedMonth.getFullYear()}-${String(selectedMonth.getMonth() + 1).padStart(2, '0')}`
     ), [selectedMonth]);
     const smartCacheKey = (resourceKey) => getUserScopedCacheKey(user, resourceKey);
+    const liveChannels = useMemo(() => operationalChannelsForUser(user), [user?.id, user?.role]);
 
     useEffect(() => {
         setInquiryPage(1);
@@ -259,6 +267,8 @@ const DashboardMarketing = () => {
         enabled: ['today', 'public-content', 'availability', ...BOOKING_BACKED_TABS].includes(activeTab),
         interval: activeTab === 'public-content' ? 120000 : 90000,
         idleAfter: 180000,
+        channels: liveChannels,
+        resources: ['bookings', 'contact_inquiries', 'food_tastings', 'feedback', 'announcements', 'catalog', 'availability'],
         refresh: ({ silent = false } = {}) => {
             if (activeTab === 'today') {
                 fetchMarketingSummary({ silent });
@@ -357,12 +367,12 @@ const DashboardMarketing = () => {
 
     const fetchFeedbackSummary = async () => {
         try {
-            const response = await fetch('/api/marketing/feedback-responses?follow_up_only=1', {
+            const response = await fetch('/api/marketing/feedback-responses?follow_up_only=1&paginated=1&per_page=50', {
                 headers: { Accept: 'application/json' },
             });
             if (!response.ok) return;
             const rows = await response.json();
-            const list = Array.isArray(rows) ? rows : [];
+            const list = Array.isArray(rows) ? rows : (rows.data || []);
             setFeedbackSummary({
                 followUps: list.length,
                 testimonials: list.filter((item) => item.testimonial_status === 'Candidate').length,
@@ -708,9 +718,9 @@ const DashboardMarketing = () => {
     const fetchMarketingSettings = async () => {
         try {
             const [menuRes, packageRes, eventRes] = await Promise.all([
-                fetch('/api/menu-items'),
+                fetch('/api/settings/menu-items'),
                 fetch('/api/packages?per_page=100'),
-                fetch('/api/event-types?per_page=100'),
+                fetch('/api/settings/event-types'),
             ]);
             if (menuRes.ok) setMenuItems(await menuRes.json());
             if (packageRes.ok) {
@@ -868,13 +878,13 @@ const DashboardMarketing = () => {
         try {
             const response = await csrfFetch(`/api/settings/event-types/${eventType.id}`, { method: 'DELETE' });
             const data = await response.json().catch(() => ({}));
-            if (!response.ok) throw new Error(data.error || data.message || 'Could not delete event type.');
-            toast.success(data.message || 'Event type deleted.');
+            if (!response.ok) throw new Error(data.error || data.message || 'Could not archive event type.');
+            toast.success(data.message || 'Event type archived.');
             setDeleteEventTypeConfirm({ isOpen: false, eventType: null });
             fetchMarketingSettings();
         } catch (error) {
             console.error('Error deleting event type:', error);
-            toast.error(error.message || 'Could not delete event type.');
+            toast.error(error.message || 'Could not archive event type.');
         } finally {
             setSettingsSaving(false);
         }
@@ -975,12 +985,14 @@ const DashboardMarketing = () => {
         today: 'Today',
         bookings: 'Bookings',
         leads: 'Guest Inquiries',
+        tastings: 'Food Tastings',
         calendar: 'Calendar',
         availability: 'Availability',
         handoff: 'Event Handoff',
         messages: 'Messages',
         history: 'Event History',
         'public-content': 'Public Content',
+        settings: 'Settings',
     };
 
         const marketingSummary = useMemo(() => {
@@ -1174,7 +1186,7 @@ const DashboardMarketing = () => {
                                 <h3 className="mt-1 text-lg font-black text-slate-950">Leads, messages, and feedback</h3>
                             </div>
                         </div>
-                        <div className="grid gap-3 p-4 sm:grid-cols-3">
+                        <div className="grid gap-3 p-4 sm:grid-cols-4">
                             <button type="button" onClick={() => setActiveTab('leads')} className="rounded-xl border border-amber-100 bg-white p-4 text-left hover:bg-[#fffaf3]">
                                 <p className="text-2xl font-black text-slate-950">{leadData.summary?.open || 0}</p>
                                 <p className="mt-1 text-xs font-black uppercase tracking-widest text-slate-500">Guest inquiries</p>
@@ -1186,6 +1198,10 @@ const DashboardMarketing = () => {
                             <button type="button" onClick={() => setActiveTab('history')} className="rounded-xl border border-amber-100 bg-white p-4 text-left hover:bg-[#fffaf3]">
                                 <p className="text-2xl font-black text-slate-950">{feedbackSummary.followUps || 0}</p>
                                 <p className="mt-1 text-xs font-black uppercase tracking-widest text-slate-500">Feedback follow-ups</p>
+                            </button>
+                            <button type="button" onClick={() => setActiveTab('tastings')} className="rounded-xl border border-amber-100 bg-white p-4 text-left hover:bg-[#fffaf3]">
+                                <p className="text-2xl font-black text-slate-950">Queue</p>
+                                <p className="mt-1 text-xs font-black uppercase tracking-widest text-slate-500">Food tastings</p>
                             </button>
                         </div>
                     </section>
@@ -1434,7 +1450,7 @@ const DashboardMarketing = () => {
                                                 key={status}
                                                 disabled={!canEdit}
                                                 onClick={() => updateLiveStatus(selectedBooking.id, status)}
-                                                className={`px-4 py-2 text-xs font-bold rounded-full border transition-colors ${isActive ? 'bg-primary-600 text-white border-primary-600 shadow-sm' : 'bg-gray-50 text-gray-600 border-gray-200 hover:bg-gray-100'} ${!canEdit ? 'cursor-not-allowed opacity-50' : ''}`}
+                                                className={`px-4 py-2 text-xs font-bold rounded-full border transition-colors ${isActive ? 'bg-[#720101] text-white border-[#720101] shadow-sm' : 'bg-gray-50 text-gray-600 border-gray-200 hover:bg-gray-100'} ${!canEdit ? 'cursor-not-allowed opacity-50' : ''}`}
                                             >
                                                 {status}
                                             </button>
@@ -1479,9 +1495,9 @@ const DashboardMarketing = () => {
         return (
             <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50" onClick={() => setShowExportModal(false)}>
                 <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md mx-4 overflow-hidden" onClick={e => e.stopPropagation()}>
-                    <div className="px-6 py-4 bg-primary-600">
+                    <div className="px-6 py-4 bg-[#720101]">
                         <div className="flex items-center justify-between">
-                            <h3 className="text-lg font-bold text-white">Download Calendar Report</h3>
+                            <h3 className="text-lg font-bold text-white">Download calendar PDF</h3>
                             <button onClick={() => setShowExportModal(false)} className="text-white hover:text-gray-200 text-2xl leading-none">&times;</button>
                         </div>
                         <p className="text-sm text-white opacity-80">Select the range to include</p>
@@ -1558,10 +1574,10 @@ const DashboardMarketing = () => {
                         </button>
                         <button
                             onClick={exportCalendarPDF}
-                            className="flex-1 bg-primary-600 text-white py-2.5 rounded-lg font-medium hover:bg-primary-700 transition-colors flex items-center justify-center"
+                            className="flex-1 bg-[#720101] text-white py-2.5 rounded-lg font-medium hover:bg-[#5a0101] transition-colors flex items-center justify-center"
                         >
                             <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
-                            Download Report
+                            Download PDF
                         </button>
                     </div>
                 </div>
@@ -1671,7 +1687,7 @@ const DashboardMarketing = () => {
                 <input value={leadFilters.search} onChange={(event) => updateLeadFilter('search', event.target.value)} placeholder="Search name, email, phone, subject, or message" className="staff-control" />
                 <select value={leadFilters.status} onChange={(event) => updateLeadFilter('status', event.target.value)} className="staff-control">
                     <option value="">All statuses</option>
-                    {['New', 'In Review', 'Follow Up', 'Resolved', 'Closed'].map(status => <option key={status} value={status}>{status}</option>)}
+                    {['New', 'Contacted', 'In Review', 'Follow Up', 'Resolved', 'Closed', 'Archived', 'Spam'].map(status => <option key={status} value={status}>{status}</option>)}
                 </select>
                 <select value={leadFilters.concern_type} onChange={(event) => updateLeadFilter('concern_type', event.target.value)} className="staff-control">
                     <option value="">All concerns</option>
@@ -1703,6 +1719,7 @@ const DashboardMarketing = () => {
                                     <td className="px-5 py-4">
                                         <p className="font-black text-slate-950">{lead.full_name}</p>
                                         <p className="mt-1 text-xs font-semibold text-slate-500">{lead.email}{lead.phone ? ` / ${lead.phone}` : ''}</p>
+                                        {lead.duplicate_user && <p className="mt-1 text-[10px] font-black uppercase tracking-wide text-amber-700">{lead.duplicate_user.is_deactivated ? 'Matches deactivated customer' : 'Matches customer'}</p>}
                                         <p className="mt-1 line-clamp-1 text-xs font-semibold text-slate-400">{lead.subject}</p>
                                     </td>
                                     <td className="px-5 py-4"><StaffStatusBadge tone="muted">{concernLabels[lead.concern_type] || 'General'}</StaffStatusBadge></td>
@@ -1735,7 +1752,7 @@ const DashboardMarketing = () => {
                         </div>
                         <div className="mt-6 grid gap-3 sm:grid-cols-2">
                             <select value={selectedLead.status || 'New'} disabled={leadSaving} onChange={(event) => updateLead(selectedLead.id, { status: event.target.value })} className="staff-control">
-                                {['New', 'In Review', 'Follow Up', 'Resolved', 'Closed'].map(status => <option key={status}>{status}</option>)}
+                                {['New', 'Contacted', 'In Review', 'Follow Up', 'Resolved', 'Closed', 'Archived', 'Spam'].map(status => <option key={status}>{status}</option>)}
                             </select>
                             <button type="button" disabled={leadSaving} onClick={() => updateLead(selectedLead.id, { assigned_to: user?.id, status: selectedLead.status === 'New' ? 'In Review' : selectedLead.status })} className="rounded-lg bg-[#720101] px-4 py-3 text-sm font-black text-white disabled:opacity-60">Assign to me</button>
                         </div>
@@ -2218,7 +2235,7 @@ const DashboardMarketing = () => {
                                 </div>
                                 <div className="mt-5 flex justify-end gap-2">
                                     <button type="button" onClick={() => openEventTypeDrawer(type)} className="staff-row-action">Edit</button>
-                                    <button type="button" onClick={() => handleDeleteEventType(type)} className="staff-row-action staff-row-action-danger">Delete</button>
+                                    <button type="button" onClick={() => handleDeleteEventType(type)} className="staff-row-action staff-row-action-danger">Archive</button>
                                 </div>
                             </article>
                         ))}
@@ -2233,7 +2250,7 @@ const DashboardMarketing = () => {
                         <div className="border-b border-gray-100 p-6">
                             <nav className="flex gap-2 overflow-x-auto">
                                 {categories.map(category => (
-                                    <button key={category} onClick={() => setActiveMenuCategory(category)} className={`whitespace-nowrap rounded-lg px-4 py-2 text-sm font-bold capitalize transition-colors ${activeMenuCategory === category ? 'bg-primary-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
+                                    <button key={category} onClick={() => setActiveMenuCategory(category)} className={`whitespace-nowrap rounded-lg px-4 py-2 text-sm font-bold capitalize transition-colors ${activeMenuCategory === category ? 'bg-[#720101] text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
                                         {category}
                                     </button>
                                 ))}
@@ -2265,7 +2282,7 @@ const DashboardMarketing = () => {
                                                 <p className="mt-1 text-[11px] font-semibold text-gray-400">Added per guest during customer recalculation.</p>
                                             </td>
                                             <td className="px-6 py-4 text-right font-black text-gray-900">{formatMoney(Number(item.cost_per_head || 0) + Number(item.price_adj || 0))}</td>
-                                            <td className="px-6 py-4 text-right"><button onClick={() => handleDishPricingUpdate(item, document.getElementById(`marketing_cost_${item.id}`).value, document.getElementById(`marketing_adj_${item.id}`).value)} disabled={settingsSaving} className="rounded-lg bg-primary-600 px-3 py-2 text-xs font-bold text-white hover:bg-primary-700 disabled:opacity-60">Save</button></td>
+                                            <td className="px-6 py-4 text-right"><button onClick={() => handleDishPricingUpdate(item, document.getElementById(`marketing_cost_${item.id}`).value, document.getElementById(`marketing_adj_${item.id}`).value)} disabled={settingsSaving} className="rounded-lg bg-[#720101] px-3 py-2 text-xs font-bold text-white hover:bg-[#5a0101] disabled:opacity-60">Save</button></td>
                                         </tr>
                                     ))}
                                 </tbody>
@@ -2435,7 +2452,7 @@ const DashboardMarketing = () => {
                         <textarea value={eventTypeForm.description} onChange={e => setEventTypeForm({ ...eventTypeForm, description: e.target.value })} placeholder="Description" className="md:col-span-4 rounded-lg border border-gray-200 px-4 py-3 text-sm font-medium outline-none focus:ring-2 focus:ring-primary-100" />
                         <div className="md:col-span-2 flex gap-2">
                             {editingEventTypeId && <button type="button" onClick={resetEventTypeForm} className="flex-1 rounded-lg border border-gray-200 px-4 py-3 text-sm font-bold text-gray-600 hover:bg-gray-50">Cancel</button>}
-                            <button disabled={settingsSaving} className="flex-1 rounded-lg bg-primary-600 px-4 py-3 text-sm font-bold text-white hover:bg-primary-700 disabled:opacity-60">{settingsSaving ? 'Saving...' : editingEventTypeId ? 'Save Type' : 'Create Type'}</button>
+                            <button disabled={settingsSaving} className="flex-1 rounded-lg bg-primary-600 px-4 py-3 text-sm font-bold text-white hover:bg-primary-700 disabled:opacity-60">{settingsSaving ? 'Saving...' : editingEventTypeId ? 'Save type' : 'Create event type'}</button>
                         </div>
                     </form>
                     <div className="px-6 pb-6 grid grid-cols-1 md:grid-cols-3 gap-3">
@@ -2446,7 +2463,7 @@ const DashboardMarketing = () => {
                                 <p className="text-sm text-gray-600 line-clamp-2">{type.description || 'No description'}</p>
                                 <div className="mt-3 flex gap-2">
                                     <button onClick={() => startEditingEventType(type)} className="rounded-lg bg-white px-3 py-2 text-xs font-bold text-gray-700 border border-gray-200 hover:bg-gray-50">Edit</button>
-                                    <button onClick={() => handleDeleteEventType(type)} className="rounded-lg bg-red-50 px-3 py-2 text-xs font-bold text-red-700 hover:bg-red-100">Delete</button>
+                                    <button onClick={() => handleDeleteEventType(type)} className="rounded-lg bg-red-50 px-3 py-2 text-xs font-bold text-red-700 hover:bg-red-100">Archive</button>
                                 </div>
                             </div>
                         ))}
@@ -2475,7 +2492,7 @@ const DashboardMarketing = () => {
                                     <input id={`marketing_cost_${item.id}`} type="number" defaultValue={item.cost_per_head} className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-bold" />
                                     <input id={`marketing_adj_${item.id}`} type="number" defaultValue={item.price_adj || 0} className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-bold" />
                                 </div>
-                                <button onClick={() => handleDishPricingUpdate(item, document.getElementById(`marketing_cost_${item.id}`).value, document.getElementById(`marketing_adj_${item.id}`).value)} disabled={settingsSaving} className="mt-3 w-full rounded-lg bg-primary-600 px-4 py-2 text-sm font-bold text-white hover:bg-primary-700 disabled:opacity-60">Save Pricing</button>
+                                <button onClick={() => handleDishPricingUpdate(item, document.getElementById(`marketing_cost_${item.id}`).value, document.getElementById(`marketing_adj_${item.id}`).value)} disabled={settingsSaving} className="mt-3 w-full rounded-lg bg-primary-600 px-4 py-2 text-sm font-bold text-white hover:bg-primary-700 disabled:opacity-60">Save pricing</button>
                             </div>
                         ))}
                     </div>
@@ -2492,7 +2509,7 @@ const DashboardMarketing = () => {
             label="Preparing marketing workspace"
             navGroups={[
                 { label: 'Daily work', items: ['Today', 'Bookings', 'Guest Inquiries', 'Calendar', 'Event Handoff', 'Messages'] },
-                { label: 'Operations', items: ['Public Content', 'Availability', 'Event History'] },
+                { label: 'Operations', items: ['Public Content', 'Availability', 'Settings', 'Event History'] },
             ]}
         />
     );
@@ -2505,13 +2522,15 @@ const DashboardMarketing = () => {
             active={activeTab}
             onNavigate={setActiveTab}
             onLogout={handleLogout}
+            roleKey="marketing"
             navGroups={[
                 {
                     label: 'Daily work',
                      items: [
-                         { id: 'today', label: 'Today', count: marketingSummary.pending + marketingSummary.needsDetails },
-                         { id: 'bookings', label: 'Bookings', count: dashboardSummary.pending },
+                        { id: 'today', label: 'Today', count: marketingSummary.pending + marketingSummary.needsDetails },
+                        { id: 'bookings', label: 'Bookings', count: dashboardSummary.pending },
                         { id: 'leads', label: 'Guest Inquiries', count: leadData.summary?.open || 0 },
+                        { id: 'tastings', label: 'Food Tastings' },
                          { id: 'calendar', label: 'Calendar', count: dashboardSummary.monthEvents },
                         { id: 'handoff', label: 'Event Handoff', count: marketingSummary.upcoming },
                         { id: 'messages', label: 'Messages' },
@@ -2522,6 +2541,7 @@ const DashboardMarketing = () => {
                     items: [
                         { id: 'public-content', label: 'Public Content' },
                         { id: 'availability', label: 'Availability' },
+                        { id: 'settings', label: 'Settings' },
                         { id: 'history', label: 'Event History' },
                     ],
                 },
@@ -2561,7 +2581,7 @@ const DashboardMarketing = () => {
                                     className="marketing-primary-btn flex items-center px-4 py-2 text-sm"
                                 >
                                     <svg className="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
-                                    Download Report
+                                    Download PDF
                                 </button>
                                 <button
                                     onClick={() => setSelectedMonth(new Date(selectedMonth.getFullYear(), selectedMonth.getMonth() - 1))}
@@ -2608,6 +2628,11 @@ const DashboardMarketing = () => {
 
                 {activeTab === 'bookings' && renderBookings()}
                 {activeTab === 'leads' && renderPublicLeads()}
+                {activeTab === 'tastings' && (
+                    <Suspense fallback={<StaffSkeleton variant="panel" rows={4} label="Loading food tasting queue" />}>
+                        <FoodTastingQueue onToast={(message, type) => type === 'error' ? toast.error(message) : toast.success(message)} />
+                    </Suspense>
+                )}
                 {activeTab === 'availability' && renderAvailability()}
                 {activeTab === 'handoff' && (
                     <Suspense fallback={<StaffSkeleton variant="panel" rows={3} label="Loading preparation board" />}>
@@ -2615,6 +2640,9 @@ const DashboardMarketing = () => {
                     </Suspense>
                 )}
                 {activeTab === 'public-content' && renderPublicContent()}
+                {activeTab === 'settings' && (
+                    <RoleSettingsPanel role="marketing" onNavigate={setActiveTab} />
+                )}
                 {activeTab === 'history' && (
                     <EventHistoryPanel role="marketing" onToast={(message, type) => type === 'error' ? toast.error(message) : toast.success(message)} />
                 )}
@@ -2653,9 +2681,9 @@ const DashboardMarketing = () => {
             />
             <ConfirmModal
                 isOpen={deleteEventTypeConfirm.isOpen}
-                title={`Delete ${deleteEventTypeConfirm.eventType?.label || 'event type'}?`}
-                message="Packages using this event type will move to Other."
-                confirmText="Delete"
+                title={`Archive ${deleteEventTypeConfirm.eventType?.label || 'event type'}?`}
+                message="This hides the event type from future customer booking choices while preserving historical bookings, packages, and reports."
+                confirmText="Archive"
                 tone="danger"
                 onCancel={() => setDeleteEventTypeConfirm({ isOpen: false, eventType: null })}
                 onConfirm={confirmDeleteEventType}

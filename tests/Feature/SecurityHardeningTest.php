@@ -3,6 +3,9 @@
 namespace Tests\Feature;
 
 use App\Mail\VerifyEmailOTP;
+use App\Models\Booking;
+use App\Models\FoodTasting;
+use App\Models\UploadedFile as UploadedFileRecord;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
@@ -10,6 +13,7 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 use Tests\TestCase;
 
 class SecurityHardeningTest extends TestCase
@@ -32,6 +36,7 @@ class SecurityHardeningTest extends TestCase
 
         Mail::assertQueued(VerifyEmailOTP::class);
         $this->assertNotNull($user->otp_code);
+        $this->assertFalse(preg_match('/^\d{6}$/', $user->otp_code) === 1);
 
         Log::shouldHaveReceived('info')
             ->withArgs(fn ($message, $context = []) => $message === 'OTP verification email sent.'
@@ -62,6 +67,7 @@ class SecurityHardeningTest extends TestCase
 
         Mail::assertQueued(VerifyEmailOTP::class);
         $this->assertNotSame('111111', $user->otp_code);
+        $this->assertFalse(preg_match('/^\d{6}$/', $user->otp_code) === 1);
 
         Log::shouldHaveReceived('info')
             ->withArgs(fn ($message, $context = []) => $message === 'OTP verification email resent.'
@@ -167,9 +173,141 @@ class SecurityHardeningTest extends TestCase
                 'image' => UploadedFile::fake()->createWithContent('payment-proof.png', $png),
             ])
             ->assertOk()
-            ->assertJsonStructure(['url']);
+            ->assertJsonStructure(['url', 'upload_id']);
 
         $this->assertStringStartsWith('/storage/uploads/', $response->json('url'));
+        $this->assertDatabaseHas('uploaded_files', [
+            'id' => $response->json('upload_id'),
+            'user_id' => $client->id,
+            'purpose' => 'theme_upload',
+            'status' => 'temporary',
+        ]);
+    }
+
+    public function test_uploaded_theme_image_attaches_to_booking_and_blocks_cross_user_attachment(): void
+    {
+        Storage::fake('public');
+
+        $client = $this->user('Client');
+        $otherClient = $this->user('Client');
+        $booking = $this->booking($client);
+
+        $png = base64_decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=');
+
+        $upload = $this->actingAs($client)
+            ->post('/api/upload', [
+                'image' => UploadedFile::fake()->createWithContent('theme.png', $png),
+                'purpose' => 'theme_upload',
+            ])
+            ->assertOk();
+
+        $this->actingAs($client)
+            ->putJson("/api/bookings/{$booking->id}/event-details", [
+                'theme_uploads' => $upload->json('url'),
+            ])
+            ->assertOk();
+
+        $this->assertDatabaseHas('uploaded_files', [
+            'id' => $upload->json('upload_id'),
+            'status' => 'attached',
+            'attachable_type' => Booking::class,
+            'attachable_id' => $booking->id,
+        ]);
+
+        $otherBooking = $this->booking($otherClient);
+        $this->actingAs($otherClient)
+            ->putJson("/api/bookings/{$otherBooking->id}/event-details", [
+                'theme_uploads' => $upload->json('url'),
+            ])
+            ->assertForbidden();
+    }
+
+    public function test_orphan_upload_cleanup_discards_expired_temporary_files(): void
+    {
+        Storage::fake('public');
+
+        $client = $this->user('Client');
+        Storage::disk('public')->put('uploads/orphan.png', 'orphan');
+        $file = UploadedFileRecord::create([
+            'user_id' => $client->id,
+            'disk' => 'public',
+            'path' => 'uploads/orphan.png',
+            'url' => '/storage/uploads/orphan.png',
+            'mime_type' => 'image/png',
+            'size' => 6,
+            'original_name' => 'orphan.png',
+            'purpose' => 'theme_upload',
+            'status' => 'temporary',
+            'expires_at' => now()->subMinute(),
+        ]);
+
+        $this->artisan('uploads:purge-orphans')->assertSuccessful();
+
+        Storage::disk('public')->assertMissing('uploads/orphan.png');
+        $this->assertSame('discarded', $file->fresh()->status);
+    }
+
+    public function test_booking_theme_upload_backfill_registers_existing_local_files_idempotently(): void
+    {
+        Storage::fake('public');
+
+        $client = $this->user('Client');
+        $booking = $this->booking($client);
+        $png = base64_decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=');
+        Storage::disk('public')->put('uploads/legacy-theme.png', $png);
+
+        $booking->update([
+            'theme_uploads' => json_encode([
+                '/storage/uploads/legacy-theme.png',
+                'https://example.test/external-theme.png',
+                '/storage/uploads/missing-theme.png',
+            ]),
+        ]);
+
+        $this->artisan('uploads:backfill-booking-theme-uploads --dry-run')->assertSuccessful();
+        $this->assertDatabaseMissing('uploaded_files', ['path' => 'uploads/legacy-theme.png']);
+
+        $this->artisan('uploads:backfill-booking-theme-uploads')->assertSuccessful();
+        $this->assertDatabaseHas('uploaded_files', [
+            'user_id' => $client->id,
+            'path' => 'uploads/legacy-theme.png',
+            'url' => '/storage/uploads/legacy-theme.png',
+            'status' => 'attached',
+            'attachable_type' => Booking::class,
+            'attachable_id' => $booking->id,
+        ]);
+
+        $this->artisan('uploads:backfill-booking-theme-uploads')->assertSuccessful();
+        $this->assertSame(1, UploadedFileRecord::where('path', 'uploads/legacy-theme.png')->count());
+        $this->assertDatabaseMissing('uploaded_files', ['path' => 'uploads/missing-theme.png']);
+    }
+
+    public function test_legacy_plaintext_otp_verifies_once_while_new_codes_are_hashed(): void
+    {
+        $user = User::create([
+            'username' => 'legacy_otp_client',
+            'email' => 'legacy-otp@example.test',
+            'password' => 'password123',
+            'role' => 'Client',
+            'otp_code' => '123456',
+            'otp_expires_at' => now()->addMinutes(15),
+        ]);
+
+        $this->actingAs($user)
+            ->post('/verify-otp', ['otp' => '123456'])
+            ->assertRedirect('/');
+
+        $this->assertNull($user->fresh()->otp_code);
+    }
+
+    public function test_preservation_guardrail_migration_uses_restrictive_foreign_keys(): void
+    {
+        $migration = file_get_contents(database_path('migrations/2026_05_29_000006_create_uploaded_files_and_preservation_guardrails.php'));
+
+        $this->assertStringContainsString('bookings_user_id_foreign', $migration);
+        $this->assertStringContainsString('payments_booking_id_foreign', $migration);
+        $this->assertStringContainsString('conversation_participants_user_id_foreign', $migration);
+        $this->assertStringContainsString('ON DELETE %s', $migration);
     }
 
     public function test_login_route_is_rate_limited(): void
@@ -193,6 +331,76 @@ class SecurityHardeningTest extends TestCase
 
         $this->assertStringNotContainsString("'api/*'", $bootstrap);
         $this->assertStringContainsString("'webhook/paymongo'", $bootstrap);
+    }
+
+    public function test_public_honeypots_block_contact_and_food_tasting_submissions(): void
+    {
+        $this->postJson('/api/contact-inquiries', [
+            'full_name' => 'Bot Contact',
+            'email' => 'bot@example.test',
+            'subject' => 'Planning',
+            'message' => 'A normal looking message',
+            'website' => 'https://spam.example',
+        ])->assertStatus(422)
+            ->assertJsonValidationErrors('website');
+
+        $this->postJson('/api/food-tasting', [
+            'guest_name' => 'Bot Tasting',
+            'guest_email' => 'bot-tasting@example.test',
+            'preferred_date' => now()->addWeek()->toDateString(),
+            'preferred_time' => '10:00',
+            'website' => 'https://spam.example',
+        ])->assertStatus(422)
+            ->assertJsonValidationErrors('website');
+    }
+
+    public function test_staff_queue_and_notification_endpoints_support_pagination(): void
+    {
+        $marketing = $this->user('Marketing');
+        $client = $this->user('Client');
+
+        FoodTasting::create([
+            'user_id' => $client->id,
+            'guest_name' => 'Paginated Tasting',
+            'guest_email' => 'paginated@example.test',
+            'preferred_date' => now()->addWeek()->toDateString(),
+            'preferred_time' => '10:00',
+            'status' => 'Pending',
+        ]);
+
+        $client->notifications()->create([
+            'id' => (string) Str::uuid(),
+            'type' => 'test',
+            'data' => ['message' => 'Paginated notification'],
+            'read_at' => null,
+        ]);
+
+        $this->actingAs($marketing)
+            ->getJson('/api/marketing/food-tastings?paginated=1&per_page=1')
+            ->assertOk()
+            ->assertJsonStructure(['data', 'meta' => ['current_page', 'per_page', 'total', 'last_page']]);
+
+        $this->actingAs($client)
+            ->getJson('/api/notifications?paginated=1&per_page=1')
+            ->assertOk()
+            ->assertJsonStructure(['data', 'meta' => ['current_page', 'per_page', 'total', 'last_page']]);
+    }
+
+    public function test_scalability_throttles_and_static_frontend_guards_are_in_place(): void
+    {
+        $routes = file_get_contents(base_path('routes/web.php'));
+        $this->assertStringContainsString("sendAbandonedReminder'])->middleware('throttle:3,1')", $routes);
+        $this->assertStringContainsString("recordPayment'])->middleware('throttle:3,1')", $routes);
+
+        $jsFiles = collect(\Symfony\Component\Finder\Finder::create()->files()->in(resource_path('js'))->name('*.jsx')->name('*.js'))
+            ->map(fn ($file) => $file->getRealPath());
+        $combined = $jsFiles->map(fn ($path) => file_get_contents($path))->implode("\n");
+
+        $this->assertDoesNotMatchRegularExpression('/\\b(window\\.)?(alert|prompt|confirm)\\s*\\(/', $combined);
+        $this->assertStringNotContainsString('PaymentPage', $combined);
+        $this->assertStringNotContainsString('bg-indigo', $combined);
+        $this->assertStringNotContainsString('text-indigo', $combined);
+        $this->assertStringNotContainsString('border-indigo', $combined);
     }
 
     public function test_frontend_fetch_wrapper_adds_csrf_header_for_same_origin_mutations(): void
@@ -219,6 +427,28 @@ class SecurityHardeningTest extends TestCase
             'phone' => '09170000000',
             'role' => $role,
             'email_verified_at' => now(),
+        ]);
+    }
+
+    private function booking(User $client): Booking
+    {
+        return Booking::create([
+            'user_id' => $client->id,
+            'event_date' => now()->addWeeks(3)->toDateString(),
+            'event_time' => '10:00 AM - 2:00 PM',
+            'event_name' => 'Security Upload Event',
+            'event_type' => 'Wedding',
+            'pax' => 50,
+            'budget' => 30000,
+            'package_id' => 'custom',
+            'client_full_name' => $client->full_name,
+            'client_email' => $client->email,
+            'client_phone' => $client->phone,
+            'venue_city' => 'Quezon City',
+            'venue_address_line' => 'Security venue',
+            'total_cost' => 30000,
+            'status' => 'Confirmed',
+            'review_status' => 'Approved For Reservation',
         ]);
     }
 

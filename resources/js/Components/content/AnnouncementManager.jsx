@@ -75,12 +75,6 @@ const formatDate = (value) => {
     });
 };
 
-const imageUrl = (path) => {
-    if (!path) return '';
-    if (path.startsWith('http://') || path.startsWith('https://') || path.startsWith('/')) return path;
-    return `/storage/${path.replace(/^\/+/, '')}`;
-};
-
 const firstValidationMessage = (payload) => {
     if (payload?.errors) {
         const first = Object.values(payload.errors).flat()[0];
@@ -106,17 +100,17 @@ const AnnouncementManager = ({ variant = 'marketing', user }) => {
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
     const [message, setMessage] = useState(null);
-    const [previewId, setPreviewId] = useState(null);
     const [testEmail, setTestEmail] = useState(user?.email || '');
     const [audienceSearch, setAudienceSearch] = useState('');
     const [audienceUsers, setAudienceUsers] = useState([]);
     const [selectedUsers, setSelectedUsers] = useState([]);
     const [deleteTarget, setDeleteTarget] = useState(null);
+    const [composerOpen, setComposerOpen] = useState(false);
 
-    const shellClass = variant === 'admin' ? 'admin-card' : 'marketing-panel';
+    const isAdminVariant = variant === 'admin';
+    const shellClass = isAdminVariant ? 'admin-content-flat' : 'marketing-panel';
     const primaryClass = 'inline-flex items-center justify-center gap-2 rounded-xl bg-[#720101] px-4 py-3 text-sm font-black text-white transition hover:bg-[#5a0101] disabled:opacity-60';
     const secondaryClass = 'inline-flex items-center justify-center gap-2 rounded-xl border border-[#720101]/15 bg-white px-4 py-3 text-sm font-black text-[#720101] transition hover:bg-[#fff7e8] disabled:opacity-60';
-    const preview = editingId ? form : (announcements.find((item) => item.id === previewId) || form);
     const publishLabel = isFutureDate(form.starts_at) ? 'Schedule Announcement' : 'Publish Now';
 
     const stats = useMemo(() => announcements.reduce((acc, item) => {
@@ -186,7 +180,8 @@ const AnnouncementManager = ({ variant = 'marketing', user }) => {
     const fetchAnnouncements = async () => {
         setLoading(true);
         try {
-            setAnnouncements(await requestJson('/api/admin/announcements'));
+            const payload = await requestJson('/api/admin/announcements?paginated=1&per_page=75');
+            setAnnouncements(Array.isArray(payload) ? payload : (payload.data || []));
         } catch (error) {
             flash(error.message || 'Unable to load announcements.', 'error');
         } finally {
@@ -206,9 +201,18 @@ const AnnouncementManager = ({ variant = 'marketing', user }) => {
     const resetForm = () => {
         setForm(emptyForm);
         setEditingId(null);
-        setPreviewId(null);
         setSelectedUsers([]);
         setAudienceSearch('');
+    };
+
+    const openNewAnnouncement = () => {
+        resetForm();
+        setComposerOpen(true);
+    };
+
+    const closeComposer = () => {
+        setComposerOpen(false);
+        resetForm();
     };
 
     const updateField = (field, value) => {
@@ -250,7 +254,16 @@ const AnnouncementManager = ({ variant = 'marketing', user }) => {
             image_path: item.image_path || '',
         });
         setSelectedUsers(ids.map((id) => ({ id, username: `User #${id}`, email: '', role: '' })));
-        setPreviewId(item.id);
+        setComposerOpen(true);
+    };
+
+    const openCustomerPreview = (item) => {
+        if (!item?.id) {
+            flash('Save the announcement first, then preview it as a customer.', 'error');
+            return;
+        }
+
+        window.open(`/preview/announcements/${item.id}`, '_blank', 'noopener,noreferrer');
     };
 
     const payloadFromForm = () => ({
@@ -289,6 +302,7 @@ const AnnouncementManager = ({ variant = 'marketing', user }) => {
                 flash(editingId ? 'Announcement updated.' : 'Announcement saved as draft.');
             }
 
+            setComposerOpen(false);
             resetForm();
             await fetchAnnouncements();
         } catch (error) {
@@ -315,9 +329,12 @@ const AnnouncementManager = ({ variant = 'marketing', user }) => {
         setSaving(true);
         try {
             await requestJson(`/api/admin/announcements/${item.id}`, { method: 'DELETE' });
-            if (editingId === item.id) resetForm();
+            if (editingId === item.id) {
+                setComposerOpen(false);
+                resetForm();
+            }
             setDeleteTarget(null);
-            flash('Announcement deleted.');
+            flash('Announcement discarded.');
             await fetchAnnouncements();
         } catch (error) {
             flash(error.message, 'error');
@@ -355,28 +372,194 @@ const AnnouncementManager = ({ variant = 'marketing', user }) => {
     ];
 
     return (
-        <div className="space-y-5">
+        <div className={isAdminVariant ? 'admin-content-surface' : 'space-y-5'}>
+            {composerOpen && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 px-4 py-6 backdrop-blur-sm">
+                    <form onSubmit={(event) => submit(event, 'draft')} className="flex max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-[1.35rem] border border-[#720101]/15 bg-white shadow-2xl">
+                        <div className="flex shrink-0 items-start justify-between gap-4 border-b border-[#720101]/10 bg-[#fffaf3] px-5 py-4 lg:px-6">
+                            <div>
+                                <p className="marketing-kicker">{editingId ? 'Editing' : 'Composer'}</p>
+                                <h3 className="mt-1 text-2xl font-black text-[#111827]">{editingId ? 'Update announcement' : 'New announcement'}</h3>
+                            </div>
+                            <div className="flex flex-wrap justify-end gap-2">
+                                {editingId && (
+                                    <button type="button" onClick={() => openCustomerPreview({ id: editingId })} className={secondaryClass}>
+                                        <Eye size={16} />
+                                        Preview as customer
+                                    </button>
+                                )}
+                                <button type="button" aria-label="Close announcement composer" onClick={closeComposer} className="rounded-xl border border-[#720101]/15 bg-white p-3 text-[#720101] hover:bg-[#fff7e8]">
+                                    <X size={18} />
+                                </button>
+                            </div>
+                        </div>
+
+                        <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5 lg:px-6">
+                            <div className="grid gap-4 lg:grid-cols-2">
+                                <label className="block text-xs font-black uppercase tracking-widest text-slate-500 lg:col-span-2">
+                                    Title
+                                    <input required value={form.title} onChange={(event) => updateField('title', event.target.value)} placeholder="Short, customer-friendly headline" className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold normal-case tracking-normal outline-none focus:border-[#720101] focus:ring-4 focus:ring-[#720101]/10" />
+                                </label>
+
+                                <label className="block text-xs font-black uppercase tracking-widest text-slate-500 lg:col-span-2">
+                                    Short summary
+                                    <textarea value={form.summary} onChange={(event) => updateField('summary', event.target.value)} placeholder="One or two lines customers can scan quickly." rows={2} className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold normal-case tracking-normal outline-none focus:border-[#720101] focus:ring-4 focus:ring-[#720101]/10" />
+                                </label>
+
+                                <label className="block text-xs font-black uppercase tracking-widest text-slate-500 lg:col-span-2">
+                                    Full message
+                                    <textarea value={form.body} onChange={(event) => updateField('body', event.target.value)} placeholder="Add the full update, advisory, promo, or reminder." rows={5} className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold normal-case tracking-normal outline-none focus:border-[#720101] focus:ring-4 focus:ring-[#720101]/10" />
+                                </label>
+
+                                <label className="text-xs font-black uppercase tracking-widest text-slate-500">
+                                    Type
+                                    <select value={form.type} onChange={(event) => updateField('type', event.target.value)} className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold normal-case tracking-normal outline-none">
+                                        {Object.entries(typeLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                                    </select>
+                                </label>
+                                <label className="text-xs font-black uppercase tracking-widest text-slate-500">
+                                    Audience
+                                    <select value={form.visibility} onChange={(event) => updateField('visibility', event.target.value)} className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold normal-case tracking-normal outline-none">
+                                        {Object.entries(visibilityLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                                    </select>
+                                </label>
+
+                                {form.visibility === 'specific_roles' && (
+                                    <div className="rounded-xl border border-[#720101]/10 bg-[#fff7e8] p-4 lg:col-span-2">
+                                        <p className="text-xs font-black uppercase tracking-widest text-[#9f6500]">Choose roles</p>
+                                        <div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-4">
+                                            {roleOptions.map((role) => (
+                                                <label key={role} className="flex items-center gap-2 rounded-lg border border-[#720101]/10 bg-white px-3 py-2 text-sm font-bold text-slate-700">
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={form.visibility_roles.includes(role)}
+                                                        onChange={(event) => {
+                                                            const next = event.target.checked
+                                                                ? [...form.visibility_roles, role]
+                                                                : form.visibility_roles.filter((item) => item !== role);
+                                                            updateField('visibility_roles', next);
+                                                        }}
+                                                    />
+                                                    {role}
+                                                </label>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+
+                                {form.visibility === 'specific_users' && (
+                                    <div className="rounded-xl border border-[#720101]/10 bg-[#fff7e8] p-4 lg:col-span-2">
+                                        <p className="text-xs font-black uppercase tracking-widest text-[#9f6500]">Choose people</p>
+                                        <label className="mt-3 flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2">
+                                            <Search size={16} className="text-slate-400" />
+                                            <input value={audienceSearch} onChange={(event) => setAudienceSearch(event.target.value)} placeholder="Search name, email, or role" className="w-full text-sm font-bold outline-none" />
+                                        </label>
+                                        {audienceSearch && audienceUsers.length > 0 && (
+                                            <div className="mt-2 max-h-48 overflow-auto rounded-xl border border-slate-200 bg-white">
+                                                {audienceUsers.map((person) => (
+                                                    <button key={person.id} type="button" onClick={() => addAudienceUser(person)} className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left text-sm font-bold hover:bg-[#fff7e8]">
+                                                        <span>
+                                                            {person.username}
+                                                            <span className="block text-xs font-semibold text-slate-500">{person.email}</span>
+                                                        </span>
+                                                        <span className="text-xs font-black uppercase text-[#9f6500]">{person.role}</span>
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        )}
+                                        {selectedUsers.length > 0 && (
+                                            <div className="mt-3 flex flex-wrap gap-2">
+                                                {selectedUsers.map((person) => (
+                                                    <span key={person.id} className="inline-flex items-center gap-2 rounded-lg border border-[#720101]/12 bg-white px-3 py-2 text-xs font-black text-slate-700">
+                                                        {person.username}
+                                                        <button type="button" aria-label={`Remove ${person.username}`} onClick={() => removeAudienceUser(person.id)} className="text-[#720101]">
+                                                            <X size={13} />
+                                                        </button>
+                                                    </span>
+                                                ))}
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+
+                                <label className="text-xs font-black uppercase tracking-widest text-slate-500">
+                                    Publish from
+                                    <input type="datetime-local" value={form.starts_at} onChange={(event) => updateField('starts_at', event.target.value)} className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold normal-case tracking-normal outline-none" />
+                                </label>
+                                <label className="text-xs font-black uppercase tracking-widest text-slate-500">
+                                    Hide after (optional)
+                                    <input type="datetime-local" value={form.ends_at} onChange={(event) => updateField('ends_at', event.target.value)} className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold normal-case tracking-normal outline-none" />
+                                    <span className="mt-2 block text-[11px] font-semibold normal-case leading-5 tracking-normal text-slate-500">
+                                        Leave blank to keep it visible until staff manually archives it.
+                                    </span>
+                                </label>
+
+                                <label className="text-xs font-black uppercase tracking-widest text-slate-500">
+                                    Button text
+                                    <input value={form.cta_label} onChange={(event) => updateField('cta_label', event.target.value)} placeholder="Optional" className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold normal-case tracking-normal outline-none" />
+                                </label>
+                                <label className="text-xs font-black uppercase tracking-widest text-slate-500">
+                                    Button link
+                                    <input value={form.cta_url} onChange={(event) => updateField('cta_url', event.target.value)} placeholder="/book" className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold normal-case tracking-normal outline-none" />
+                                </label>
+
+                                <label className="block text-xs font-black uppercase tracking-widest text-slate-500 lg:col-span-2">
+                                    Image URL or storage path
+                                    <input value={form.image_path} onChange={(event) => updateField('image_path', event.target.value)} placeholder="Optional" className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold normal-case tracking-normal outline-none" />
+                                </label>
+
+                                <label className="flex items-center justify-between rounded-xl border border-[#720101]/10 bg-[#fff7e8] px-4 py-3 lg:col-span-2">
+                                    <span className="text-sm font-black text-[#111827]">Send by email when published</span>
+                                    <input type="checkbox" checked={form.send_email} onChange={(event) => updateField('send_email', event.target.checked)} className="h-5 w-5" />
+                                </label>
+
+                                {form.send_email && (
+                                    <div className="space-y-3 rounded-xl border border-[#720101]/10 bg-white p-4 lg:col-span-2">
+                                        <input value={form.email_subject} onChange={(event) => updateField('email_subject', event.target.value)} placeholder="Email subject. Leave blank to use the title." className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm font-bold outline-none focus:border-[#720101]" />
+                                        <textarea value={form.email_body} onChange={(event) => updateField('email_body', event.target.value)} placeholder="Email message. Leave blank to reuse the announcement." rows={3} className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold outline-none focus:border-[#720101]" />
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+
+                        <div className="grid shrink-0 gap-3 border-t border-[#720101]/10 bg-[#fffaf3] px-5 py-4 sm:grid-cols-[1fr_1fr_auto] lg:px-6">
+                            <button type="submit" disabled={saving} className={secondaryClass}>
+                                <Save size={16} />
+                                {editingId ? 'Save changes' : 'Save draft'}
+                            </button>
+                            <button type="button" disabled={saving} onClick={(event) => submit(event, 'publish')} className={primaryClass}>
+                                <Send size={16} />
+                                {saving ? 'Saving...' : publishLabel}
+                            </button>
+                            <button type="button" onClick={closeComposer} className={secondaryClass}>
+                                Cancel
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            )}
+
             {deleteTarget && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 px-4 backdrop-blur-sm">
                     <div className="w-full max-w-lg rounded-[1.5rem] border border-[#720101]/15 bg-[#fffaf3] p-6">
                         <div className="flex items-start justify-between gap-4">
                             <div>
-                                <p className="marketing-kicker">Delete Draft</p>
-                                <h3 className="mt-2 text-2xl font-black text-[#111827]">Remove this announcement?</h3>
+                                <p className="marketing-kicker">Discard Draft</p>
+                                <h3 className="mt-2 text-2xl font-black text-[#111827]">Discard this announcement?</h3>
                             </div>
                             <button type="button" aria-label="Close" onClick={() => setDeleteTarget(null)} className="rounded-xl border border-[#720101]/15 bg-white p-2 text-[#720101]">
                                 <X size={18} />
                             </button>
                         </div>
                         <p className="mt-4 text-sm font-semibold leading-6 text-slate-600">
-                            "{deleteTarget.title}" will be removed from drafts. Published announcements should be archived instead so the team keeps a record.
+                            "{deleteTarget.title}" will be discarded from drafts. Published announcements should be archived instead so the team keeps a record.
                         </p>
                         <div className="mt-6 grid gap-3 sm:grid-cols-2">
                             <button type="button" onClick={() => setDeleteTarget(null)} className={secondaryClass}>
                                 Keep it
                             </button>
                             <button type="button" disabled={saving} onClick={() => deleteAnnouncement(deleteTarget)} className="inline-flex items-center justify-center rounded-xl bg-[#720101] px-4 py-3 text-sm font-black text-white transition hover:bg-[#5a0101] disabled:opacity-60">
-                                {saving ? 'Deleting...' : 'Delete announcement'}
+                                {saving ? 'Discarding...' : 'Discard announcement'}
                             </button>
                         </div>
                     </div>
@@ -389,215 +572,31 @@ const AnnouncementManager = ({ variant = 'marketing', user }) => {
                 </div>
             )}
 
-            <section className={`${shellClass} overflow-hidden`}>
-                <div className="grid gap-0 xl:grid-cols-[1fr_320px]">
-                    <div className="p-5 lg:p-6">
-                        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-                            <div>
-                                <p className="marketing-kicker">Announcements</p>
-                                <p className="mt-1 text-sm font-semibold leading-6 text-slate-500">
-                                    Draft, schedule, publish, and email customer announcements from one place.
-                                </p>
-                            </div>
-                            <button type="button" onClick={resetForm} className={secondaryClass}>
-                                New announcement
-                            </button>
-                        </div>
-
-                        <div className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-5">
-                            {metricCards.map(([label, value]) => (
-                                <div key={label} className="rounded-xl border border-[#720101]/10 bg-white p-4">
-                                    <span className="text-[11px] font-black uppercase tracking-widest text-slate-400">{label}</span>
-                                    <strong className="mt-1 block text-2xl font-black text-[#111827]">{value}</strong>
-                                </div>
-                            ))}
-                        </div>
+            <section className={isAdminVariant ? 'admin-announcement-toolbar' : `${shellClass} p-4`}>
+                <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+                    <div className="admin-announcement-metrics">
+                        {metricCards.map(([label, value]) => (
+                            <span key={label}>
+                                <strong>{value}</strong>
+                                {label}
+                            </span>
+                        ))}
                     </div>
-
-                    <div className="border-t border-[#720101]/10 bg-[#fffaf3] p-5 xl:border-l xl:border-t-0">
-                        <p className="marketing-kicker">Preview</p>
-                        <div className="mt-3 overflow-hidden rounded-2xl border border-[#720101]/12 bg-white">
-                            {imageUrl(preview.image_path) && (
-                                <img src={imageUrl(preview.image_path)} alt="" className="h-32 w-full object-cover" />
-                            )}
-                            <div className="p-5">
-                                <p className="text-xs font-black uppercase tracking-widest text-[#9f6500]">{typeLabels[preview.type] || 'General'}</p>
-                                <h3 className="mt-2 text-xl font-black text-[#111827]">{preview.title || 'Announcement title'}</h3>
-                                <p className="mt-2 text-sm font-semibold leading-6 text-slate-500">
-                                    {preview.summary || preview.body || 'Write a short summary customers can understand at a glance.'}
-                                </p>
-                                {preview.cta_label && (
-                                    <span className="mt-4 inline-flex rounded-xl bg-[#720101] px-4 py-2 text-sm font-black text-white">
-                                        {preview.cta_label}
-                                    </span>
-                                )}
-                            </div>
-                        </div>
-                        <p className="mt-3 text-xs font-semibold leading-5 text-slate-500">
-                            Homepage announcements are visible to everyone. Targeted announcements appear only inside the customer dashboard.
-                        </p>
+                    <div className="flex flex-wrap gap-2">
+                        {editingId && (
+                            <button type="button" onClick={() => openCustomerPreview({ id: editingId })} className={secondaryClass}>
+                                <Eye size={16} />
+                                Preview as customer
+                            </button>
+                        )}
+                        <button type="button" onClick={openNewAnnouncement} className={secondaryClass}>
+                            New announcement
+                        </button>
                     </div>
                 </div>
             </section>
 
-            <div className="grid gap-5 2xl:grid-cols-[460px_1fr]">
-                <form onSubmit={(event) => submit(event, 'draft')} className={`${shellClass} p-5 lg:p-6`}>
-                    <div className="flex items-start justify-between gap-3">
-                        <div>
-                            <p className="marketing-kicker">{editingId ? 'Editing' : 'Composer'}</p>
-                            <h3 className="mt-1 text-2xl font-black text-[#111827]">{editingId ? 'Update announcement' : 'New announcement'}</h3>
-                        </div>
-                        {editingId && (
-                            <button type="button" onClick={resetForm} className="rounded-xl border border-[#720101]/12 bg-white px-3 py-2 text-xs font-black text-[#720101] hover:bg-[#fff7e8]">
-                                Clear
-                            </button>
-                        )}
-                    </div>
-
-                    <div className="mt-5 space-y-4">
-                        <label className="block text-xs font-black uppercase tracking-widest text-slate-500">
-                            Title
-                            <input required value={form.title} onChange={(event) => updateField('title', event.target.value)} placeholder="Short, customer-friendly headline" className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold normal-case tracking-normal outline-none focus:border-[#720101] focus:ring-4 focus:ring-[#720101]/10" />
-                        </label>
-
-                        <label className="block text-xs font-black uppercase tracking-widest text-slate-500">
-                            Short summary
-                            <textarea value={form.summary} onChange={(event) => updateField('summary', event.target.value)} placeholder="One or two lines customers can scan quickly." rows={2} className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold normal-case tracking-normal outline-none focus:border-[#720101] focus:ring-4 focus:ring-[#720101]/10" />
-                        </label>
-
-                        <label className="block text-xs font-black uppercase tracking-widest text-slate-500">
-                            Full message
-                            <textarea value={form.body} onChange={(event) => updateField('body', event.target.value)} placeholder="Add the full update, advisory, promo, or reminder." rows={4} className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold normal-case tracking-normal outline-none focus:border-[#720101] focus:ring-4 focus:ring-[#720101]/10" />
-                        </label>
-
-                        <div className="grid gap-3 sm:grid-cols-2">
-                            <label className="text-xs font-black uppercase tracking-widest text-slate-500">
-                                Type
-                                <select value={form.type} onChange={(event) => updateField('type', event.target.value)} className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold normal-case tracking-normal outline-none">
-                                    {Object.entries(typeLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-                                </select>
-                            </label>
-                            <label className="text-xs font-black uppercase tracking-widest text-slate-500">
-                                Audience
-                                <select value={form.visibility} onChange={(event) => updateField('visibility', event.target.value)} className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold normal-case tracking-normal outline-none">
-                                    {Object.entries(visibilityLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-                                </select>
-                            </label>
-                        </div>
-
-                        {form.visibility === 'specific_roles' && (
-                            <div className="rounded-xl border border-[#720101]/10 bg-[#fff7e8] p-4">
-                                <p className="text-xs font-black uppercase tracking-widest text-[#9f6500]">Choose roles</p>
-                                <div className="mt-3 grid grid-cols-2 gap-2">
-                                    {roleOptions.map((role) => (
-                                        <label key={role} className="flex items-center gap-2 rounded-lg border border-[#720101]/10 bg-white px-3 py-2 text-sm font-bold text-slate-700">
-                                            <input
-                                                type="checkbox"
-                                                checked={form.visibility_roles.includes(role)}
-                                                onChange={(event) => {
-                                                    const next = event.target.checked
-                                                        ? [...form.visibility_roles, role]
-                                                        : form.visibility_roles.filter((item) => item !== role);
-                                                    updateField('visibility_roles', next);
-                                                }}
-                                            />
-                                            {role}
-                                        </label>
-                                    ))}
-                                </div>
-                            </div>
-                        )}
-
-                        {form.visibility === 'specific_users' && (
-                            <div className="rounded-xl border border-[#720101]/10 bg-[#fff7e8] p-4">
-                                <p className="text-xs font-black uppercase tracking-widest text-[#9f6500]">Choose people</p>
-                                <label className="mt-3 flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2">
-                                    <Search size={16} className="text-slate-400" />
-                                    <input value={audienceSearch} onChange={(event) => setAudienceSearch(event.target.value)} placeholder="Search name, email, or role" className="w-full text-sm font-bold outline-none" />
-                                </label>
-                                {audienceSearch && audienceUsers.length > 0 && (
-                                    <div className="mt-2 max-h-48 overflow-auto rounded-xl border border-slate-200 bg-white">
-                                        {audienceUsers.map((person) => (
-                                            <button key={person.id} type="button" onClick={() => addAudienceUser(person)} className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left text-sm font-bold hover:bg-[#fff7e8]">
-                                                <span>
-                                                    {person.username}
-                                                    <span className="block text-xs font-semibold text-slate-500">{person.email}</span>
-                                                </span>
-                                                <span className="text-xs font-black uppercase text-[#9f6500]">{person.role}</span>
-                                            </button>
-                                        ))}
-                                    </div>
-                                )}
-                                {selectedUsers.length > 0 && (
-                                    <div className="mt-3 flex flex-wrap gap-2">
-                                        {selectedUsers.map((person) => (
-                                            <span key={person.id} className="inline-flex items-center gap-2 rounded-lg border border-[#720101]/12 bg-white px-3 py-2 text-xs font-black text-slate-700">
-                                                {person.username}
-                                                <button type="button" aria-label={`Remove ${person.username}`} onClick={() => removeAudienceUser(person.id)} className="text-[#720101]">
-                                                    <X size={13} />
-                                                </button>
-                                            </span>
-                                        ))}
-                                    </div>
-                                )}
-                            </div>
-                        )}
-
-                        <div className="grid gap-3 sm:grid-cols-2">
-                            <label className="text-xs font-black uppercase tracking-widest text-slate-500">
-                                Publish from
-                                <input type="datetime-local" value={form.starts_at} onChange={(event) => updateField('starts_at', event.target.value)} className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold normal-case tracking-normal outline-none" />
-                            </label>
-                            <label className="text-xs font-black uppercase tracking-widest text-slate-500">
-                                Hide after (optional)
-                                <input type="datetime-local" value={form.ends_at} onChange={(event) => updateField('ends_at', event.target.value)} className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold normal-case tracking-normal outline-none" />
-                                <span className="mt-2 block text-[11px] font-semibold normal-case leading-5 tracking-normal text-slate-500">
-                                    Leave blank to keep it visible until staff manually archives it.
-                                </span>
-                            </label>
-                        </div>
-
-                        <div className="grid gap-3 sm:grid-cols-2">
-                            <label className="text-xs font-black uppercase tracking-widest text-slate-500">
-                                Button text
-                                <input value={form.cta_label} onChange={(event) => updateField('cta_label', event.target.value)} placeholder="Optional" className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold normal-case tracking-normal outline-none" />
-                            </label>
-                            <label className="text-xs font-black uppercase tracking-widest text-slate-500">
-                                Button link
-                                <input value={form.cta_url} onChange={(event) => updateField('cta_url', event.target.value)} placeholder="/book" className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold normal-case tracking-normal outline-none" />
-                            </label>
-                        </div>
-
-                        <label className="block text-xs font-black uppercase tracking-widest text-slate-500">
-                            Image URL or storage path
-                            <input value={form.image_path} onChange={(event) => updateField('image_path', event.target.value)} placeholder="Optional" className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold normal-case tracking-normal outline-none" />
-                        </label>
-
-                        <label className="flex items-center justify-between rounded-xl border border-[#720101]/10 bg-[#fff7e8] px-4 py-3">
-                            <span className="text-sm font-black text-[#111827]">Send by email when published</span>
-                            <input type="checkbox" checked={form.send_email} onChange={(event) => updateField('send_email', event.target.checked)} className="h-5 w-5" />
-                        </label>
-
-                        {form.send_email && (
-                            <div className="space-y-3 rounded-xl border border-[#720101]/10 bg-white p-4">
-                                <input value={form.email_subject} onChange={(event) => updateField('email_subject', event.target.value)} placeholder="Email subject. Leave blank to use the title." className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm font-bold outline-none focus:border-[#720101]" />
-                                <textarea value={form.email_body} onChange={(event) => updateField('email_body', event.target.value)} placeholder="Email message. Leave blank to reuse the announcement." rows={3} className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold outline-none focus:border-[#720101]" />
-                            </div>
-                        )}
-
-                        <div className="grid gap-3 sm:grid-cols-2">
-                            <button type="submit" disabled={saving} className={secondaryClass}>
-                                <Save size={16} />
-                                {editingId ? 'Save Changes' : 'Save Draft'}
-                            </button>
-                            <button type="button" disabled={saving} onClick={(event) => submit(event, 'publish')} className={primaryClass}>
-                                <Send size={16} />
-                                {saving ? 'Saving...' : publishLabel}
-                            </button>
-                        </div>
-                    </div>
-                </form>
-
+            <div className={isAdminVariant ? 'admin-content-workspace' : 'grid gap-5'}>
                 <section className={`${shellClass} overflow-hidden`}>
                     <div className="border-b border-[#720101]/10 p-5">
                         <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
@@ -665,8 +664,8 @@ const AnnouncementManager = ({ variant = 'marketing', user }) => {
                                                 </div>
                                             </div>
                                             <div className="flex flex-wrap gap-2 xl:justify-end">
-                                                <button type="button" onClick={() => setPreviewId(item.id)} className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-600 hover:bg-[#fff7e8]">
-                                                    <Eye size={14} className="inline" /> Preview
+                                                <button type="button" onClick={() => openCustomerPreview(item)} className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-600 hover:bg-[#fff7e8]">
+                                                    <Eye size={14} className="inline" /> Preview as customer
                                                 </button>
                                                 <button type="button" onClick={() => startEdit(item)} className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-600 hover:bg-[#fff7e8]">
                                                     <Pencil size={14} className="inline" /> Edit
@@ -688,7 +687,7 @@ const AnnouncementManager = ({ variant = 'marketing', user }) => {
                                                 )}
                                                 {canDelete && (
                                                     <button type="button" disabled={saving} onClick={() => setDeleteTarget(item)} className="rounded-xl border border-red-200 bg-white px-3 py-2 text-xs font-black text-red-700 hover:bg-red-50">
-                                                        <Trash2 size={14} className="inline" /> Delete
+                                                        <Trash2 size={14} className="inline" /> Discard
                                                     </button>
                                                 )}
                                             </div>

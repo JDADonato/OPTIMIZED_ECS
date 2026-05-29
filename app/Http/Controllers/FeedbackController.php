@@ -4,13 +4,14 @@ namespace App\Http\Controllers;
 
 use App\Models\FeedbackRequest;
 use App\Models\FeedbackResponse;
-use App\Models\User;
 use App\Notifications\StaffOperationalNotification;
 use App\Services\ConversionEventService;
+use App\Services\NotificationRecipientService;
+use App\Services\OperationalBroadcastService;
 use App\Services\PostEventLifecycleService;
+use App\Support\ResourceVersion;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Facades\Notification;
 
 class FeedbackController extends Controller
 {
@@ -119,11 +120,12 @@ class FeedbackController extends Controller
             $body = (int) $response->rating <= 3
                 ? 'A completed event received a low rating and needs staff follow-up.'
                 : 'A customer gave permission for a high-rating testimonial candidate.';
-            $staff = User::whereIn('role', ['Admin', 'Marketing'])
-                ->where(fn ($query) => $query->whereNull('account_status')->orWhere('account_status', 'active'))
-                ->get();
-            Notification::send($staff, new StaffOperationalNotification($subject, $subject, $body, url('/dashboard/marketing')));
+            app(NotificationRecipientService::class)
+                ->sendToRoles(['Admin', 'Marketing'], new StaffOperationalNotification($subject, $subject, $body, url('/dashboard/marketing')), 'feedback_follow_up');
         }
+
+        app(OperationalBroadcastService::class)
+            ->staffQueueChanged('feedback', 'feedback_response', $response->id, 'submitted', 'Feedback submitted.');
 
         return response()->json([
             'message' => 'Thank you for your feedback.',
@@ -150,7 +152,12 @@ class FeedbackController extends Controller
             $query->where('testimonial_status', $request->query('testimonial_status'));
         }
 
-        return response()->json($query->limit(200)->get()->map(fn (FeedbackResponse $response) => [
+        $versionMeta = ResourceVersion::fromQuery($query);
+        if (ResourceVersion::matches($request, $versionMeta)) {
+            return ResourceVersion::unchanged($versionMeta);
+        }
+
+        $format = fn (FeedbackResponse $response) => [
             'id' => $response->id,
             'booking_id' => $response->booking_id,
             'client_name' => $response->booking?->client_full_name ?: $response->booking?->user?->full_name ?: $response->booking?->user?->username,
@@ -174,7 +181,26 @@ class FeedbackController extends Controller
             'retention_notes' => $response->retention_notes,
             'reviewed_by' => $response->reviewed_by,
             'reviewed_at' => $response->reviewed_at,
-        ]));
+        ];
+
+        if ($request->boolean('paginated') || $request->has('page') || $request->has('per_page')) {
+            $perPage = min(max((int) $request->query('per_page', 25), 1), 75);
+            $paginator = $query->paginate($perPage);
+
+            return response()->json([
+                'data' => collect($paginator->items())->map($format)->values(),
+                'meta' => [
+                    'current_page' => $paginator->currentPage(),
+                    'per_page' => $paginator->perPage(),
+                    'total' => $paginator->total(),
+                    'last_page' => $paginator->lastPage(),
+                    ...$versionMeta,
+                    'changed' => true,
+                ],
+            ]);
+        }
+
+        return response()->json($query->limit(200)->get()->map($format));
     }
 
     public function staffUpdate(Request $request, FeedbackResponse $response)
@@ -212,6 +238,9 @@ class FeedbackController extends Controller
         if ($response->booking) {
             PostEventLifecycleService::refresh($response->booking);
         }
+
+        app(OperationalBroadcastService::class)
+            ->staffQueueChanged('feedback', 'feedback_response', $response->id, 'updated', 'Feedback review updated.');
 
         return response()->json([
             'message' => 'Feedback review updated.',

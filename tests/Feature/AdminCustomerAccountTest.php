@@ -3,6 +3,14 @@
 namespace Tests\Feature;
 
 use App\Models\Booking;
+use App\Models\BookingReviewTask;
+use App\Models\ContactInquiry;
+use App\Models\Conversation;
+use App\Models\ConversationParticipant;
+use App\Models\EventPreparationTask;
+use App\Models\FeedbackRequest;
+use App\Models\FeedbackResponse;
+use App\Models\Message;
 use App\Models\User;
 use App\Notifications\StaffAccountAccessNotification;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -75,6 +83,185 @@ class AdminCustomerAccountTest extends TestCase
         $this->assertDatabaseHas('users', [
             'id' => $customer->id,
             'account_status' => 'active',
+        ]);
+    }
+
+    public function test_deactivating_customer_archives_active_chats_and_hides_placeholder_email_from_active_queues(): void
+    {
+        $admin = $this->user('Admin');
+        $marketing = $this->user('Marketing');
+        $customer = $this->user('Client', [
+            'username' => 'mav',
+            'email' => 'mav@example.test',
+        ]);
+
+        $conversation = Conversation::create([
+            'client_id' => $customer->id,
+            'staff_id' => $marketing->id,
+            'status' => 'active',
+        ]);
+        Message::create([
+            'conversation_id' => $conversation->id,
+            'sender_id' => $customer->id,
+            'receiver_id' => $marketing->id,
+            'message' => 'Please help.',
+        ]);
+
+        $this->actingAs($admin)
+            ->deleteJson("/api/admin/customers/{$customer->id}")
+            ->assertOk();
+
+        $this->assertDatabaseHas('conversations', [
+            'id' => $conversation->id,
+            'status' => 'resolved',
+        ]);
+        $this->assertDatabaseHas('messages', [
+            'conversation_id' => $conversation->id,
+            'message_type' => 'system',
+            'message' => 'Conversation archived because customer account was deactivated.',
+        ]);
+
+        $payload = $this->actingAs($admin)
+            ->getJson('/api/chat/conversations')
+            ->assertOk()
+            ->json();
+
+        $this->assertNotContains($conversation->id, collect($payload['all_active'])->pluck('id')->all());
+        $this->assertNotContains($conversation->id, collect($payload['needs_attention'])->pluck('id')->all());
+
+        $archived = collect($payload['resolved'])->firstWhere('id', $conversation->id);
+        $this->assertNotNull($archived);
+        $this->assertTrue($archived['client_is_deactivated']);
+        $this->assertSame('Deactivated customer', $archived['client_status_label']);
+        $this->assertNull($archived['client_email']);
+        $this->assertFalse($archived['can_reply']);
+        $this->assertFalse($archived['can_transfer']);
+
+        $this->actingAs($marketing)
+            ->postJson("/api/chat/conversations/{$conversation->id}/messages", ['message' => 'Are you still there?'])
+            ->assertForbidden()
+            ->assertJsonPath('error', 'This conversation is archived because the customer account is deactivated.');
+    }
+
+    public function test_deactivated_customers_are_hidden_from_marketing_search_unless_requested(): void
+    {
+        $marketing = $this->user('Marketing');
+        $active = $this->user('Client', [
+            'full_name' => 'Mav Active',
+            'username' => 'mav_active',
+            'email' => 'mav-active@example.test',
+        ]);
+        $deactivated = $this->user('Client', [
+            'full_name' => 'Mav Archived',
+            'username' => 'mav_archived',
+            'email' => 'mav-archived@example.test',
+            'account_status' => 'deactivated',
+            'deactivated_at' => now(),
+        ]);
+
+        $this->actingAs($marketing)
+            ->getJson('/api/marketing/customers?search=mav')
+            ->assertOk()
+            ->assertJsonFragment(['id' => $active->id])
+            ->assertJsonMissing(['id' => $deactivated->id]);
+
+        $this->actingAs($marketing)
+            ->getJson('/api/marketing/customers?search=mav&include_deactivated=1')
+            ->assertOk()
+            ->assertJsonFragment(['id' => $active->id])
+            ->assertJsonFragment(['id' => $deactivated->id]);
+    }
+
+    public function test_deactivating_staff_releases_active_operational_ownership_without_erasing_history(): void
+    {
+        $admin = $this->user('Admin');
+        $staff = $this->user('Marketing', ['username' => 'former_marketing']);
+        $customer = $this->user('Client');
+
+        $booking = Booking::create([
+            'user_id' => $customer->id,
+            'event_date' => now()->addMonth()->toDateString(),
+            'event_time' => '18:00',
+            'pax' => 80,
+            'event_type' => 'Wedding',
+            'status' => 'Pending',
+            'assigned_to' => $staff->id,
+        ]);
+
+        $conversation = Conversation::create([
+            'client_id' => $customer->id,
+            'staff_id' => $staff->id,
+            'status' => 'active',
+        ]);
+        ConversationParticipant::create([
+            'conversation_id' => $conversation->id,
+            'user_id' => $staff->id,
+            'role' => 'owner',
+            'joined_at' => now(),
+        ]);
+        Message::create([
+            'conversation_id' => $conversation->id,
+            'sender_id' => $staff->id,
+            'receiver_id' => $customer->id,
+            'message' => 'Historical staff reply.',
+        ]);
+
+        $inquiry = ContactInquiry::create([
+            'full_name' => 'Walk In',
+            'email' => 'walkin@example.test',
+            'subject' => 'Question',
+            'message' => 'Question',
+            'status' => 'open',
+            'assigned_to' => $staff->id,
+        ]);
+        $reviewTask = BookingReviewTask::create([
+            'booking_id' => $booking->id,
+            'label' => 'Review customer request',
+            'assigned_to' => $staff->id,
+        ]);
+        $prepTask = EventPreparationTask::create([
+            'booking_id' => $booking->id,
+            'label' => 'Prepare service kit',
+            'assigned_to' => $staff->id,
+        ]);
+        $feedbackRequest = FeedbackRequest::create([
+            'booking_id' => $booking->id,
+            'user_id' => $customer->id,
+            'token' => 'feedback-token',
+        ]);
+        $feedback = FeedbackResponse::create([
+            'feedback_request_id' => $feedbackRequest->id,
+            'booking_id' => $booking->id,
+            'user_id' => $customer->id,
+            'rating' => 2,
+            'follow_up_required' => true,
+            'assigned_to' => $staff->id,
+            'review_status' => 'Open',
+        ]);
+
+        $this->actingAs($admin)
+            ->deleteJson("/api/admin/employees/{$staff->id}")
+            ->assertOk();
+
+        $this->assertNull($conversation->fresh()->staff_id);
+        $participant = ConversationParticipant::where('conversation_id', $conversation->id)
+            ->where('user_id', $staff->id)
+            ->firstOrFail();
+        $this->assertNotNull($participant->removed_at);
+        $this->assertSame($admin->id, $participant->removed_by);
+        $this->assertSame('staff_deactivated', $participant->removal_reason);
+        $this->assertNull($booking->fresh()->assigned_to);
+        $this->assertNull($inquiry->fresh()->assigned_to);
+        $this->assertNull($reviewTask->fresh()->assigned_to);
+        $this->assertNull($prepTask->fresh()->assigned_to);
+        $this->assertNull($feedback->fresh()->assigned_to);
+        $this->assertDatabaseHas('messages', [
+            'sender_id' => $staff->id,
+            'message' => 'Historical staff reply.',
+        ]);
+        $this->assertDatabaseHas('users', [
+            'id' => $staff->id,
+            'account_status' => 'deactivated',
         ]);
     }
 

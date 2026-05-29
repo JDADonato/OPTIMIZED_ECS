@@ -37,7 +37,7 @@ class BusinessRule extends Model
         ];
     }
 
-    public static function getActive(): self
+    public static function getActive(): ?self
     {
         return self::whereRaw('is_active is true')->first() ?? self::first();
     }

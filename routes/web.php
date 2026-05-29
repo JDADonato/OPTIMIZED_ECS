@@ -16,7 +16,6 @@ use App\Http\Controllers\FeedbackController;
 use App\Http\Controllers\FoodTastingController;
 use App\Http\Controllers\MenuController;
 use App\Http\Controllers\ChatController;
-use App\Http\Controllers\MessageController;
 use App\Http\Controllers\NotificationController;
 use App\Http\Controllers\MarketingController;
 use App\Http\Controllers\PackageController;
@@ -32,7 +31,6 @@ use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
-use App\Models\Announcement;
 
 /*
 |--------------------------------------------------------------------------
@@ -44,7 +42,7 @@ use App\Models\Announcement;
 |--------------------------------------------------------------------------
 */
 
-// ─── Public Routes ───
+// Public routes
 
 Route::get('/', fn () => Inertia::render('LandingPage'))->name('home');
 Route::get('/about', fn () => Inertia::render('About'))->name('about');
@@ -116,24 +114,24 @@ Route::middleware('auth')->group(function () {
     Route::get('/documents/payments/{payment}/receipt.pdf', [DocumentController::class, 'receipt'])->name('documents.receipt');
     Route::get('/documents/bookings/{booking}/preparation.pdf', [DocumentController::class, 'preparationList'])->name('documents.preparation');
     Route::get('/documents/calendar.pdf', [DocumentController::class, 'calendar'])->name('documents.calendar');
-
-    // ─── Notification Routes ───
+    // Notification routes
     Route::get('/api/notifications', [NotificationController::class, 'index']);
     Route::get('/api/notifications/unread-count', [NotificationController::class, 'unreadCount']);
     Route::put('/api/notifications/{id}/read', [NotificationController::class, 'markAsRead']);
     Route::put('/api/notifications/read-all', [NotificationController::class, 'markAllAsRead']);
     Route::delete('/api/notifications/{id}', [NotificationController::class, 'destroy']);
     Route::post('/api/conversion-events', [ConversionEventController::class, 'store'])->middleware('throttle:60,1');
-
-    // ─── Legacy Messaging Routes (kept for backward compatibility) ───
-    Route::get('/api/messages/conversations', [MessageController::class, 'conversations']);
-    Route::get('/api/messages/staff/available', [MessageController::class, 'availableStaff']);
-    Route::get('/api/messages/unread-count', [MessageController::class, 'unreadCount']);
-    Route::get('/api/messages/my-bookings', [MessageController::class, 'myBookings']);
-    Route::get('/api/messages/{userId}', [MessageController::class, 'messages']);
-    Route::post('/api/messages', [MessageController::class, 'send']);
-
-    // ─── Phase 2: Chat Routes (WebSocket/Ticket System) ───
+    // Legacy messaging routes (kept for backward compatibility)
+    $legacyMessagesGone = fn () => response()->json([
+        'error' => 'Legacy messaging endpoints are retired. Use /api/chat instead.',
+    ], 410);
+    Route::get('/api/messages/conversations', $legacyMessagesGone);
+    Route::get('/api/messages/staff/available', $legacyMessagesGone);
+    Route::get('/api/messages/unread-count', $legacyMessagesGone);
+    Route::get('/api/messages/my-bookings', $legacyMessagesGone);
+    Route::get('/api/messages/{userId}', $legacyMessagesGone);
+    Route::post('/api/messages', $legacyMessagesGone);
+    // Chat routes (WebSocket/Ticket System)
     Route::get('/api/chat/conversations', [ChatController::class, 'conversations']);
     Route::post('/api/chat/conversations', [ChatController::class, 'startConversation']);
     Route::get('/api/chat/unassigned', [ChatController::class, 'unassigned']);
@@ -170,7 +168,7 @@ Route::get('/api/bookings/availability/{date}', [BookingController::class, 'chec
 // Issue 3: Pre-fetch all blocked dates for the calendar UI
 Route::get('/api/bookings/disabled-dates', [BookingController::class, 'getDisabledDates'])->middleware('cache.headers:public;max_age=60;etag');
 
-// ─── Menu API Endpoints (Database-backed) ───
+// Menu API endpoints (database-backed)
 Route::middleware('cache.headers:public;max_age=300;etag')->group(function () {
     Route::get('/api/menu', [MenuController::class, 'index']);
     Route::get('/api/menu/categories', [MenuController::class, 'categories']);
@@ -192,7 +190,7 @@ Route::middleware('cache.headers:public;max_age=300;etag')->group(function () {
     Route::get('/api/packages/{id}', [PackageController::class, 'show']);
 });
 
-// ─── Client Routes ───
+// Client routes
 
 // Public Views (Client Side)
 Route::get('/book', fn () => Inertia::render('client/BookingWizard'))->name('booking.wizard');
@@ -200,7 +198,7 @@ Route::get('/menu', fn () => Inertia::render('client/MenuGallery'))->name('menu.
 Route::get('/food-tasting', fn () => Inertia::render('client/FoodTasting'))->name('food-tasting');
 
 Route::middleware(['auth', 'role:Client'])->group(function () {
-    // Dashboard — renders original ClientDashboard.jsx which fetches via API
+    // Dashboard renders ClientDashboard.jsx, which fetches via API.
     Route::get('/dashboard/client', fn () => Inertia::render('client/ClientDashboard'))->name('dashboard.client');
     Route::get('/pay', function () {
         return redirect()
@@ -219,18 +217,20 @@ Route::middleware(['auth', 'role:Client'])->group(function () {
 
     // Booking API endpoints (JSON responses for React AJAX calls)
     Route::post('/api/bookings', [BookingController::class, 'store'])->middleware('throttle:10,1');
-    Route::post('/api/bookings/abandoned-reminder', [BookingController::class, 'sendAbandonedReminder']);
+    Route::post('/api/bookings/abandoned-reminder', [BookingController::class, 'sendAbandonedReminder'])->middleware('throttle:3,1');
     Route::put('/api/bookings/{id}/event-details', [BookingController::class, 'updateEventDetails']);
     Route::put('/api/bookings/{id}/menu', [BookingController::class, 'updateMenu']);
     Route::put('/api/bookings/{id}/cancel', [BookingController::class, 'cancel']);
     Route::put('/api/bookings/{id}/update', [BookingController::class, 'update']);
-    Route::post('/api/bookings/pay', [BookingController::class, 'recordPayment']);
+    Route::post('/api/bookings/pay', [BookingController::class, 'recordPayment'])->middleware('throttle:3,1');
     Route::post('/api/bookings/{id}/clarification-response', [BookingController::class, 'respondToClarification']);
+    Route::patch('/api/bookings/{id}/hide-from-history', [BookingController::class, 'hideFromHistory']);
     Route::delete('/api/bookings/{id}/remove-history', [BookingController::class, 'removeHistory']);
 
     // Food tasting (authenticated)
     Route::get('/api/food-tasting', [FoodTastingController::class, 'index']);
     Route::put('/api/food-tasting/{id}', [FoodTastingController::class, 'update']);
+    Route::patch('/api/food-tasting/{id}/cancel', [FoodTastingController::class, 'cancel']);
     Route::delete('/api/food-tasting/{id}', [FoodTastingController::class, 'destroy']);
 
     // File upload
@@ -242,19 +242,18 @@ Route::middleware(['auth', 'role:Client'])->group(function () {
     Route::post('/api/customer/feedback-requests/{token}/responses', [FeedbackController::class, 'store']);
 });
 
-// ─── Marketing Routes (Marketing + Admin) ───
+// Marketing routes (Marketing + Admin)
 
 Route::middleware(['auth', 'role:Marketing,Admin'])->group(function () {
     Route::get('/preview/menu', fn () => Inertia::render('client/MenuGallery', ['previewMode' => true]))->name('preview.menu');
     Route::get('/preview/packages', fn () => Inertia::render('client/MenuGallery', ['previewMode' => true, 'previewPanel' => 'packages']))->name('preview.packages');
     Route::get('/preview/book', fn () => Inertia::render('client/BookingWizard', ['previewMode' => true]))->name('preview.booking');
     Route::get('/preview/customer-booking/{booking}', [BookingController::class, 'preview'])->name('preview.customer-booking');
-    Route::get('/preview/announcements/{announcement}', fn (Announcement $announcement) => response()->json([
-        'preview' => true,
-        'announcement' => $announcement,
-    ]))->name('preview.announcement');
+    Route::get('/preview/announcements/{announcement}', [AnnouncementController::class, 'preview'])->name('preview.announcement');
     Route::get('/dashboard/marketing', fn () => Inertia::render('DashboardMarketing'))->name('dashboard.marketing');
     Route::get('/api/marketing/summary', [MarketingController::class, 'summary']);
+    Route::get('/api/settings/menu-items', [SettingsController::class, 'menuItems']);
+    Route::get('/api/settings/event-types', [SettingsController::class, 'eventTypes']);
     Route::get('/api/marketing/bookings', [MarketingController::class, 'getAllBookings']);
     Route::get('/api/marketing/customers', [MarketingController::class, 'searchCustomers']);
     Route::post('/api/marketing/bookings/assisted', [MarketingController::class, 'createAssistedBooking']);
@@ -298,7 +297,7 @@ Route::middleware(['auth', 'role:Marketing,Admin'])->group(function () {
     Route::delete('/api/admin/announcements/{announcement}', [AnnouncementController::class, 'destroy']);
 });
 
-// ─── Accounting Routes ───
+// Accounting routes
 
 Route::middleware(['auth', 'role:Accounting,Admin'])->group(function () {
     Route::get('/dashboard/accounting', fn () => Inertia::render('DashboardAccounting'))->name('dashboard.accounting');
@@ -313,9 +312,10 @@ Route::middleware(['auth', 'role:Accounting,Admin'])->group(function () {
     Route::post('/api/accounting/remind/{paymentId}', [AccountingController::class, 'remindClient']);
     Route::get('/api/accounting/refunds/queue', [AccountingController::class, 'getRefundQueue']);
     Route::post('/api/accounting/refund/{bookingId}', [AccountingController::class, 'processRefund']);
+    Route::post('/api/accounting/refund/{bookingId}/{action}', [AccountingController::class, 'refundAction']);
 });
 
-// ─── Admin Routes ───
+// Admin routes
 
 Route::middleware(['auth', 'role:Admin'])->group(function () {
     Route::get('/dashboard/admin', fn () => Inertia::render('DashboardAdmin'))->name('dashboard.admin');
@@ -335,7 +335,11 @@ Route::middleware(['auth', 'role:Admin'])->group(function () {
     Route::post('/api/admin/customers/{id}/reactivate', [AdminController::class, 'reactivateCustomer']);
     Route::post('/api/admin/pricing', [AdminController::class, 'updatePricingOverride']);
     Route::get('/api/admin/settings', [SettingsController::class, 'businessSettings']);
+    Route::get('/api/admin/menu-items', [AdminController::class, 'getMenuItems']);
+    Route::get('/api/admin/event-types', [SettingsController::class, 'eventTypes']);
     Route::put('/api/admin/settings', [SettingsController::class, 'updateBusinessSettings']);
+    Route::get('/api/admin/payment-rules', [SettingsController::class, 'paymentRules']);
+    Route::put('/api/admin/payment-rules', [SettingsController::class, 'updatePaymentRules']);
     Route::get('/api/admin/bookings', [AdminController::class, 'getBookings']);
     Route::put('/api/admin/bookings/{id}/status', [AdminController::class, 'updateBookingStatus']);
     Route::post('/api/admin/bookings/{id}/discount', [AdminController::class, 'applyDiscount']);
@@ -352,21 +356,25 @@ Route::middleware(['auth', 'role:Admin'])->group(function () {
     Route::get('/api/admin/report-templates', [ReportController::class, 'templates']);
     Route::post('/api/admin/report-templates', [ReportController::class, 'storeTemplate']);
     Route::patch('/api/admin/report-templates/{template}', [ReportController::class, 'updateTemplate']);
+    Route::patch('/api/admin/report-templates/{template}/archive', [ReportController::class, 'archiveTemplate']);
     Route::delete('/api/admin/report-templates/{template}', [ReportController::class, 'destroyTemplate']);
     Route::post('/api/admin/report-templates/{template}/run', [ReportController::class, 'run']);
     Route::get('/api/admin/report-runs/{run}/export', [ReportController::class, 'export']);
     Route::get('/api/admin/audits', [AdminController::class, 'getAudits']);
     Route::get('/api/admin/refunds/queue', [AccountingController::class, 'getRefundQueue']);
     Route::post('/api/admin/refund/{bookingId}', [AccountingController::class, 'processRefund']);
+    Route::post('/api/admin/refund/{bookingId}/{action}', [AccountingController::class, 'refundAction']);
 
     // Menu items CRUD
     Route::post('/api/admin/menu-items', [AdminController::class, 'createMenuItem']);
     Route::put('/api/admin/menu-items/{id}', [AdminController::class, 'updateMenuItem']);
+    Route::patch('/api/admin/menu-items/{id}/archive', [AdminController::class, 'archiveMenuItem']);
     Route::delete('/api/admin/menu-items/{id}', [AdminController::class, 'deleteMenuItem']);
     Route::post('/api/admin/packages', [SettingsController::class, 'createPackage']);
     Route::put('/api/admin/packages/{id}', [SettingsController::class, 'updatePackage']);
     Route::post('/api/admin/event-types', [SettingsController::class, 'createEventType']);
     Route::put('/api/admin/event-types/{id}', [SettingsController::class, 'updateEventType']);
+    Route::patch('/api/admin/event-types/{id}/archive', [SettingsController::class, 'archiveEventType']);
     Route::delete('/api/admin/event-types/{id}', [SettingsController::class, 'deleteEventType']);
     Route::put('/api/admin/menu-items/{id}/pricing', [SettingsController::class, 'updateDishPricing']);
 });

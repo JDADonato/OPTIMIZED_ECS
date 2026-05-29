@@ -85,4 +85,24 @@ class PreflightReadinessTest extends TestCase
 
         $this->assertNotEmpty($files);
     }
+
+    public function test_paymongo_webhook_sync_refuses_production_without_force(): void
+    {
+        $this->app->detectEnvironment(fn () => 'production');
+        config(['app.env' => 'production']);
+
+        $this->artisan('paymongo:webhook-sync', ['--skip-ngrok' => true])
+            ->expectsOutput('paymongo:webhook-sync is a dev/staging helper. Refusing to run in production without --force-production.')
+            ->assertExitCode(1);
+    }
+
+    public function test_paymongo_webhook_sync_documents_safe_options_and_has_no_user_specific_ngrok_path(): void
+    {
+        $source = file_get_contents(app_path('Console/Commands/PayMongoWebhookSync.php'));
+
+        $this->assertStringContainsString('{--force-production', $source);
+        $this->assertStringContainsString('{--no-disable-old', $source);
+        $this->assertStringContainsString('shouldDisableOldWebhooks', $source);
+        $this->assertStringNotContainsString('Joshua Aquino', $source);
+    }
 }

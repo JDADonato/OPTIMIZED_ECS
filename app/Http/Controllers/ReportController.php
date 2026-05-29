@@ -8,7 +8,9 @@ use App\Models\ReportRun;
 use App\Models\ReportTemplate;
 use App\Services\AdminReportService;
 use App\Services\BrandedPdfService;
+use App\Services\OperationalBroadcastService;
 use App\Support\ApiResponse;
+use App\Support\ResourceVersion;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Symfony\Component\HttpFoundation\StreamedResponse;
@@ -42,9 +44,33 @@ class ReportController extends Controller
 
     public function templates()
     {
-        return response()->json(ReportTemplateResource::collection(ReportTemplate::query()
-            ->orderByDesc('updated_at')
-            ->get())->resolve());
+        $query = ReportTemplate::query()
+            ->when(!request()->boolean('include_archived'), fn ($query) => $query->whereNull('archived_at'))
+            ->orderByDesc('updated_at');
+
+        $versionMeta = ResourceVersion::fromQuery($query);
+        if (ResourceVersion::matches(request(), $versionMeta)) {
+            return ResourceVersion::unchanged($versionMeta);
+        }
+
+        if (request()->boolean('paginated') || request()->has('page') || request()->has('per_page')) {
+            $perPage = min(max((int) request()->query('per_page', 25), 1), 75);
+            $paginator = $query->paginate($perPage);
+
+            return response()->json([
+                'data' => ReportTemplateResource::collection(collect($paginator->items()))->resolve(),
+                'meta' => [
+                    'current_page' => $paginator->currentPage(),
+                    'per_page' => $paginator->perPage(),
+                    'total' => $paginator->total(),
+                    'last_page' => $paginator->lastPage(),
+                    ...$versionMeta,
+                    'changed' => true,
+                ],
+            ]);
+        }
+
+        return response()->json(ReportTemplateResource::collection($query->limit(200)->get())->resolve());
     }
 
     public function storeTemplate(Request $request)
@@ -55,6 +81,8 @@ class ReportController extends Controller
             'created_by' => Auth::id(),
             'visibility' => $payload['visibility'] ?? 'admin',
         ]);
+        app(OperationalBroadcastService::class)
+            ->adminChanged('report_templates', 'report_template', $template->id, 'created', 'Report template created.');
 
         return response()->json((new ReportTemplateResource($template))->resolve(), 201);
     }
@@ -62,19 +90,32 @@ class ReportController extends Controller
     public function updateTemplate(Request $request, ReportTemplate $template)
     {
         $template->update($this->validateTemplate($request));
+        app(OperationalBroadcastService::class)
+            ->adminChanged('report_templates', 'report_template', $template->id, 'updated', 'Report template updated.');
 
         return response()->json((new ReportTemplateResource($template->fresh()))->resolve());
     }
 
     public function destroyTemplate(ReportTemplate $template)
     {
-        $template->delete();
+        $template->forceFill(['archived_at' => $template->archived_at ?: now()])->save();
+        app(OperationalBroadcastService::class)
+            ->adminChanged('report_templates', 'report_template', $template->id, 'archived', 'Report template archived.');
 
-        return ApiResponse::message('Report template deleted.');
+        return ApiResponse::message('Report template archived.');
+    }
+
+    public function archiveTemplate(ReportTemplate $template)
+    {
+        return $this->destroyTemplate($template);
     }
 
     public function run(Request $request, ReportTemplate $template)
     {
+        if ($template->archived_at) {
+            return response()->json(['error' => 'Archived report templates cannot be run.'], 422);
+        }
+
         $payload = $request->validate([
             'filters' => 'nullable|array',
         ]);
@@ -98,6 +139,8 @@ class ReportController extends Controller
                 'widgets' => $snapshot,
             ],
         ]);
+        app(OperationalBroadcastService::class)
+            ->adminChanged('reports', 'report_run', $run->id, 'created', 'Report run completed.');
 
         return response()->json((new ReportRunResource($run))->resolve(), 201);
     }
@@ -107,7 +150,10 @@ class ReportController extends Controller
         $format = strtolower((string) $request->query('format', 'csv'));
         if ($format === 'pdf') {
             $filename = 'eloquente-report-' . $run->id . '.pdf';
-            return response($pdf->report($run->loadMissing('creator'), $this->reportSections($run)), 200, [
+            $sections = $this->reportSections($run);
+            $truncated = count($sections) > $pdf->maxReportLines();
+
+            return response($pdf->report($run->loadMissing('creator'), $sections, $truncated), 200, [
                 'Content-Type' => 'application/pdf',
                 'Content-Disposition' => 'attachment; filename="' . $filename . '"',
             ]);
@@ -240,90 +286,6 @@ class ReportController extends Controller
             ]))
             ->values()
             ->all();
-    }
-
-    private function buildPdf(ReportRun $run): string
-    {
-        $widgetNames = collect($this->reports->widgetDefinitions())->pluck('name', 'id');
-        $lines = [
-            'Eloquente Catering',
-            'Management Report #' . $run->id,
-            'Generated: ' . now()->format('M j, Y g:i A'),
-            '',
-        ];
-
-        foreach ($run->result_snapshot_json ?? [] as $widget) {
-            $title = $widgetNames[$widget['id'] ?? ''] ?? $this->humanLabel($widget['id'] ?? 'Report Section');
-            $lines[] = strtoupper($title);
-            foreach ($this->flattenWidgetRows($widget['data'] ?? []) as $row) {
-                $detail = $row['detail'] ? ' - ' . $row['detail'] : '';
-                $lines[] = $row['item'] . $detail . ': ' . $row['value'];
-            }
-            $lines[] = '';
-        }
-
-        return $this->simplePdf($lines);
-    }
-
-    private function simplePdf(array $lines): string
-    {
-        $pages = array_chunk($this->wrapPdfLines($lines), 42);
-        $objects = [];
-        $objects[] = '<< /Type /Catalog /Pages 2 0 R >>';
-        $pageRefs = [];
-        $fontObjectId = (count($pages) * 2) + 3;
-
-        foreach ($pages as $index => $pageLines) {
-            $pageId = 3 + ($index * 2);
-            $contentId = $pageId + 1;
-            $pageRefs[] = $pageId . ' 0 R';
-            $objects[] = "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 {$fontObjectId} 0 R >> >> /Contents {$contentId} 0 R >>";
-
-            $streamLines = ['BT', '/F1 11 Tf', '50 742 Td', '14 TL'];
-            foreach ($pageLines as $line) {
-                $streamLines[] = '(' . $this->escapePdfText($line) . ') Tj';
-                $streamLines[] = 'T*';
-            }
-            $streamLines[] = 'ET';
-            $stream = implode("\n", $streamLines);
-            $objects[] = "<< /Length " . strlen($stream) . " >>\nstream\n{$stream}\nendstream";
-        }
-
-        array_splice($objects, 1, 0, ['<< /Type /Pages /Kids [' . implode(' ', $pageRefs) . '] /Count ' . count($pages) . ' >>']);
-        $objects[] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>';
-
-        $pdf = "%PDF-1.4\n";
-        $offsets = [0];
-        foreach ($objects as $index => $object) {
-            $offsets[] = strlen($pdf);
-            $pdf .= ($index + 1) . " 0 obj\n{$object}\nendobj\n";
-        }
-
-        $xref = strlen($pdf);
-        $pdf .= "xref\n0 " . (count($objects) + 1) . "\n";
-        $pdf .= "0000000000 65535 f \n";
-        for ($i = 1; $i <= count($objects); $i++) {
-            $pdf .= str_pad((string) $offsets[$i], 10, '0', STR_PAD_LEFT) . " 00000 n \n";
-        }
-        $pdf .= "trailer\n<< /Size " . (count($objects) + 1) . " /Root 1 0 R >>\nstartxref\n{$xref}\n%%EOF";
-
-        return $pdf;
-    }
-
-    private function wrapPdfLines(array $lines): array
-    {
-        return collect($lines)->flatMap(function ($line) {
-            $line = trim((string) $line);
-            if ($line === '') {
-                return [''];
-            }
-            return str_split($line, 88);
-        })->all();
-    }
-
-    private function escapePdfText(string $text): string
-    {
-        return str_replace(['\\', '(', ')'], ['\\\\', '\\(', '\\)'], $text);
     }
 
     private function humanLabel(string $key): string

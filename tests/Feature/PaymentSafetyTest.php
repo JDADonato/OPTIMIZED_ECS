@@ -6,6 +6,7 @@ use App\Models\Booking;
 use App\Models\BusinessRule;
 use App\Models\Payment;
 use App\Models\PaymentEvent;
+use App\Models\RefundCase;
 use App\Models\User;
 use App\Services\PaymentCalculationService;
 use App\Services\PayMongoService;
@@ -196,6 +197,181 @@ class PaymentSafetyTest extends TestCase
         $this->assertSame('Confirmed', $booking->status);
         $this->assertSame(3, $booking->milestone_step);
         $this->assertSame('Reserved', $booking->live_status);
+    }
+
+    public function test_schedule_recalculation_voids_obsolete_pending_terms_instead_of_deleting_them(): void
+    {
+        $this->businessRules();
+        $client = $this->user('Client');
+        $booking = $this->booking($client, [
+            'event_date' => now()->addDays(5)->toDateString(),
+            'total_cost' => 50000,
+            'budget' => 50000,
+        ]);
+
+        $reservation = $this->payment($booking, ['amount' => 5000, 'payment_type' => 'Reservation']);
+        $downPayment = $this->payment($booking, ['amount' => 35000, 'payment_type' => 'DownPayment']);
+
+        app(PaymentCalculationService::class)->syncPendingTranches($booking);
+
+        $this->assertNotNull($reservation->fresh()->voided_at);
+        $this->assertSame('obsolete_rush_tranche', $reservation->fresh()->void_reason);
+        $this->assertNotNull($downPayment->fresh()->voided_at);
+        $this->assertDatabaseHas('payments', ['id' => $reservation->id]);
+        $this->assertDatabaseHas('payment_events', [
+            'payment_id' => $reservation->id,
+            'event_type' => 'payment_term_voided',
+            'source' => 'system',
+        ]);
+        $this->assertDatabaseHas('payments', [
+            'booking_id' => $booking->id,
+            'payment_type' => 'Final',
+            'status' => 'Pending',
+            'voided_at' => null,
+        ]);
+    }
+
+    public function test_schedule_cleanup_does_not_void_locked_or_touched_payments(): void
+    {
+        $this->businessRules();
+        $client = $this->user('Client');
+        $booking = $this->booking($client, [
+            'event_date' => now()->addDays(5)->toDateString(),
+            'total_cost' => 50000,
+            'budget' => 50000,
+        ]);
+        $withProof = $this->payment($booking, [
+            'amount' => 5000,
+            'payment_type' => 'Reservation',
+            'proof_image' => 'proofs/payment.jpg',
+        ]);
+        $withEvent = $this->payment($booking, [
+            'amount' => 35000,
+            'payment_type' => 'DownPayment',
+        ]);
+        PaymentEvent::create([
+            'payment_id' => $withEvent->id,
+            'booking_id' => $booking->id,
+            'event_type' => 'checkout_created',
+            'source' => 'customer',
+            'metadata' => [],
+        ]);
+
+        app(PaymentCalculationService::class)->syncPendingTranches($booking);
+
+        $this->assertNull($withProof->fresh()->voided_at);
+        $this->assertNull($withEvent->fresh()->voided_at);
+    }
+
+    public function test_accounting_term_removal_voids_unlocked_terms_and_active_queues_ignore_them(): void
+    {
+        $accounting = $this->user('Accounting');
+        $client = $this->user('Client');
+        $booking = $this->booking($client, ['total_cost' => 50000, 'budget' => 50000]);
+        $kept = $this->payment($booking, ['amount' => 10000, 'payment_type' => 'Reservation']);
+        $removed = $this->payment($booking, ['amount' => 40000, 'payment_type' => 'Final']);
+
+        $this->actingAs($accounting)
+            ->putJson("/api/accounting/bookings/{$booking->id}/payment-terms", [
+                'terms' => [[
+                    'id' => $kept->id,
+                    'payment_type' => 'Reservation',
+                    'percentage' => 100,
+                    'due_date' => now()->addDay()->toDateString(),
+                ]],
+            ])
+            ->assertOk();
+
+        $removed->refresh();
+        $this->assertNotNull($removed->voided_at);
+        $this->assertSame('accounting_terms_removed', $removed->void_reason);
+        $this->assertSame($accounting->id, $removed->voided_by);
+        $this->assertDatabaseHas('payment_events', [
+            'payment_id' => $removed->id,
+            'event_type' => 'payment_term_voided',
+            'source' => 'accounting',
+        ]);
+
+        $pending = $this->actingAs($accounting)
+            ->getJson('/api/accounting/payments/pending')
+            ->assertOk()
+            ->json();
+
+        $this->assertContains($kept->id, collect($pending)->pluck('id')->all());
+        $this->assertNotContains($removed->id, collect($pending)->pluck('id')->all());
+
+        $ledger = $this->actingAs($accounting)
+            ->getJson('/api/accounting/ledger')
+            ->assertOk()
+            ->json();
+        $this->assertNotContains($removed->id, collect($ledger)->pluck('id')->all());
+
+        $ledgerWithVoided = $this->actingAs($accounting)
+            ->getJson('/api/accounting/ledger?include_voided=1')
+            ->assertOk()
+            ->json();
+        $this->assertContains($removed->id, collect($ledgerWithVoided)->pluck('id')->all());
+    }
+
+    public function test_customer_dashboard_checkout_and_next_due_ignore_voided_terms(): void
+    {
+        $this->businessRules();
+        $client = $this->user('Client');
+        $booking = $this->booking($client, ['total_cost' => 50000, 'budget' => 50000]);
+        $voided = $this->payment($booking, [
+            'amount' => 5000,
+            'payment_type' => 'Reservation',
+            'due_date' => now()->subDay()->toDateString(),
+            'voided_at' => now(),
+            'void_reason' => 'schedule_recalculated',
+        ]);
+        $active = $this->payment($booking, [
+            'amount' => 45000,
+            'payment_type' => 'Final',
+            'due_date' => now()->addDay()->toDateString(),
+        ]);
+
+        $payload = $this->actingAs($client)
+            ->getJson('/api/dashboard/client')
+            ->assertOk()
+            ->json();
+
+        $this->assertNotContains($voided->id, collect($payload['payments'])->pluck('id')->all());
+        $this->assertContains($active->id, collect($payload['payments'])->pluck('id')->all());
+        $this->assertSame($active->id, $payload['bookings'][0]['nextPaymentDue']['id']);
+
+        $this->actingAs($client)
+            ->withHeader('X-Inertia', 'true')
+            ->post('/checkout/initialize', [
+                'booking_id' => $booking->id,
+                'payment_id' => $voided->id,
+            ])
+            ->assertRedirect()
+            ->assertSessionHas('error', 'Payment milestone not found for this booking.');
+    }
+
+    public function test_voiding_guard_blocks_refund_case_connected_terms(): void
+    {
+        $this->businessRules();
+        $client = $this->user('Client');
+        $booking = $this->booking($client, [
+            'event_date' => now()->addDays(5)->toDateString(),
+            'total_cost' => 50000,
+            'budget' => 50000,
+        ]);
+        $payment = $this->payment($booking, ['payment_type' => 'Reservation']);
+        RefundCase::create([
+            'booking_id' => $booking->id,
+            'payment_id' => $payment->id,
+            'amount' => 100,
+            'non_refundable_amount' => 0,
+            'reason' => 'manual_review',
+            'status' => 'Manual Review',
+        ]);
+
+        app(PaymentCalculationService::class)->syncPendingTranches($booking);
+
+        $this->assertNull($payment->fresh()->voided_at);
     }
 
     private function user(string $role): User

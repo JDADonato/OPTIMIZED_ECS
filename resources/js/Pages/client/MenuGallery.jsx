@@ -7,6 +7,7 @@ import NotificationBell from '../../Components/common/NotificationBell';
 import logoImg from '../../../images/ECS_LOGO.png';
 import ClientNavbar from '../../Components/common/ClientNavbar';
 import ConfirmModal from '../../Components/common/ConfirmModal';
+import SmartImage from '../../Components/common/SmartImage';
 
 const CATEGORY_LIMITS = { starter: 3, main: 4, side: 4, dessert: 4, drink: 3 };
 const STORAGE_KEY = 'ecs_booking_draft';
@@ -519,11 +520,12 @@ const MenuGallery = () => {
                         <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
                             {bestSellers.slice(0, 4).map(dish => (
                                 <div key={dish.id} className="group relative rounded-xl overflow-hidden shadow-lg aspect-w-1 aspect-h-1">
-                                    <img
+                                    <SmartImage
                                         src={dish.image}
                                         alt={dish.name}
-                                        className="w-full h-64 object-cover transform group-hover:scale-110 transition-transform duration-500"
-                                        onError={(e) => { e.target.onerror = null; e.target.src = 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&q=80&w=400'; }}
+                                        aspectRatio="1 / 1"
+                                        containerClassName="h-64"
+                                        className="transform group-hover:scale-110 transition-transform duration-500"
                                     />
                                     <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent opacity-90"></div>
                                     <div className="absolute bottom-0 left-0 p-4">
@@ -641,11 +643,12 @@ const MenuGallery = () => {
                                         onMouseLeave={() => setHoveredDish(null)}
                                         onClick={() => setLightboxDish(dish)}
                                     >
-                                        <img
+                                        <SmartImage
                                             src={dish.image}
                                             alt={dish.name}
-                                            className={`w-full h-full object-cover transition-transform duration-500 ${hoveredDish === dish.id ? 'scale-110' : 'scale-100'}`}
-                                            onError={(e) => { e.target.onerror = null; e.target.src = 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&q=80&w=400'; }}
+                                            aspectRatio="4 / 3"
+                                            containerClassName="h-full"
+                                            className={`transition-transform duration-500 ${hoveredDish === dish.id ? 'scale-110' : 'scale-100'}`}
                                         />
                                         {/* Hover overlay */}
                                         <div className={`absolute inset-0 bg-black/20 flex items-center justify-center transition-opacity duration-300 ${hoveredDish === dish.id ? 'opacity-100' : 'opacity-0'}`}>
@@ -757,11 +760,13 @@ const MenuGallery = () => {
                         >
                             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
                         </button>
-                        <img
+                        <SmartImage
                             src={lightboxDish.image}
                             alt={lightboxDish.name}
-                            className="w-full rounded-2xl shadow-2xl object-cover max-h-[70vh]"
-                            onError={(e) => { e.target.onerror = null; e.target.src = 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&q=80&w=800'; }}
+                            loading="eager"
+                            aspectRatio="16 / 10"
+                            containerClassName="rounded-2xl shadow-2xl max-h-[70vh]"
+                            className="max-h-[70vh]"
                         />
                         <div className="absolute bottom-0 left-0 right-0 p-6 bg-gradient-to-t from-black/80 to-transparent rounded-b-2xl">
                             {lightboxDish.isBestSeller && (
@@ -827,7 +832,7 @@ const MenuGallery = () => {
                                                 if (!dish) return null;
                                                 return (
                                                     <div key={id} className="flex items-center gap-3 bg-gray-50 rounded-xl p-3">
-                                                        <img src={dish.image} alt={dish.name} className="w-10 h-10 rounded-lg object-cover flex-shrink-0" onError={(e) => { e.target.onerror = null; e.target.src = 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&q=80&w=400'; }} />
+                                                        <SmartImage src={dish.image} alt={dish.name} aspectRatio="1 / 1" containerClassName="h-10 w-10 flex-shrink-0 rounded-lg" />
                                                         <div className="flex-1 min-w-0">
                                                             <p className="text-sm font-bold text-gray-900 truncate">{dish.name}</p>
                                                             <p className="text-xs text-gray-400">₱{getDishCost(dish)}/head</p>

@@ -18,7 +18,9 @@ class StaffEventHistoryController extends Controller
             ->with([
                 'user:id,full_name,username,email,phone,role',
                 'assignee:id,full_name,username',
-                'payments:id,booking_id,amount,status,payment_type,due_date',
+                'payments' => fn ($paymentQuery) => $paymentQuery
+                    ->when(!$request->boolean('include_voided'), fn ($inner) => $inner->active())
+                    ->select('id', 'booking_id', 'amount', 'status', 'payment_type', 'due_date', 'voided_at', 'void_reason'),
                 'refundCases:id,booking_id,payment_id,amount,non_refundable_amount,status,reason,notes',
                 'feedbackResponses:id,booking_id,rating,follow_up_required,review_status,testimonial_status,retention_notes,assigned_to,follow_up_due_at,reviewed_at,created_at',
                 'feedbackResponses.assignee:id,full_name,username',
@@ -39,7 +41,7 @@ class StaffEventHistoryController extends Controller
 
                 $q->whereHas('feedbackResponses', fn ($feedback) => $feedback->where('review_status', $status));
             })
-            ->when($request->filled('payment_status') && $request->query('payment_status') !== 'all', fn ($q) => $q->whereHas('payments', fn ($payment) => $payment->where('status', $request->query('payment_status'))))
+            ->when($request->filled('payment_status') && $request->query('payment_status') !== 'all', fn ($q) => $q->whereHas('payments', fn ($payment) => $payment->active()->where('status', $request->query('payment_status'))))
             ->when($request->filled('refund_status') && $request->query('refund_status') !== 'all', function ($q) use ($request) {
                 $status = $request->query('refund_status');
                 if ($status === 'none') {

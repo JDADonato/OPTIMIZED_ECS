@@ -14,6 +14,10 @@ use Illuminate\Support\Facades\Auth;
 
 class OperationsController extends Controller
 {
+    private const READINESS_PRIORITY = ['payment', 'menu', 'headcount', 'venue', 'tasting', 'customer_messages'];
+
+    private const TASK_GROUP_ORDER = ['Marketing', 'Accounting', 'Service prep', 'Customer'];
+
     public function preparationBoard(Request $request)
     {
         $query = $this->preparationBoardQuery($request);
@@ -68,8 +72,9 @@ class OperationsController extends Controller
 
         $query = Booking::query()
             ->with([
-                'payments:id,booking_id,status',
+                'payments:id,booking_id,status,voided_at',
                 'preparationTasks' => fn ($query) => $query->orderBy('department')->orderBy('id'),
+                'assignee:id,full_name,username',
                 'user:id,full_name,username,email',
             ])
             ->whereBetween('event_date', [$start->toDateString(), $end->toDateString()])
@@ -119,6 +124,33 @@ class OperationsController extends Controller
         $readiness = $this->readinessFor($booking);
 
         $currentUser = Auth::user();
+        $readinessDetails = collect($readiness)->map(fn ($ready, $key) => [
+            'key' => $key,
+            'label' => $this->readinessLabel($key),
+            'ready' => $ready,
+            'owner_department' => $this->readinessOwner($key),
+            'action_hint' => $this->readinessActionHint($key),
+            'can_update' => $this->canUpdateReadiness($currentUser?->role, $key),
+        ])->values();
+
+        $taskRows = $tasks->map(fn (EventPreparationTask $task) => [
+            'id' => $task->id,
+            'department' => $this->responsibleArea($task->department),
+            'responsible_area' => $this->responsibleArea($task->department),
+            'raw_department' => $task->department,
+            'label' => $task->label,
+            'status' => $task->status,
+            'due_at' => $task->due_at,
+            'due_state' => $this->dueState($task),
+            'can_update' => $this->canUpdateTask($currentUser?->role, $task),
+            'action_hint' => $this->taskActionHint($task, $currentUser?->role),
+            'assigned_to' => $task->assigned_to,
+            'completed_at' => $task->completed_at,
+            'completed_by' => $task->completed_by,
+        ])->values();
+
+        $blockingItems = $this->blockingItems($readinessDetails);
+        $taskGroups = $this->taskGroups($taskRows);
 
         return [
             'booking' => [
@@ -135,36 +167,22 @@ class OperationsController extends Controller
                 'status' => $booking->status,
                 'review_status' => $booking->review_status,
                 'total_cost' => $booking->total_cost,
+                'owner_name' => $booking->assignee?->full_name ?: $booking->assignee?->username ?: 'Unassigned',
             ],
             'readiness' => $readiness,
-            'readiness_details' => collect($readiness)->map(fn ($ready, $key) => [
-                'key' => $key,
-                'ready' => $ready,
-                'owner_department' => $this->readinessOwner($key),
-                'action_hint' => $this->readinessActionHint($key),
-                'can_update' => $this->canUpdateReadiness($currentUser?->role, $key),
-            ])->values(),
-            'tasks' => $tasks->map(fn (EventPreparationTask $task) => [
-                'id' => $task->id,
-                'department' => $this->responsibleArea($task->department),
-                'responsible_area' => $this->responsibleArea($task->department),
-                'raw_department' => $task->department,
-                'label' => $task->label,
-                'status' => $task->status,
-                'due_at' => $task->due_at,
-                'due_state' => $this->dueState($task),
-                'can_update' => $currentUser?->role === 'Admin' || $task->department === 'Marketing',
-                'action_hint' => $this->taskActionHint($task),
-                'assigned_to' => $task->assigned_to,
-                'completed_at' => $task->completed_at,
-                'completed_by' => $task->completed_by,
-            ])->values(),
+            'readiness_details' => $readinessDetails,
+            'blocking_items' => $blockingItems,
+            'tasks' => $taskRows,
+            'task_groups' => $taskGroups,
             'task_progress' => [
                 'completed' => $completedTasks,
                 'total' => $taskTotal,
                 'percent' => $taskTotal > 0 ? (int) round(($completedTasks / $taskTotal) * 100) : 0,
             ],
+            'readiness_progress' => $this->readinessProgress($readiness),
             'attention_flags' => $this->attentionFlags($readiness),
+            'next_action' => $this->nextAction($booking, $blockingItems, $taskGroups, $currentUser?->role),
+            'contextual_actions' => $this->contextualActions($booking, $blockingItems, $currentUser?->role),
             'event_sheet' => $this->eventSheet($booking, $readiness),
         ];
     }
@@ -230,6 +248,10 @@ class OperationsController extends Controller
 
     public function updatePreparationTask(Request $request, EventPreparationTask $task)
     {
+        if (!$this->canUpdateTask(Auth::user()?->role, $task)) {
+            abort(403, $this->taskActionHint($task, Auth::user()?->role));
+        }
+
         $data = $request->validate([
             'status' => ['required', 'in:Pending,Done'],
             'assigned_to' => ['nullable', 'integer', 'exists:users,id'],
@@ -252,7 +274,7 @@ class OperationsController extends Controller
 
     private function readinessFor(Booking $booking): array
     {
-        $payments = $booking->payments;
+        $payments = $booking->payments->whereNull('voided_at');
         $hasPayments = $payments->isNotEmpty();
         $paymentReady = $hasPayments && $payments->every(fn ($payment) => in_array($payment->status, ['Paid', 'Verified', 'Refunded'], true));
         $menuReady = !empty($booking->selected_menu);
@@ -353,14 +375,283 @@ class OperationsController extends Controller
         };
     }
 
-    private function taskActionHint(EventPreparationTask $task): string
+    private function taskActionHint(EventPreparationTask $task, ?string $role = null): string
     {
+        if ($this->canUpdateTask($role, $task)) {
+            return 'You can mark this task done when the handoff work is complete.';
+        }
+
         return match ($this->responsibleArea($task->department)) {
             'Accounting' => 'Accounting owns this task.',
             'Service prep' => 'Service prep needs confirmation. Admin override is available when needed.',
             'Customer' => 'Customer needs to provide or confirm this detail.',
             default => 'Marketing can update this task.',
         };
+    }
+
+    private function readinessLabel(string $key): string
+    {
+        return match ($key) {
+            'payment' => 'Accounting: payment clearance',
+            'menu' => 'Customer: final menu',
+            'venue' => 'Service prep: venue access',
+            'headcount' => 'Customer: final headcount',
+            'tasting' => 'Marketing: tasting outcome',
+            'customer_messages' => 'Marketing: customer messages',
+            default => ucfirst(str_replace('_', ' ', $key)),
+        };
+    }
+
+    private function readinessProgress(array $readiness): array
+    {
+        $total = count($readiness);
+        $ready = collect($readiness)->filter()->count();
+
+        return [
+            'ready' => $ready,
+            'total' => $total,
+            'percent' => $total > 0 ? (int) round(($ready / $total) * 100) : 0,
+        ];
+    }
+
+    private function blockingItems($readinessDetails)
+    {
+        return collect($readinessDetails)
+            ->filter(fn ($item) => !($item['ready'] ?? false))
+            ->sortBy(fn ($item) => $this->readinessRank($item['key'] ?? ''))
+            ->values()
+            ->all();
+    }
+
+    private function readinessRank(string $key): int
+    {
+        $rank = array_search($key, self::READINESS_PRIORITY, true);
+
+        return $rank === false ? 999 : $rank;
+    }
+
+    private function taskGroups($tasks)
+    {
+        return collect($tasks)
+            ->groupBy(fn ($task) => $task['responsible_area'] ?? 'Service prep')
+            ->map(fn ($groupTasks, $owner) => [
+                'owner' => $owner,
+                'completed' => $groupTasks->where('status', 'Done')->count(),
+                'total' => $groupTasks->count(),
+                'tasks' => $groupTasks
+                    ->sortBy(fn ($task) => sprintf(
+                        '%02d-%s-%08d',
+                        $this->taskRank($task),
+                        $task['due_at'] ? Carbon::parse($task['due_at'])->timestamp : PHP_INT_MAX,
+                        $task['id'] ?? 0
+                    ))
+                    ->values()
+                    ->all(),
+            ])
+            ->sortBy(fn ($group) => $this->taskGroupRank($group['owner']))
+            ->values()
+            ->all();
+    }
+
+    private function taskRank(array $task): int
+    {
+        if (($task['status'] ?? null) === 'Done') {
+            return 4;
+        }
+
+        return match ($task['due_state'] ?? 'Pending') {
+            'Overdue' => 0,
+            'Due soon' => 1,
+            'Pending' => 2,
+            default => 3,
+        };
+    }
+
+    private function taskGroupRank(string $owner): int
+    {
+        $rank = array_search($owner, self::TASK_GROUP_ORDER, true);
+
+        return $rank === false ? 999 : $rank;
+    }
+
+    private function canUpdateTask(?string $role, EventPreparationTask $task): bool
+    {
+        if ($role === 'Admin') {
+            return true;
+        }
+
+        return $role === 'Marketing' && $this->responsibleArea($task->department) === 'Marketing';
+    }
+
+    private function nextAction(Booking $booking, array $blockingItems, array $taskGroups, ?string $role): array
+    {
+        if (!empty($blockingItems)) {
+            return $this->nextActionForBlocker($booking, $blockingItems[0], $role);
+        }
+
+        $pendingTask = collect($taskGroups)
+            ->flatMap(fn ($group) => $group['tasks'])
+            ->first(fn ($task) => ($task['status'] ?? null) !== 'Done');
+
+        if ($pendingTask) {
+            $owner = $pendingTask['responsible_area'] ?? 'Service prep';
+
+            return [
+                'kind' => 'task',
+                'tone' => ($pendingTask['can_update'] ?? false) ? 'warn' : 'muted',
+                'label' => ($pendingTask['can_update'] ?? false)
+                    ? 'Complete ' . $pendingTask['label']
+                    : 'Follow up with ' . $owner,
+                'description' => ($pendingTask['can_update'] ?? false)
+                    ? 'Mark this task done once the handoff work is complete.'
+                    : (($pendingTask['action_hint'] ?? null) ?: $owner . ' owns this handoff task.'),
+                'owner_department' => $owner,
+                'primary_action_label' => $owner === 'Service prep' ? 'Download prep list' : 'Open booking',
+                'primary_action_url' => $owner === 'Service prep'
+                    ? "/documents/bookings/{$booking->id}/preparation.pdf"
+                    : $this->bookingUrl($booking, $role),
+            ];
+        }
+
+        return [
+            'kind' => 'ready',
+            'tone' => 'good',
+            'label' => 'Ready for service prep',
+            'description' => 'Readiness checks are clear and handoff tasks are complete.',
+            'owner_department' => 'Service prep',
+            'primary_action_label' => 'Download prep list',
+            'primary_action_url' => "/documents/bookings/{$booking->id}/preparation.pdf",
+        ];
+    }
+
+    private function nextActionForBlocker(Booking $booking, array $blocker, ?string $role): array
+    {
+        return match ($blocker['key'] ?? null) {
+            'payment' => [
+                'kind' => 'payment',
+                'tone' => 'danger',
+                'label' => 'Accounting must clear payment',
+                'description' => 'Payment is not clear yet. Coordinate with Accounting before service prep continues.',
+                'owner_department' => 'Accounting',
+                'primary_action_label' => $role === 'Admin' ? 'Open payment review' : 'Coordinate with Accounting',
+                'primary_action_url' => $role === 'Admin' ? '/dashboard/admin?tab=finance' : null,
+            ],
+            'menu' => [
+                'kind' => 'menu',
+                'tone' => 'warn',
+                'label' => 'Ask customer to confirm final menu',
+                'description' => 'The final menu is still missing from this booking.',
+                'owner_department' => 'Customer',
+                'primary_action_label' => 'Open messages',
+                'primary_action_url' => $this->messagesUrl($role),
+            ],
+            'headcount' => [
+                'kind' => 'headcount',
+                'tone' => 'warn',
+                'label' => 'Ask customer to confirm final headcount',
+                'description' => 'Final pax is missing or invalid, so service quantities are not ready.',
+                'owner_department' => 'Customer',
+                'primary_action_label' => 'Open messages',
+                'primary_action_url' => $this->messagesUrl($role),
+            ],
+            'venue' => [
+                'kind' => 'venue',
+                'tone' => 'warn',
+                'label' => 'Confirm venue access and setup details',
+                'description' => 'Service prep needs the venue address or access details before the event sheet is reliable.',
+                'owner_department' => 'Service prep',
+                'primary_action_label' => 'Download prep list',
+                'primary_action_url' => "/documents/bookings/{$booking->id}/preparation.pdf",
+            ],
+            'tasting' => [
+                'kind' => 'tasting',
+                'tone' => 'warn',
+                'label' => 'Record or confirm tasting outcome',
+                'description' => 'The linked tasting needs an approved, confirmed, or completed outcome.',
+                'owner_department' => 'Marketing',
+                'primary_action_label' => 'Open tastings',
+                'primary_action_url' => $this->tastingsUrl($role),
+            ],
+            'customer_messages' => [
+                'kind' => 'customer_messages',
+                'tone' => 'warn',
+                'label' => 'Resolve the open customer conversation',
+                'description' => 'Customer messages are still active, so the handoff is not fully settled.',
+                'owner_department' => 'Marketing',
+                'primary_action_label' => 'Open messages',
+                'primary_action_url' => $this->messagesUrl($role),
+            ],
+            default => [
+                'kind' => 'handoff',
+                'tone' => 'warn',
+                'label' => 'Review this handoff item',
+                'description' => $blocker['action_hint'] ?? 'One readiness item needs staff attention.',
+                'owner_department' => $blocker['owner_department'] ?? 'Staff',
+                'primary_action_label' => 'Open booking',
+                'primary_action_url' => $this->bookingUrl($booking, $role),
+            ],
+        };
+    }
+
+    private function contextualActions(Booking $booking, array $blockingItems, ?string $role): array
+    {
+        $blockingKeys = collect($blockingItems)->pluck('key')->all();
+        $actions = [[
+            'key' => 'booking',
+            'label' => 'Open booking',
+            'url' => $this->bookingUrl($booking, $role),
+        ], [
+            'key' => 'prep_list',
+            'label' => 'Download prep list',
+            'url' => "/documents/bookings/{$booking->id}/preparation.pdf",
+        ]];
+
+        if (array_intersect($blockingKeys, ['menu', 'headcount', 'customer_messages'])) {
+            $actions[] = [
+                'key' => 'messages',
+                'label' => 'Open messages',
+                'url' => $this->messagesUrl($role),
+            ];
+        }
+
+        if (in_array('payment', $blockingKeys, true) && $role === 'Admin') {
+            $actions[] = [
+                'key' => 'payment_review',
+                'label' => 'Open payment review',
+                'url' => '/dashboard/admin?tab=finance',
+            ];
+        }
+
+        if (in_array('tasting', $blockingKeys, true)) {
+            $actions[] = [
+                'key' => 'tastings',
+                'label' => 'Open tastings',
+                'url' => $this->tastingsUrl($role),
+            ];
+        }
+
+        return collect($actions)->filter(fn ($action) => filled($action['url'] ?? null))->values()->all();
+    }
+
+    private function bookingUrl(Booking $booking, ?string $role): string
+    {
+        return $role === 'Admin'
+            ? "/dashboard/admin?tab=bookings-intake&booking={$booking->id}"
+            : "/dashboard/marketing?tab=bookings&booking={$booking->id}";
+    }
+
+    private function messagesUrl(?string $role): string
+    {
+        return $role === 'Admin'
+            ? '/dashboard/admin?tab=messages-inquiries'
+            : '/dashboard/marketing?tab=messages';
+    }
+
+    private function tastingsUrl(?string $role): string
+    {
+        return $role === 'Admin'
+            ? '/dashboard/admin?tab=tastings'
+            : '/dashboard/marketing?tab=tastings';
     }
 
     private function responsibleArea(?string $department): string

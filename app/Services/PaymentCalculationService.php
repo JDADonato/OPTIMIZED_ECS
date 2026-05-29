@@ -102,23 +102,30 @@ class PaymentCalculationService
             return;
         }
 
-        $booking->loadMissing('payments');
-        $payments = $booking->payments;
+        $payments = $booking->payments()->active()->get();
         $lockedStatuses = ['Paid', 'Verified', 'Refunded'];
         $pendingStatuses = ['Pending', 'Failed', 'Rejected'];
         $hasLockedPayments = $payments->contains(fn (Payment $payment) => in_array($payment->status, $lockedStatuses, true));
+        $voider = app(PaymentScheduleVoidService::class);
 
-        // Only remove obsolete rows when nothing has been paid yet. Once money moved, preserve the audit trail.
+        // Only retire obsolete rows when nothing has been paid yet. Once money moved, preserve the active schedule.
         if (!$hasLockedPayments) {
             $expectedTypes = $tranches->pluck('name')->all();
             $booking->payments()
+                ->active()
                 ->whereNotIn('payment_type', $expectedTypes)
                 ->whereIn('status', $pendingStatuses)
-                ->delete();
+                ->get()
+                ->each(fn (Payment $payment) => $voider->void(
+                    $payment,
+                    count($expectedTypes) === 1 && $expectedTypes[0] === 'Final' ? 'obsolete_rush_tranche' : 'schedule_recalculated',
+                    'system'
+                ));
         }
 
         foreach ($tranches as $tranche) {
             $payment = $booking->payments()
+                ->active()
                 ->where('payment_type', $tranche['name'])
                 ->whereIn('status', $pendingStatuses)
                 ->orderBy('id')
@@ -129,7 +136,7 @@ class PaymentCalculationService
                     continue;
                 }
 
-                $booking->payments()->create([
+                $payment = $booking->payments()->create([
                     'amount' => round((float) $tranche['amount'], 2),
                     'payment_method' => 'Pending',
                     'status' => 'Pending',
@@ -139,6 +146,21 @@ class PaymentCalculationService
 
                 continue;
             }
+
+            $booking->payments()
+                ->active()
+                ->where('payment_type', $tranche['name'])
+                ->whereIn('status', $pendingStatuses)
+                ->where('id', '!=', $payment->id)
+                ->orderBy('id')
+                ->get()
+                ->each(fn (Payment $duplicate) => $voider->void(
+                    $duplicate,
+                    'duplicate_pending_term',
+                    'system',
+                    null,
+                    $payment->id
+                ));
 
             $expectedAmount = round((float) $tranche['amount'], 2);
             $currentAmount = round((float) $payment->amount, 2);
@@ -181,6 +203,7 @@ class PaymentCalculationService
         // Since tranches are generated dynamically at reservation time (Standard, Rush 1, Rush 2)
         // we can simply find the earliest pending payment from the database.
         $nextPayment = $booking->payments()
+            ->active()
             ->whereIn('status', ['Pending', 'Failed', 'Rejected'])
             ->orderBy('due_date', 'asc')
             ->first();
@@ -210,7 +233,7 @@ class PaymentCalculationService
 
     public function updateBookingMilestone(Booking $booking): void
     {
-        $booking->load('payments');
+        $booking->load(['payments' => fn ($query) => $query->active()]);
 
         $totalPaid = (float) $booking->payments
             ->whereIn('status', ['Paid', 'Verified'])

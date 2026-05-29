@@ -14,6 +14,8 @@ return Application::configure(basePath: dirname(__DIR__))
     )
     ->withSchedule(function (Schedule $schedule): void {
         $schedule->command('bookings:complete-past-submitted')->daily();
+        $schedule->command('announcements:publish-due')->everyFiveMinutes();
+        $schedule->command('uploads:purge-orphans')->daily();
     })
     ->withMiddleware(function (Middleware $middleware): void {
         if ($trustedProxies = env('TRUSTED_PROXIES')) {

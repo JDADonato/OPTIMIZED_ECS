@@ -28,7 +28,8 @@ const statusTone = (value) => {
     return 'muted';
 };
 
-const EventHistoryPanel = ({ role = 'staff', onToast }) => {
+const EventHistoryPanel = ({ role = 'staff', onToast, surfaceMode = 'default' }) => {
+    const isAdminSurface = surfaceMode === 'admin-full';
     const [events, setEvents] = useState([]);
     const [pagination, setPagination] = useState({ currentPage: 1, perPage: 15, total: 0, lastPage: 1 });
     const [loading, setLoading] = useState(false);
@@ -240,17 +241,19 @@ const EventHistoryPanel = ({ role = 'staff', onToast }) => {
     };
 
     return (
-        <div className="staff-work-surface">
-            <div className="staff-surface-head">
-                <div>
-                    <p className="marketing-kicker">Shared history</p>
-                    <h3 className="mt-1 text-lg font-black text-slate-950">Completed events</h3>
-                    <p className="staff-section-copy">Completed bookings are visible here for staff reference and limited post-event follow-up.</p>
+        <div className={isAdminSurface ? 'admin-embedded-surface' : 'staff-work-surface'}>
+            {!isAdminSurface && (
+                <div className="staff-surface-head">
+                    <div>
+                        <p className="marketing-kicker">Shared history</p>
+                        <h3 className="mt-1 text-lg font-black text-slate-950">Completed events</h3>
+                        <p className="staff-section-copy">Completed bookings are visible here for staff reference and limited post-event follow-up.</p>
+                    </div>
+                    {loading && <StaffStatusBadge tone="muted">Loading</StaffStatusBadge>}
                 </div>
-                {loading && <StaffStatusBadge tone="muted">Loading</StaffStatusBadge>}
-            </div>
+            )}
 
-            <div className="staff-filter-bar event-history-filter-bar">
+            <div className={isAdminSurface ? 'admin-command-strip event-history-filter-bar' : 'staff-filter-bar event-history-filter-bar'}>
                 <input value={filters.search} onChange={(event) => setFilter('search', event.target.value)} className="staff-control" placeholder="Search client, event, venue, or booking #" />
                 <input type="date" value={filters.date_from} onChange={(event) => setFilter('date_from', event.target.value)} className="staff-control" />
                 <input type="date" value={filters.date_to} onChange={(event) => setFilter('date_to', event.target.value)} className="staff-control" />
@@ -290,7 +293,7 @@ const EventHistoryPanel = ({ role = 'staff', onToast }) => {
             ) : events.length === 0 ? (
                 <StaffEmptyState title="No completed events found" message="Completed bookings will appear here after events are closed." />
             ) : (
-                <div className="staff-table-wrap">
+                <div className={isAdminSurface ? 'staff-table-wrap admin-surface-grid admin-responsive-table' : 'staff-table-wrap'}>
                     <table className="staff-table">
                         <thead>
                             <tr>

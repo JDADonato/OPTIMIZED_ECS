@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Mail\AnnouncementEmail;
 use App\Models\Announcement;
 use App\Models\ReportRun;
+use App\Models\ReportTemplate;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Mail;
@@ -14,7 +15,7 @@ class ReportAndAnnouncementTest extends TestCase
 {
     use RefreshDatabase;
 
-    public function test_admin_can_create_update_run_export_and_delete_report_template(): void
+    public function test_admin_can_create_update_run_export_and_archive_report_template(): void
     {
         $admin = $this->user('Admin');
 
@@ -60,12 +61,54 @@ class ReportAndAnnouncementTest extends TestCase
             ->assertOk()
             ->assertHeader('content-type', 'text/csv; charset=UTF-8');
 
+        $pdf = $this->actingAs($admin)
+            ->get("/api/admin/report-runs/{$runId}/export?format=pdf")
+            ->assertOk();
+        $this->assertSame('application/pdf', $pdf->headers->get('content-type'));
+        $this->assertStringStartsWith('%PDF', $pdf->getContent());
+        $this->assertGreaterThan(1000, strlen($pdf->getContent()));
+
         $this->actingAs($admin)
             ->deleteJson("/api/admin/report-templates/{$templateId}")
-            ->assertOk();
+            ->assertOk()
+            ->assertJsonPath('message', 'Report template archived.');
 
-        $this->assertDatabaseMissing('report_templates', ['id' => $templateId]);
+        $this->assertDatabaseHas('report_templates', ['id' => $templateId]);
+        $this->assertNotNull(ReportTemplate::find($templateId)->archived_at);
         $this->assertTrue(ReportRun::whereKey($runId)->exists());
+
+        $this->actingAs($admin)
+            ->getJson('/api/admin/report-templates')
+            ->assertOk()
+            ->assertJsonMissing(['id' => $templateId]);
+
+        $this->actingAs($admin)
+            ->getJson('/api/admin/report-templates?include_archived=1')
+            ->assertOk()
+            ->assertJsonFragment(['id' => $templateId]);
+
+        $this->actingAs($admin)
+            ->postJson("/api/admin/report-templates/{$templateId}/run")
+            ->assertStatus(422)
+            ->assertJsonPath('error', 'Archived report templates cannot be run.');
+
+        $alias = $this->actingAs($admin)
+            ->postJson('/api/admin/report-templates', [
+                'name' => 'Alias Archive',
+                'description' => 'Alias archive report',
+                'visibility' => 'admin',
+                'layout_json' => [['id' => 'revenue_summary']],
+                'filters_json' => [],
+            ])
+            ->assertCreated();
+
+        $aliasId = $alias->json('id');
+
+        $this->actingAs($admin)
+            ->patchJson("/api/admin/report-templates/{$aliasId}/archive")
+            ->assertOk()
+            ->assertJsonPath('message', 'Report template archived.');
+        $this->assertNotNull(ReportTemplate::find($aliasId)->archived_at);
     }
 
     public function test_announcement_draft_publish_archive_and_targeting_workflow(): void
@@ -87,6 +130,12 @@ class ReportAndAnnouncementTest extends TestCase
             ->assertCreated();
 
         $announcementId = $create->json('id');
+
+        $this->actingAs($marketing)
+            ->get("/preview/announcements/{$announcementId}")
+            ->assertOk()
+            ->assertSee('AnnouncementPreview', false)
+            ->assertSee('Menu Refresh');
 
         $this->actingAs($marketing)
             ->postJson("/api/admin/announcements/{$announcementId}/publish")
@@ -136,6 +185,41 @@ class ReportAndAnnouncementTest extends TestCase
             ->assertJsonPath('message', 'Test email queued.');
 
         Mail::assertQueued(AnnouncementEmail::class);
+    }
+
+    public function test_admin_lists_for_reports_and_announcements_support_pagination(): void
+    {
+        $admin = $this->user('Admin');
+
+        ReportTemplate::create([
+            'name' => 'Paginated Template',
+            'visibility' => 'admin',
+            'layout_json' => [['id' => 'revenue_summary']],
+            'filters_json' => [],
+            'created_by' => $admin->id,
+        ]);
+
+        Announcement::create([
+            'title' => 'Paginated Announcement',
+            'slug' => 'paginated-announcement',
+            'summary' => 'Pagination check.',
+            'body' => 'Pagination check body.',
+            'type' => 'general',
+            'status' => 'draft',
+            'visibility' => 'all_customers',
+            'created_by' => $admin->id,
+            'updated_by' => $admin->id,
+        ]);
+
+        $this->actingAs($admin)
+            ->getJson('/api/admin/report-templates?paginated=1&per_page=1')
+            ->assertOk()
+            ->assertJsonStructure(['data', 'meta' => ['current_page', 'per_page', 'total', 'last_page']]);
+
+        $this->actingAs($admin)
+            ->getJson('/api/admin/announcements?paginated=1&per_page=1')
+            ->assertOk()
+            ->assertJsonStructure(['data', 'meta' => ['current_page', 'per_page', 'total', 'last_page']]);
     }
 
     private function user(string $role): User

@@ -14,10 +14,18 @@ use Illuminate\Support\Str;
 
 class EmailDeliveryService
 {
-    public function sendToNotifiable(object $notifiable, Notification $notification, string $context = 'email'): array
+    public function sendToNotifiable(object $notifiable, Notification $notification, string $context = 'email', bool $allowInactiveRecipient = false): array
     {
         if (empty($notifiable->email)) {
             return $this->result('skipped_no_email', 'No email address was set, so no email was sent.');
+        }
+
+        if (!$allowInactiveRecipient && method_exists($notifiable, 'isReachableForNotifications') && !$notifiable->isReachableForNotifications()) {
+            return $this->result('skipped_unreachable_account', 'The account is not reachable for operational email.');
+        }
+
+        if (str_ends_with((string) $notifiable->email, '@eloquente.invalid')) {
+            return $this->result('skipped_no_email', 'No reachable email address was set, so no email was sent.');
         }
 
         if ($this->mailIsNotConfigured()) {
@@ -169,6 +177,33 @@ class EmailDeliveryService
                 'connection' => $queue,
                 'worker_required' => !in_array($queue, ['sync', 'deferred', 'background'], true),
                 'failed_jobs_count' => $failedJobsCount,
+            ],
+            'operations' => [
+                'scheduler' => [
+                    'configured' => str_contains((string) @file_get_contents(base_path('bootstrap/app.php')), 'announcements:publish-due'),
+                    'status' => 'Requires deployment verification',
+                    'description' => 'Laravel scheduler must run in production for scheduled announcements and recurring maintenance.',
+                ],
+                'queue_worker' => [
+                    'configured' => !in_array($queue, ['sync', 'deferred', 'background'], true),
+                    'status' => !in_array($queue, ['sync', 'deferred', 'background'], true) ? 'Requires deployment verification' : 'Synchronous in this environment',
+                    'description' => 'Queue workers must run when background mail, notifications, or jobs are enabled.',
+                ],
+                'reverb' => [
+                    'configured' => (bool) Config::get('broadcasting.connections.reverb.app_id'),
+                    'status' => 'Requires deployment verification',
+                    'description' => 'Reverb must be reachable for realtime chat and staff updates in production.',
+                ],
+                'paymongo_webhook' => [
+                    'configured' => filled((string) Config::get('services.paymongo.webhook_secret')),
+                    'status' => 'Requires deployment verification',
+                    'description' => 'PayMongo webhooks must point to the deployed HTTPS webhook endpoint.',
+                ],
+                'production_flags' => [
+                    'app_debug_disabled' => Config::get('app.debug') === false,
+                    'https_app_url' => str_starts_with((string) Config::get('app.url'), 'https://'),
+                    'secure_cookie' => (bool) Config::get('session.secure'),
+                ],
             ],
             'guidance' => $this->guidance($mailer, $queue),
         ];

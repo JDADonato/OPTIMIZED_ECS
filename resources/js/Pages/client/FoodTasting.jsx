@@ -2,6 +2,9 @@ import React, { useState } from 'react';
 import { router } from '@inertiajs/react';
 import { ArrowLeft, CalendarDays, CheckCircle2, Clock, MessageSquareText, Phone, Utensils } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
+import csrfFetch from '../../utils/csrf';
+import { FieldError, FormErrorSummary } from '../../Components/common/FormFeedback';
+import { focusFirstInvalidField, firstErrorMessage } from '../../utils/validation';
 
 const FoodTasting = () => {
     const { user } = useAuth();
@@ -11,21 +14,29 @@ const FoodTasting = () => {
         guest_phone: '',
         preferred_date: '',
         preferred_time: '',
-        notes: ''
+        notes: '',
+        website: '',
     });
     const [loading, setLoading] = useState(false);
     const [message, setMessage] = useState(null);
+    const [errors, setErrors] = useState({});
     const [scheduledTastingId, setScheduledTastingId] = useState(null);
 
-    const handleChange = (e) => setFormData({ ...formData, [e.target.name]: e.target.value });
+    const handleChange = (e) => {
+        setFormData({ ...formData, [e.target.name]: e.target.value });
+        if (errors[e.target.name]) {
+            setErrors((current) => ({ ...current, [e.target.name]: undefined }));
+        }
+    };
 
     const handleSubmit = async (e) => {
         e.preventDefault();
         setLoading(true);
         setMessage(null);
+        setErrors({});
 
         try {
-            const response = await fetch('/api/food-tasting', {
+            const response = await csrfFetch('/api/food-tasting', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(formData)
@@ -35,9 +46,12 @@ const FoodTasting = () => {
             if (response.ok) {
                 setMessage({ type: 'success', text: 'Food tasting scheduled successfully.' });
                 setScheduledTastingId(data.tastingId || true);
-                if (!user) setFormData({ guest_name: '', guest_email: '', guest_phone: '', preferred_date: '', preferred_time: '', notes: '' });
+                if (!user) setFormData({ guest_name: '', guest_email: '', guest_phone: '', preferred_date: '', preferred_time: '', notes: '', website: '' });
             } else {
-                setMessage({ type: 'error', text: data.message || 'We could not schedule the tasting. Please try again.' });
+                const nextErrors = data.errors || {};
+                setErrors(nextErrors);
+                setMessage({ type: 'error', text: firstErrorMessage(nextErrors, data.message || 'We could not schedule the tasting. Please try again.') });
+                focusFirstInvalidField(nextErrors);
             }
         } catch (error) {
             setMessage({ type: 'error', text: 'We could not schedule the tasting. Please try again.' });
@@ -115,36 +129,44 @@ const FoodTasting = () => {
                     )}
 
                     <form onSubmit={handleSubmit} className="grid gap-5">
+                        <input type="text" name="website" value={formData.website} onChange={handleChange} tabIndex="-1" autoComplete="off" className="hidden" aria-hidden="true" />
+                        <FormErrorSummary errors={errors} message={Object.keys(errors).length > 0 ? firstErrorMessage(errors) : ''} />
                         <div className="grid gap-5 sm:grid-cols-2">
                             <label className="block">
                                 <span className="text-xs font-bold uppercase tracking-widest text-gray-500">Name</span>
                                 <input name="guest_name" required value={formData.guest_name} onChange={handleChange} className="mt-2 w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm font-bold outline-none focus:border-[#720101] focus:bg-white" />
+                                <FieldError message={errors.guest_name} />
                             </label>
                             <label className="block">
                                 <span className="text-xs font-bold uppercase tracking-widest text-gray-500">Email</span>
                                 <input type="email" name="guest_email" required value={formData.guest_email} onChange={handleChange} className="mt-2 w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm font-bold outline-none focus:border-[#720101] focus:bg-white" />
+                                <FieldError message={errors.guest_email} />
                             </label>
                             <label className="block">
                                 <span className="text-xs font-bold uppercase tracking-widest text-gray-500">Phone</span>
                                 <input type="tel" name="guest_phone" required value={formData.guest_phone} onChange={handleChange} className="mt-2 w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm font-bold outline-none focus:border-[#720101] focus:bg-white" />
+                                <FieldError message={errors.guest_phone} />
                             </label>
                             <label className="block">
                                 <span className="text-xs font-bold uppercase tracking-widest text-gray-500">Preferred Date</span>
                                 <input type="date" name="preferred_date" required value={formData.preferred_date} onChange={handleChange} className="mt-2 w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm font-bold outline-none focus:border-[#720101] focus:bg-white" />
+                                <FieldError message={errors.preferred_date} />
                             </label>
                             <label className="block">
                                 <span className="text-xs font-bold uppercase tracking-widest text-gray-500">Preferred Time</span>
                                 <input type="time" name="preferred_time" required value={formData.preferred_time} onChange={handleChange} className="mt-2 w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm font-bold outline-none focus:border-[#720101] focus:bg-white" />
+                                <FieldError message={errors.preferred_time} />
                             </label>
                         </div>
                         <label className="block">
                             <span className="text-xs font-bold uppercase tracking-widest text-gray-500">Notes / Dietary Requirements</span>
                             <textarea name="notes" rows="5" value={formData.notes} onChange={handleChange} className="mt-2 w-full resize-none rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm font-semibold outline-none focus:border-[#720101] focus:bg-white" placeholder="Allergies, preferred dishes, event context, or special tasting requests." />
+                            <FieldError message={errors.notes} />
                         </label>
                         <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
                             <button type="button" onClick={() => router.get('/menu')} className="rounded-xl border border-gray-200 px-5 py-3 text-sm font-bold text-gray-700 hover:bg-gray-50">Browse Menu</button>
                             <button type="submit" disabled={loading} className="rounded-xl bg-[#720101] px-6 py-3 text-sm font-bold text-white shadow-lg shadow-[#720101]/15 hover:bg-[#5a0101] disabled:opacity-60">
-                                {loading ? 'Scheduling...' : 'Schedule Tasting'}
+                                {loading ? 'Scheduling...' : 'Schedule tasting'}
                             </button>
                         </div>
                     </form>

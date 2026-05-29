@@ -1,18 +1,22 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Modal from '../common/Modal';
+import { FieldError, FormErrorSummary } from '../common/FormFeedback';
+import { focusFirstInvalidField } from '../../utils/validation';
 
 const FoodTastingStep = ({ bookingData, updateBooking, onReview, onBack, isSubmitting = false }) => {
     const [showTasting, setShowTasting] = useState(true);
     const [sameAsAbove, setSameAsAbove] = useState(false);
     const [tastingData, setTastingData] = useState({
-        guest_name: bookingData.tasting_guest_name || '',
-        guest_email: bookingData.tasting_guest_email || '',
-        guest_phone: bookingData.tasting_guest_phone || '',
+        guest_name: bookingData.tasting_guest_name || bookingData.client_full_name || '',
+        guest_email: bookingData.tasting_guest_email || bookingData.client_email || '',
+        guest_phone: bookingData.tasting_guest_phone || bookingData.client_phone || '',
         preferred_date: bookingData.tasting_preferred_date || '',
         preferred_time: bookingData.tasting_preferred_time || '',
         notes: bookingData.tasting_notes || '',
     });
     const [modal, setModal] = useState({ isOpen: false, type: 'info', title: '', message: '' });
+    const [errors, setErrors] = useState({});
+    const formRef = useRef(null);
 
     useEffect(() => {
         updateBooking({ wantsTasting: true });
@@ -20,6 +24,9 @@ const FoodTastingStep = ({ bookingData, updateBooking, onReview, onBack, isSubmi
 
     const handleChange = (event) => {
         setTastingData({ ...tastingData, [event.target.name]: event.target.value });
+        if (errors[event.target.name]) {
+            setErrors((current) => ({ ...current, [event.target.name]: undefined }));
+        }
     };
 
     const handleSameAsAbove = (checked) => {
@@ -36,13 +43,21 @@ const FoodTastingStep = ({ bookingData, updateBooking, onReview, onBack, isSubmi
 
     const handleSubmitWithTasting = () => {
         if (isSubmitting) return;
-        if (!tastingData.preferred_date || !tastingData.preferred_time) {
+        const nextErrors = {};
+        if (!tastingData.guest_name?.trim()) nextErrors.guest_name = 'Add the name for the tasting request.';
+        if (!tastingData.guest_email?.trim()) nextErrors.guest_email = 'Add an email so the team can confirm the tasting.';
+        if (!tastingData.preferred_date) nextErrors.preferred_date = 'Choose a preferred tasting date.';
+        if (!tastingData.preferred_time) nextErrors.preferred_time = 'Choose a preferred tasting time.';
+
+        if (Object.keys(nextErrors).length > 0) {
+            setErrors(nextErrors);
             setModal({
                 isOpen: true,
                 type: 'error',
                 title: 'Missing Details',
-                message: 'Please select a preferred date and time for your tasting session.',
+                message: 'Complete the highlighted tasting details before review.',
             });
+            focusFirstInvalidField(nextErrors, formRef.current || document);
             return;
         }
 
@@ -124,7 +139,10 @@ const FoodTastingStep = ({ bookingData, updateBooking, onReview, onBack, isSubmi
                     </div>
 
                     {showTasting && (
-                        <div className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-2">
+                        <div ref={formRef} className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-2">
+                            <div className="md:col-span-2">
+                                <FormErrorSummary errors={errors} />
+                            </div>
                             <label>
                                 <span className="booking-field-label">Guest name</span>
                                 <input
@@ -136,6 +154,7 @@ const FoodTastingStep = ({ bookingData, updateBooking, onReview, onBack, isSubmi
                                     disabled={sameAsAbove}
                                     className="booking-input disabled:cursor-not-allowed disabled:bg-gray-100"
                                 />
+                                <FieldError message={errors.guest_name} />
                             </label>
                             <label>
                                 <span className="booking-field-label">Email address</span>
@@ -148,6 +167,7 @@ const FoodTastingStep = ({ bookingData, updateBooking, onReview, onBack, isSubmi
                                     disabled={sameAsAbove}
                                     className="booking-input disabled:cursor-not-allowed disabled:bg-gray-100"
                                 />
+                                <FieldError message={errors.guest_email} />
                             </label>
                             <label>
                                 <span className="booking-field-label">Mobile number</span>
@@ -180,6 +200,7 @@ const FoodTastingStep = ({ bookingData, updateBooking, onReview, onBack, isSubmi
                                     onChange={handleChange}
                                     className="booking-input"
                                 />
+                                <FieldError message={errors.preferred_date} />
                             </label>
                             <label>
                                 <span className="booking-field-label">Preferred time</span>
@@ -190,6 +211,7 @@ const FoodTastingStep = ({ bookingData, updateBooking, onReview, onBack, isSubmi
                                     onChange={handleChange}
                                     className="booking-input"
                                 />
+                                <FieldError message={errors.preferred_time} />
                             </label>
                             <label className="md:col-span-2">
                                 <span className="booking-field-label">Notes</span>
@@ -211,7 +233,7 @@ const FoodTastingStep = ({ bookingData, updateBooking, onReview, onBack, isSubmi
                 <button onClick={onBack} disabled={isSubmitting} className="booking-secondary-btn disabled:cursor-not-allowed disabled:opacity-50">Back</button>
                 {showTasting && (
                     <button onClick={handleSubmitWithTasting} disabled={isSubmitting} className="booking-primary-btn disabled:cursor-not-allowed disabled:bg-gray-200 disabled:text-gray-500">
-                        Review Booking
+                        Review booking
                     </button>
                 )}
             </div>

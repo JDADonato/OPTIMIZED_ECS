@@ -7,6 +7,7 @@ use App\Models\BusinessSetting;
 use App\Models\EventType;
 use App\Models\MenuItem;
 use App\Models\Package;
+use App\Services\OperationalBroadcastService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
@@ -45,6 +46,9 @@ class SettingsController extends Controller
             );
         }
 
+        app(OperationalBroadcastService::class)
+            ->adminChanged('settings', 'business_settings', $data['group'], 'updated', 'Business settings updated.');
+
         return response()->json([
             'message' => 'Settings updated successfully.',
             'settings' => BusinessSetting::where('group', $data['group'])->get()->mapWithKeys(fn ($item) => [$item->key => $item->value]),
@@ -53,7 +57,7 @@ class SettingsController extends Controller
 
     public function paymentRules()
     {
-        return response()->json(BusinessRule::getActive());
+        return response()->json($this->activeBusinessRule());
     }
 
     public function updatePaymentRules(Request $request)
@@ -79,10 +83,39 @@ class SettingsController extends Controller
             return response()->json(['error' => 'Final payment due days must be less than down payment due days.'], 422);
         }
 
-        $rule = BusinessRule::getActive();
+        $rule = $this->activeBusinessRule();
         $rule->update($data);
 
+        app(OperationalBroadcastService::class)
+            ->adminChanged('finance', 'payment_rules', $rule->id, 'updated', 'Payment rules updated.');
+
         return response()->json(['message' => 'Payment rules updated successfully.', 'rules' => $rule->fresh()]);
+    }
+
+    private function activeBusinessRule(): BusinessRule
+    {
+        return BusinessRule::getActive() ?? BusinessRule::create([
+            'minimum_lead_days' => 7,
+            'maximum_capacity_per_day' => 3,
+            'maximum_pax_per_event' => 1000,
+            'minimum_pax_per_event' => 20,
+            'is_active' => true,
+        ]);
+    }
+
+    public function menuItems()
+    {
+        return response()->json(MenuItem::query()
+            ->orderBy('category')
+            ->orderBy('name')
+            ->get());
+    }
+
+    public function eventTypes()
+    {
+        return response()->json(EventType::query()
+            ->orderBy('label')
+            ->get());
     }
 
     public function createPackage(Request $request)
@@ -113,6 +146,9 @@ class SettingsController extends Controller
         $data['is_active'] = $data['is_active'] ?? true;
 
         $package = Package::create($data);
+
+        app(OperationalBroadcastService::class)
+            ->adminChanged('catalog', 'package', $package->id, 'created', 'Package created.');
 
         return response()->json($package, 201);
     }
@@ -156,6 +192,9 @@ class SettingsController extends Controller
 
         $package->update($data);
 
+        app(OperationalBroadcastService::class)
+            ->adminChanged('catalog', 'package', $package->id, 'updated', 'Package updated.');
+
         return response()->json(['message' => 'Package updated successfully.', 'package' => $package->fresh()]);
     }
 
@@ -171,6 +210,9 @@ class SettingsController extends Controller
             'cost_per_head' => $data['cost_per_head'],
             'price_adj' => $data['price_adj'] ?? 0,
         ]);
+
+        app(OperationalBroadcastService::class)
+            ->adminChanged('catalog', 'menu_item', $item->id, 'pricing_updated', 'Dish pricing updated.');
 
         return response()->json(['message' => 'Dish pricing updated successfully.', 'item' => $item->fresh()]);
     }
@@ -188,18 +230,24 @@ class SettingsController extends Controller
             'security_type' => 'nullable|string|max:255',
             'security_label' => 'nullable|string|max:255',
             'security_description' => 'nullable|string',
+            'is_active' => 'nullable|boolean',
         ]);
 
         $data['slug'] = $data['slug'] ?? Str::slug($data['label']);
         $data['icon'] = $data['icon'] ?? 'sparkles';
         $data['package_category'] = $data['package_category'] ?? 'standard';
         $data['applicable_setups'] = $this->normalizeLines($data['applicable_setups'] ?? []);
+        $data['is_active'] = $data['is_active'] ?? true;
+        $data['archived_at'] = empty($data['is_active']) ? now() : null;
 
         if (EventType::where('slug', $data['slug'])->exists()) {
             return response()->json(['error' => 'An event type with this slug already exists.'], 422);
         }
 
         $eventType = EventType::create($data);
+
+        app(OperationalBroadcastService::class)
+            ->adminChanged('catalog', 'event_type', $eventType->id, 'created', 'Event type created.');
 
         return response()->json($eventType, 201);
     }
@@ -219,6 +267,7 @@ class SettingsController extends Controller
             'security_type' => 'nullable|string|max:255',
             'security_label' => 'nullable|string|max:255',
             'security_description' => 'nullable|string',
+            'is_active' => 'nullable|boolean',
         ]);
 
         if (array_key_exists('slug', $data)) {
@@ -239,8 +288,14 @@ class SettingsController extends Controller
         if (array_key_exists('applicable_setups', $data)) {
             $data['applicable_setups'] = $this->normalizeLines($data['applicable_setups']);
         }
+        if (array_key_exists('is_active', $data)) {
+            $data['archived_at'] = $data['is_active'] ? null : ($eventType->archived_at ?: now());
+        }
 
         $eventType->update($data);
+
+        app(OperationalBroadcastService::class)
+            ->adminChanged('catalog', 'event_type', $eventType->id, 'updated', 'Event type updated.');
 
         return response()->json(['message' => 'Event type updated successfully.', 'event_type' => $eventType->fresh()]);
     }
@@ -249,20 +304,20 @@ class SettingsController extends Controller
     {
         $eventType = EventType::findOrFail($id);
 
-        Package::where('type', $eventType->slug)->update(['type' => 'other']);
-        Package::all()->each(function (Package $package) use ($eventType) {
-            $slugs = $package->event_type_slugs ?: [];
-            if (!in_array($eventType->slug, $slugs, true)) {
-                return;
-            }
+        $eventType->forceFill([
+            'is_active' => false,
+            'archived_at' => $eventType->archived_at ?: now(),
+        ])->save();
 
-            $remaining = array_values(array_filter($slugs, fn ($slug) => $slug !== $eventType->slug));
-            $package->event_type_slugs = $remaining ?: ['other'];
-            $package->save();
-        });
-        $eventType->delete();
+        app(OperationalBroadcastService::class)
+            ->adminChanged('catalog', 'event_type', $eventType->id, 'archived', 'Event type archived.');
 
-        return response()->json(['message' => 'Event type deleted successfully.']);
+        return response()->json(['message' => 'Event type archived successfully.', 'event_type' => $eventType->fresh()]);
+    }
+
+    public function archiveEventType(int $id)
+    {
+        return $this->deleteEventType($id);
     }
 
     private function normalizeLines($value): array

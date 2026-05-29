@@ -14,6 +14,8 @@ use App\Services\BookingValidationService;
 use App\Services\ConversionEventService;
 use App\Services\EmailDeliveryService;
 use App\Services\EventPreparationService;
+use App\Services\NotificationRecipientService;
+use App\Services\OperationalBroadcastService;
 use App\Services\PaymentCalculationService;
 use App\Services\PostEventLifecycleService;
 use App\Support\ApiResponse;
@@ -22,7 +24,6 @@ use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Notification;
 use Illuminate\Support\Str;
 use Inertia\Inertia;
 
@@ -100,6 +101,7 @@ class MarketingController extends Controller
         $search = trim((string) $request->query('search', ''));
         $limit = min(max((int) $request->query('limit', 8), 1), 12);
         $page = max((int) $request->query('page', 1), 1);
+        $includeDeactivated = $request->boolean('include_deactivated');
 
         if (mb_strlen($search) < 2) {
             return response()->json([
@@ -121,6 +123,7 @@ class MarketingController extends Controller
 
         $query = User::query()
             ->where('role', 'Client')
+            ->when(!$includeDeactivated, fn ($query) => $query->activeAccounts())
             ->where(fn ($query) => $query
                 ->whereRaw('LOWER(full_name) LIKE ?', [$term])
                 ->orWhereRaw('LOWER(username) LIKE ?', [$term])
@@ -352,8 +355,8 @@ class MarketingController extends Controller
         }
 
         try {
-            $staff = User::whereIn('role', ['Admin', 'Marketing', 'Accounting'])->get();
-            Notification::send($staff, new NewBookingNotification($booking));
+            app(NotificationRecipientService::class)
+                ->sendToRoles(['Admin', 'Marketing', 'Accounting'], new NewBookingNotification($booking), 'assisted_booking_created');
         } catch (\Throwable) {
             // Notifications should not undo the booking that was already created.
         }
@@ -387,6 +390,12 @@ class MarketingController extends Controller
                 ]);
             }
 
+            if (!$customer->isActive()) {
+                throw \Illuminate\Validation\ValidationException::withMessages([
+                    'customer_id' => 'Choose an active customer account.',
+                ]);
+            }
+
             return $customer;
         }
 
@@ -396,6 +405,7 @@ class MarketingController extends Controller
 
         if ($email || $phone) {
             $duplicate = User::where('role', 'Client')
+                ->activeAccounts()
                 ->where(fn ($query) => $query
                     ->when($email, fn ($q) => $q->orWhere('email', $email))
                     ->when($phone, fn ($q) => $q->orWhere('phone', $phone)))
@@ -539,11 +549,14 @@ class MarketingController extends Controller
         try {
             $client = \App\Models\User::find($booking->user_id);
             if ($client && in_array($request->status, ['Confirmed', 'Cancelled', 'Completed'])) {
-                $client->notify(new \App\Notifications\BookingStatusNotification($booking, $request->status));
+                app(NotificationRecipientService::class)
+                    ->sendToUser($client, new \App\Notifications\BookingStatusNotification($booking, $request->status), 'booking_status_update');
             }
         } catch (\Exception $e) {
             \Illuminate\Support\Facades\Log::error("Notification failed on status update: {$e->getMessage()}");
         }
+        app(OperationalBroadcastService::class)
+            ->bookingChanged($booking->fresh(), 'status_updated', 'Booking status updated.');
 
         return response()->json([
             'success' => true,
@@ -819,7 +832,8 @@ class MarketingController extends Controller
         ]);
 
         try {
-            $booking->user?->notify(new \App\Notifications\BookingStatusNotification($booking, 'Needs Customer Details'));
+            app(NotificationRecipientService::class)
+                ->sendToUser($booking->user, new \App\Notifications\BookingStatusNotification($booking, 'Needs Customer Details'), 'clarification_requested');
         } catch (\Throwable $e) {
             \Illuminate\Support\Facades\Log::warning('Clarification notification failed.', [
                 'booking_id' => $booking->id,

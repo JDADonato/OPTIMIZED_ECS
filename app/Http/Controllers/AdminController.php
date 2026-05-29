@@ -13,8 +13,11 @@ use App\Notifications\CustomerAccountLifecycleNotification;
 use App\Notifications\StaffAccountAccessNotification;
 use App\Notifications\StaffAccountLifecycleNotification;
 use App\Services\AdminReportService;
+use App\Services\AccountLifecycleService;
 use App\Services\EmailDeliveryService;
 use App\Services\EventPreparationService;
+use App\Services\NotificationRecipientService;
+use App\Services\OperationalBroadcastService;
 use App\Services\PostEventLifecycleService;
 use App\Support\ApiResponse;
 use App\Support\ResourceVersion;
@@ -73,12 +76,19 @@ class AdminController extends Controller
                     ->orWhereRaw('LOWER(phone) LIKE ?', [$term]));
             })
             ->orderBy('created_at', 'desc');
+        $versionMeta = ResourceVersion::fromQuery($query);
+        if (ResourceVersion::matches($request, $versionMeta)) {
+            return ResourceVersion::unchanged($versionMeta);
+        }
 
         if ($request->boolean('paginated')) {
             $perPage = min(max((int) $request->query('per_page', 25), 1), 100);
             $employees = $query->paginate($perPage, ['id', 'full_name', 'username', 'email', 'phone', 'role', 'account_status', 'must_change_password', 'last_login_at', 'deactivated_at', 'created_at']);
 
-            return ApiResponse::paginated($employees, UserSummaryResource::collection($employees->getCollection())->resolve());
+            return ApiResponse::paginated($employees, UserSummaryResource::collection($employees->getCollection())->resolve(), [
+                ...$versionMeta,
+                'changed' => true,
+            ]);
         }
 
         $employees = $query->get(['id', 'full_name', 'username', 'email', 'phone', 'role', 'account_status', 'must_change_password', 'last_login_at', 'deactivated_at', 'created_at']);
@@ -179,6 +189,8 @@ class AdminController extends Controller
             'role_changed' => isset($updates['role']) && $updates['role'] !== $originalRole,
             'email_delivery' => $emailDelivery['status'] ?? null,
         ]);
+        app(OperationalBroadcastService::class)
+            ->adminChanged('accounts', 'user', $user->id, 'updated', 'Staff account updated.');
 
         return response()->json([
             'message' => 'Employee account updated successfully',
@@ -195,6 +207,8 @@ class AdminController extends Controller
             return response()->json(['error' => 'Cannot delete this user'], 403);
         }
 
+        $releaseSummary = app(AccountLifecycleService::class)->releaseStaffOwnership($user, Auth::id());
+
         $user->forceFill([
             'account_status' => 'deactivated',
             'deactivated_at' => now(),
@@ -205,10 +219,13 @@ class AdminController extends Controller
         ])->save();
 
         $emailDelivery = app(EmailDeliveryService::class)
-            ->sendToNotifiable($user, new StaffAccountLifecycleNotification('deactivated'), 'staff_deactivated');
+            ->sendToNotifiable($user, new StaffAccountLifecycleNotification('deactivated'), 'staff_deactivated', true);
         $this->recordAccountAudit('Staff account deactivated', $user, 'Succeeded', [
             'email_delivery' => $emailDelivery['status'],
+            'released_work' => $releaseSummary,
         ]);
+        app(OperationalBroadcastService::class)
+            ->adminChanged('accounts', 'user', $user->id, 'deactivated', 'Staff account deactivated.');
 
         return response()->json([
             'message' => 'Employee account deactivated successfully',
@@ -350,6 +367,8 @@ class AdminController extends Controller
         $this->recordAccountAudit('Staff account reactivated', $user, 'Succeeded', [
             'email_delivery' => $emailDelivery['status'],
         ]);
+        app(OperationalBroadcastService::class)
+            ->adminChanged('accounts', 'user', $user->id, 'reactivated', 'Staff account reactivated.');
 
         return response()->json([
             'message' => 'Employee account reactivated successfully',
@@ -392,10 +411,17 @@ class AdminController extends Controller
                 };
             })
             ->orderBy('created_at', 'desc');
+        $versionMeta = ResourceVersion::fromQuery($query);
+        if (ResourceVersion::matches($request, $versionMeta)) {
+            return ResourceVersion::unchanged($versionMeta);
+        }
 
         if ($request->boolean('paginated')) {
             $perPage = min(max((int) $request->query('per_page', 25), 1), 100);
-            return ApiResponse::paginated($query->paginate($perPage));
+            return ApiResponse::paginated($query->paginate($perPage), null, [
+                ...$versionMeta,
+                'changed' => true,
+            ]);
         }
 
         $customers = $query->get();
@@ -450,6 +476,9 @@ class AdminController extends Controller
         $originalEmail = $user->email;
         $notifyCustomer = $request->boolean('notify_customer', true);
 
+        $archivedConversations = app(AccountLifecycleService::class)
+            ->archiveCustomerConversations($user, Auth::id());
+
         $user->forceFill([
             'email' => $user->email ? sprintf('deactivated+%d+%s@eloquente.invalid', $user->id, now()->format('YmdHis')) : null,
             'account_status' => 'deactivated',
@@ -462,7 +491,10 @@ class AdminController extends Controller
             ->sendToAddress($originalEmail, new CustomerAccountLifecycleNotification('deactivated'), 'customer_deactivated', $notifyCustomer);
         $this->recordAccountAudit('Customer account deactivated', $user, 'Succeeded', [
             'notification' => $emailDelivery['status'],
+            'archived_conversations' => $archivedConversations,
         ]);
+        app(OperationalBroadcastService::class)
+            ->adminChanged('accounts', 'user', $user->id, 'deactivated', 'Customer account deactivated.');
 
         return response()->json([
             'message' => 'Customer account deactivated. Booking and payment records were preserved.',
@@ -491,6 +523,8 @@ class AdminController extends Controller
         $this->recordAccountAudit('Customer account reactivated', $user, 'Succeeded', [
             'notification' => $emailDelivery['status'],
         ]);
+        app(OperationalBroadcastService::class)
+            ->adminChanged('accounts', 'user', $user->id, 'reactivated', 'Customer account reactivated.');
 
         return response()->json([
             'message' => 'Customer account reactivated successfully',
@@ -678,12 +712,13 @@ class AdminController extends Controller
 
         try {
             $client = User::find($booking->user_id);
-            if ($client) {
-                $client->notify(new \App\Notifications\BookingStatusNotification($booking, $request->status));
-            }
+            app(NotificationRecipientService::class)
+                ->sendToUser($client, new \App\Notifications\BookingStatusNotification($booking, $request->status), 'admin_booking_status_update');
         } catch (\Exception $e) {
             Log::error("Notification failed on admin booking approval: {$e->getMessage()}");
         }
+        app(OperationalBroadcastService::class)
+            ->bookingChanged($booking->fresh(), 'approved', 'Booking approved.');
 
         return response()->json([
             'success' => true,
@@ -872,7 +907,13 @@ class AdminController extends Controller
 
     public function getMenuItems()
     {
-        $items = MenuItem::orderBy('category')->orderBy('name')->get();
+        $query = MenuItem::query();
+
+        if (!in_array(Auth::user()?->role, ['Admin', 'Marketing'], true)) {
+            $query->whereRaw('is_active is true');
+        }
+
+        $items = $query->orderBy('category')->orderBy('name')->get();
         return response()->json($items);
     }
 
@@ -886,6 +927,7 @@ class AdminController extends Controller
             'image'         => 'nullable|string',
             'description'   => 'nullable|string',
             'is_best_seller' => 'nullable|boolean',
+            'is_active' => 'nullable|boolean',
         ]);
 
         $dishId = 'custom_' . strtolower(preg_replace('/[^a-zA-Z0-9]/', '', $request->name)) . '_' . time();
@@ -899,8 +941,13 @@ class AdminController extends Controller
             'image'          => $request->image ?? 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&q=80&w=400',
             'description'    => $request->description ?? '',
             'is_best_seller' => $request->is_best_seller ?? false,
+            'is_active'      => $request->input('is_active', true),
         ]);
         Cache::put('admin.analytics.version', (int) Cache::get('admin.analytics.version', 1) + 1);
+        Cache::forget('menu_categories');
+        Cache::forget('menu_bestsellers');
+        app(OperationalBroadcastService::class)
+            ->adminChanged('catalog', 'menu_item', $item->id, 'created', 'Menu item created.');
 
         return response()->json($item, 201);
     }
@@ -920,13 +967,18 @@ class AdminController extends Controller
             'image'         => 'nullable|string',
             'description'   => 'nullable|string',
             'is_best_seller' => 'nullable|boolean',
+            'is_active' => 'nullable|boolean',
         ]);
 
         $item->update($request->only([
             'name', 'category', 'cost_per_head', 'price_adj',
-            'image', 'description', 'is_best_seller',
+            'image', 'description', 'is_best_seller', 'is_active',
         ]));
         Cache::put('admin.analytics.version', (int) Cache::get('admin.analytics.version', 1) + 1);
+        Cache::forget('menu_categories');
+        Cache::forget('menu_bestsellers');
+        app(OperationalBroadcastService::class)
+            ->adminChanged('catalog', 'menu_item', $item->id, 'updated', 'Menu item updated.');
 
         return response()->json($item);
     }
@@ -938,8 +990,18 @@ class AdminController extends Controller
             return response()->json(['error' => 'Menu item not found'], 404);
         }
 
-        $item->delete();
+        $item->update(['is_active' => false]);
         Cache::put('admin.analytics.version', (int) Cache::get('admin.analytics.version', 1) + 1);
-        return response()->json(['message' => 'Menu item deleted successfully']);
+        Cache::forget('menu_categories');
+        Cache::forget('menu_bestsellers');
+        app(OperationalBroadcastService::class)
+            ->adminChanged('catalog', 'menu_item', $item->id, 'archived', 'Menu item archived.');
+
+        return response()->json(['message' => 'Menu item archived successfully', 'item' => $item->fresh()]);
+    }
+
+    public function archiveMenuItem(int $id)
+    {
+        return $this->deleteMenuItem($id);
     }
 }

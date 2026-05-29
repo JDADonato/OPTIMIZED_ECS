@@ -76,9 +76,9 @@ class BookingSummaryResource extends JsonResource
             'user_email' => $this->user->email ?? null,
             'user_phone' => $this->user->phone ?? null,
             'role' => $this->user->role ?? null,
-            'payments_count' => $this->whenLoaded('payments', fn () => $this->payments->count()),
-            'paid_total' => $this->whenLoaded('payments', fn () => $this->payments->whereIn('status', ['Paid', 'Verified'])->sum(fn ($payment) => (float) $payment->amount)),
-            'pending_payment_total' => $this->whenLoaded('payments', fn () => $this->payments->whereNotIn('status', ['Paid', 'Verified', 'Refunded'])->sum(fn ($payment) => (float) $payment->amount)),
+            'payments_count' => $this->whenLoaded('payments', fn () => $this->activeLoadedPayments()->count()),
+            'paid_total' => $this->whenLoaded('payments', fn () => $this->activeLoadedPayments()->whereIn('status', ['Paid', 'Verified'])->sum(fn ($payment) => (float) $payment->amount)),
+            'pending_payment_total' => $this->whenLoaded('payments', fn () => $this->activeLoadedPayments()->whereNotIn('status', ['Paid', 'Verified', 'Refunded'])->sum(fn ($payment) => (float) $payment->amount)),
             'payments' => PaymentResource::collection($this->whenLoaded('payments', fn () => $this->payments, collect())),
             'review_tasks' => $this->whenLoaded('reviewTasks', fn () => $this->reviewTasks->map(fn ($task) => [
                 'id' => $task->id,
@@ -114,6 +114,11 @@ class BookingSummaryResource extends JsonResource
         $user = $request->user();
 
         return $user && in_array($user->role, ['Marketing', 'Admin'], true) && is_null($this->assigned_to);
+    }
+
+    private function activeLoadedPayments()
+    {
+        return $this->payments->filter(fn ($payment) => empty($payment->voided_at));
     }
 
     private function canEdit(Request $request): bool

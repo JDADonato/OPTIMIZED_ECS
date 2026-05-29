@@ -11,6 +11,9 @@ use Illuminate\Http\Request;
 
 class DocumentController extends Controller
 {
+    private const MAX_CALENDAR_EXPORT_DAYS = 366;
+    private const MAX_CALENDAR_EXPORT_EVENTS = 500;
+
     public function receipt(Payment $payment, BrandedPdfService $pdf)
     {
         $payment->loadMissing('booking.user');
@@ -65,7 +68,14 @@ class DocumentController extends Controller
         ]);
 
         [$start, $end] = $this->dateWindow($data);
+        if ($start->diffInDays($end) > self::MAX_CALENDAR_EXPORT_DAYS) {
+            return response()->json([
+                'error' => 'Calendar PDF exports are limited to one year. Narrow the date range or use reports for larger exports.',
+            ], 422);
+        }
+
         $query = Booking::query()
+            ->with('user:id,full_name,username')
             ->whereBetween('event_date', [$start->toDateString(), $end->toDateString()])
             ->whereNotIn('status', ['Cancelled', 'cancelled'])
             ->when($data['status'] ?? null, fn ($q, $status) => $q->where('status', $status))
@@ -81,7 +91,16 @@ class DocumentController extends Controller
             ->orderBy('event_date')
             ->orderBy('event_time');
 
-        return response($pdf->calendar('Event Calendar - ' . $start->format('M j, Y') . ' to ' . $end->format('M j, Y'), $query->get()), 200, [
+        $events = $query->limit(self::MAX_CALENDAR_EXPORT_EVENTS + 1)->get();
+        $truncated = $events->count() > self::MAX_CALENDAR_EXPORT_EVENTS;
+        $events = $events->take(self::MAX_CALENDAR_EXPORT_EVENTS);
+
+        return response($pdf->calendar(
+            'Event Calendar - ' . $start->format('M j, Y') . ' to ' . $end->format('M j, Y'),
+            $events,
+            ['start' => $start, 'end' => $end],
+            $truncated
+        ), 200, [
             'Content-Type' => 'application/pdf',
             'Content-Disposition' => 'attachment; filename="event-calendar.pdf"',
         ]);

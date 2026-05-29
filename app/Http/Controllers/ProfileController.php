@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\AuditLog;
 use App\Mail\VerifyEmailOTP;
+use App\Services\AccountLifecycleService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Mail;
@@ -21,7 +22,7 @@ class ProfileController extends Controller
 
         $request->validate([
             'password' => ['required', 'string'],
-            'confirmation' => ['required', 'in:DELETE'],
+            'confirmation' => ['required', 'in:DEACTIVATE,DELETE'],
             'reason' => ['nullable', 'string', 'max:1000'],
         ]);
 
@@ -33,11 +34,13 @@ class ProfileController extends Controller
             return back()->withErrors(['password' => 'The provided password does not match your current password.']);
         }
 
+        app(AccountLifecycleService::class)->archiveCustomerConversations($user, $user->id);
+
         $user->forceFill([
             'account_status' => 'deactivated',
             'deactivated_at' => now(),
             'deactivated_by' => $user->id,
-            'deactivation_reason' => $request->input('reason') ?: 'Client requested account deletion.',
+            'deactivation_reason' => $request->input('reason') ?: 'Client requested account closure.',
             'remember_token' => null,
         ])->save();
 
@@ -143,7 +146,7 @@ class ProfileController extends Controller
             $changedFields[] = 'email';
             
             $otp = str_pad(random_int(0, 999999), 6, '0', STR_PAD_LEFT);
-            $user->otp_code = $otp;
+            $user->otp_code = Hash::make($otp);
             $user->otp_expires_at = now()->addMinutes(15);
             try {
                 Mail::to($user->email)->send(new VerifyEmailOTP($otp));

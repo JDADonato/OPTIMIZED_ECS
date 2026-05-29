@@ -12,7 +12,9 @@ class EventTypeController extends Controller
      */
     public function index(Request $request)
     {
-        $types = EventType::orderBy('label')
+        $types = EventType::query()
+            ->whereRaw('is_active is true')
+            ->orderBy('label')
             ->paginate($request->get('per_page', 50));
 
         return response()->json($types);
@@ -23,7 +25,7 @@ class EventTypeController extends Controller
      */
     public function show($id)
     {
-        $type = EventType::findOrFail($id);
+        $type = EventType::whereRaw('is_active is true')->findOrFail($id);
         return response()->json($type);
     }
 
@@ -32,7 +34,7 @@ class EventTypeController extends Controller
      */
     public function bySlug($slug)
     {
-        $type = EventType::where('slug', $slug)->firstOrFail();
+        $type = EventType::where('slug', $slug)->whereRaw('is_active is true')->firstOrFail();
         return response()->json($type);
     }
 }

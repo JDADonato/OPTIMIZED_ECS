@@ -108,7 +108,7 @@ class AuthController extends Controller
             'role'     => 'Client', // Public registration is always Client
             'email'    => $request->email,
             'phone'    => $request->phone,
-            'otp_code' => $otp,
+            'otp_code' => Hash::make($otp),
             'otp_expires_at' => now()->addMinutes(15),
             'otp_resend_available_at' => now()->addSeconds(60),
             'otp_resend_attempts' => 0,
@@ -148,7 +148,7 @@ class AuthController extends Controller
             return response()->json(['message' => 'Already verified']);
         }
 
-        if ($user->otp_code !== $request->otp) {
+        if (!$this->otpMatches($user->otp_code, $request->otp)) {
             throw ValidationException::withMessages([
                 'otp' => ['Invalid verification code.'],
             ]);
@@ -202,7 +202,7 @@ class AuthController extends Controller
 
         $otp = str_pad(random_int(0, 999999), 6, '0', STR_PAD_LEFT);
         $user->update([
-            'otp_code' => $otp,
+            'otp_code' => Hash::make($otp),
             'otp_expires_at' => now()->addMinutes(15),
             'otp_resend_available_at' => now()->addSeconds(60),
             'otp_resend_attempts' => (int) ($user->otp_resend_attempts ?? 0) + 1,
@@ -316,8 +316,11 @@ class AuthController extends Controller
             'email' => ['required', 'email'],
         ]);
 
-        $user = User::where('email', $data['email'])->first();
-        if ($user && ($user->account_status ?? 'active') === 'active') {
+        $user = User::query()
+            ->reachableForNotifications()
+            ->where('email', $data['email'])
+            ->first();
+        if ($user) {
             $token = Str::random(64);
             DB::table('password_reset_tokens')->updateOrInsert(
                 ['email' => $user->email],
@@ -402,5 +405,18 @@ class AuthController extends Controller
             'Admin'      => '/dashboard/admin',
             default      => '/',
         };
+    }
+
+    private function otpMatches(?string $storedOtp, string $submittedOtp): bool
+    {
+        if (!$storedOtp) {
+            return false;
+        }
+
+        if (preg_match('/^\d{6}$/', $storedOtp)) {
+            return hash_equals($storedOtp, $submittedOtp);
+        }
+
+        return Hash::isHashed($storedOtp) && Hash::check($submittedOtp, $storedOtp);
     }
 }

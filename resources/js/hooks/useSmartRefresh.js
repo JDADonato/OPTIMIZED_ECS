@@ -8,6 +8,9 @@ export default function useSmartRefresh({
     idleAfter = 180000,
     refresh,
     refreshOnFocus = true,
+    channels = [],
+    eventNames = ['.operational.resource.changed'],
+    resources = [],
 }) {
     const refreshRef = useRef(refresh);
     const lastInteractionRef = useRef(getNow());
@@ -67,4 +70,45 @@ export default function useSmartRefresh({
             document.removeEventListener('visibilitychange', handleVisibility);
         };
     }, [enabled, interval, idleAfter, refreshOnFocus]);
+
+    useEffect(() => {
+        if (!enabled || !window.Echo || !Array.isArray(channels) || channels.length === 0) return undefined;
+
+        let timer = null;
+        const allowedResources = Array.isArray(resources) ? resources.filter(Boolean) : [];
+        const activeEvents = Array.isArray(eventNames) && eventNames.length > 0
+            ? eventNames
+            : ['.operational.resource.changed'];
+        const handleEvent = (event = {}) => {
+            if (allowedResources.length > 0 && event.resource && !allowedResources.includes(event.resource)) {
+                return;
+            }
+
+            window.clearTimeout(timer);
+            timer = window.setTimeout(() => {
+                refreshRef.current?.({ silent: true, reason: 'realtime' });
+            }, 180);
+        };
+
+        const subscriptions = [];
+        channels.filter(Boolean).forEach((channelName) => {
+            const channel = window.Echo.private(channelName);
+            activeEvents.forEach((eventName) => {
+                channel.listen(eventName, handleEvent);
+                subscriptions.push({ channel, eventName });
+            });
+        });
+
+        return () => {
+            window.clearTimeout(timer);
+            subscriptions.forEach(({ channel, eventName }) => {
+                channel.stopListening?.(eventName, handleEvent);
+            });
+        };
+    }, [
+        enabled,
+        JSON.stringify(channels || []),
+        JSON.stringify(eventNames || []),
+        JSON.stringify(resources || []),
+    ]);
 }

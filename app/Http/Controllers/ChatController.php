@@ -11,6 +11,9 @@ use App\Models\ConversationParticipant;
 use App\Models\Message;
 use App\Models\User;
 use App\Notifications\NewChatMessageNotification;
+use App\Services\NotificationRecipientService;
+use App\Services\OperationalBroadcastService;
+use App\Support\ResourceVersion;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Cache;
@@ -42,10 +45,28 @@ class ChatController extends Controller
     {
         $user = Auth::user();
         $limit = $this->pageLimit($request);
+        $versionQuery = $user->role === 'Client'
+            ? Conversation::query()->where('client_id', $user->id)
+            : Conversation::query();
+        $conversationIds = (clone $versionQuery)->pluck('id');
+        $messageQuery = Message::query()->when($conversationIds->isNotEmpty(), fn ($query) => $query->whereIn('conversation_id', $conversationIds), fn ($query) => $query->whereRaw('1=0'));
+        $versionMeta = ResourceVersion::make(
+            $conversationIds->count() + (clone $messageQuery)->count(),
+            collect([(clone $versionQuery)->max('updated_at'), (clone $messageQuery)->max('updated_at')])->filter()->max(),
+            collect([$conversationIds->max(), (clone $messageQuery)->max('id')])->filter()->max()
+        );
+
+        if (ResourceVersion::matches($request, $versionMeta)) {
+            return ResourceVersion::unchanged($versionMeta);
+        }
 
         if ($user->role === 'Client') {
             return response()->json([
                 'conversations' => $this->getClientConversations($user, $limit),
+                'meta' => [
+                    ...$versionMeta,
+                    'changed' => true,
+                ],
             ]);
         }
 
@@ -59,6 +80,11 @@ class ChatController extends Controller
             $adminLists = $this->getAdminOversightChats($user, $limit);
             $payload = array_merge($payload, $adminLists);
         }
+
+        $payload['meta'] = [
+            ...$versionMeta,
+            'changed' => true,
+        ];
 
         return response()->json($payload);
     }
@@ -147,6 +173,12 @@ class ChatController extends Controller
         $user = Auth::user();
         $this->authorizeConversationAccess($user, $conversation);
 
+        if ($this->hasInactiveClient($conversation)) {
+            return response()->json([
+                'error' => 'This conversation is archived because the customer account is deactivated.',
+            ], 403);
+        }
+
         // Staff can only send if they own, collaborate on, or observe this conversation.
         if (in_array($user->role, ['Marketing', 'Admin']) && !$this->canReplyToConversation($user, $conversation)) {
             return response()->json([
@@ -166,17 +198,20 @@ class ChatController extends Controller
         // Broadcast the message to the conversation channel. If Reverb is offline,
         // message delivery still succeeds and polling/refresh can catch up.
         $this->broadcastSafely(new MessageSent($message), true);
+        app(OperationalBroadcastService::class)
+            ->staffQueueChanged('chat', 'message', $message->id, 'sent', 'New chat message.');
 
         // ── Step 4: Email notification with 15-minute cooldown ──
         // Only send when staff replies to a client (not the other way around)
         if (in_array($user->role, ['Marketing', 'Admin'])) {
             $client = $conversation->client;
-            if ($client && $client->email) {
+            if ($client && $client->isReachableForNotifications()) {
                 $cacheKey = "chat_email_cooldown:{$conversation->id}";
 
                 if (!Cache::has($cacheKey)) {
                     // Dispatch the queued email notification
-                    $client->notify(new NewChatMessageNotification($message, $conversation, $user));
+                    app(NotificationRecipientService::class)
+                        ->sendToUser($client, new NewChatMessageNotification($message, $conversation, $user), 'chat_message_email');
 
                     // Set the 15-minute cooldown
                     Cache::put($cacheKey, true, now()->addMinutes(15));
@@ -208,6 +243,10 @@ class ChatController extends Controller
 
         if ($user->role !== 'Client') {
             return response()->json(['error' => 'Only clients can start conversations.'], 403);
+        }
+
+        if (!$user->isActive()) {
+            return response()->json(['error' => 'This account is deactivated.'], 403);
         }
 
         $bookingId = $request->input('booking_id');
@@ -247,6 +286,8 @@ class ChatController extends Controller
             $this->broadcastSafely(new ConversationCreated($conversation));
         }
         $this->broadcastSafely(new MessageSent($message), true);
+        app(OperationalBroadcastService::class)
+            ->staffQueueChanged('chat', 'conversation', $conversation->id, $isNew ? 'created' : 'updated', 'Conversation updated.');
 
         return response()->json([
             'conversation' => [
@@ -278,6 +319,10 @@ class ChatController extends Controller
             return response()->json(['error' => 'Only staff can claim conversations.'], 403);
         }
 
+        if ($this->hasInactiveClient($conversation)) {
+            return response()->json(['error' => 'This conversation is archived because the customer account is deactivated.'], 403);
+        }
+
         if ($conversation->isClaimed()) {
             return response()->json([
                 'error' => 'This conversation has already been claimed by ' . ($conversation->staff->username ?? 'another staff member') . '.',
@@ -301,6 +346,8 @@ class ChatController extends Controller
 
         // Broadcast to all staff and the client. Fail softly when Reverb is offline.
         $this->broadcastSafely(new ConversationClaimed($conversation));
+        app(OperationalBroadcastService::class)
+            ->staffQueueChanged('chat', 'conversation', $conversation->id, 'claimed', 'Conversation claimed.');
 
         return response()->json([
             'success' => true,
@@ -326,6 +373,8 @@ class ChatController extends Controller
         }
 
         $conversation->update(['status' => 'resolved']);
+        app(OperationalBroadcastService::class)
+            ->staffQueueChanged('chat', 'conversation', $conversation->id, 'resolved', 'Conversation resolved.');
 
         return response()->json([
             'success' => true,
@@ -342,6 +391,10 @@ class ChatController extends Controller
             return response()->json(['error' => 'You cannot reopen this conversation.'], 403);
         }
 
+        if ($this->hasInactiveClient($conversation)) {
+            return response()->json(['error' => 'This conversation cannot be reopened while the customer account is deactivated.'], 403);
+        }
+
         $conversation->update([
             'status' => 'active',
             'reopened_at' => now(),
@@ -351,6 +404,8 @@ class ChatController extends Controller
             'actor_id' => $user->id,
             'actor_role' => $user->role,
         ]);
+        app(OperationalBroadcastService::class)
+            ->staffQueueChanged('chat', 'conversation', $conversation->id, 'reopened', 'Conversation reopened.');
 
         return response()->json([
             'message' => 'Conversation reopened.',
@@ -366,6 +421,10 @@ class ChatController extends Controller
             return response()->json(['error' => 'Only admins can join for monitoring.'], 403);
         }
 
+        if ($this->hasInactiveClient($conversation)) {
+            return response()->json(['error' => 'This conversation is archived because the customer account is deactivated.'], 403);
+        }
+
         $conversation->update(['joined_by_admin_at' => now()]);
         $this->upsertParticipant($conversation, $user->id, 'admin_observer', $user->id);
 
@@ -373,6 +432,8 @@ class ChatController extends Controller
             'actor_id' => $user->id,
             'actor_role' => $user->role,
         ]);
+        app(OperationalBroadcastService::class)
+            ->staffQueueChanged('chat', 'conversation', $conversation->id, 'admin_joined', 'Admin joined conversation.');
 
         return response()->json([
             'message' => 'Admin joined the conversation.',
@@ -393,6 +454,8 @@ class ChatController extends Controller
         ]);
 
         $conversation->update(['internal_notes' => $request->input('internal_notes')]);
+        app(OperationalBroadcastService::class)
+            ->staffQueueChanged('chat', 'conversation', $conversation->id, 'internal_notes_updated', 'Conversation note updated.');
 
         return response()->json(['message' => 'Internal notes saved.', 'internal_notes' => $conversation->internal_notes]);
     }
@@ -425,7 +488,11 @@ class ChatController extends Controller
         }
 
         $newStaff = User::find($request->new_staff_id);
-        if ($newStaff->role !== 'Marketing') {
+        if ($this->hasInactiveClient($conversation)) {
+            return response()->json(['error' => 'This conversation is archived because the customer account is deactivated.'], 403);
+        }
+
+        if ($newStaff->role !== 'Marketing' || !$newStaff->isActive()) {
             return response()->json(['error' => 'Can only transfer ownership to Marketing staff.'], 422);
         }
 
@@ -434,17 +501,22 @@ class ChatController extends Controller
 
             $conversation->update(['staff_id' => $newStaff->id]);
 
-            ConversationParticipant::where('conversation_id', $conversation->id)
-                ->where('role', 'owner')
-                ->delete();
+            $this->softRemoveParticipants(
+                ConversationParticipant::where('conversation_id', $conversation->id)->where('role', 'owner'),
+                'ownership_changed',
+                $user->id
+            );
 
             if ($previousOwnerId && $previousOwnerId !== $newStaff->id && $request->boolean('keep_previous_owner')) {
                 $this->upsertParticipant($conversation, $previousOwnerId, 'collaborator', $user->id);
             } elseif ($previousOwnerId && $previousOwnerId !== $newStaff->id) {
-                ConversationParticipant::where('conversation_id', $conversation->id)
-                    ->where('user_id', $previousOwnerId)
-                    ->where('role', 'collaborator')
-                    ->delete();
+                $this->softRemoveParticipants(
+                    ConversationParticipant::where('conversation_id', $conversation->id)
+                        ->where('user_id', $previousOwnerId)
+                        ->where('role', 'collaborator'),
+                    'ownership_changed',
+                    $user->id
+                );
             }
 
             $this->upsertParticipant($conversation, $newStaff->id, 'owner', $user->id);
@@ -455,6 +527,8 @@ class ChatController extends Controller
 
         // Broadcast claim event so UI updates for everyone. Fail softly when Reverb is offline.
         $this->broadcastSafely(new ConversationClaimed($conversation));
+        app(OperationalBroadcastService::class)
+            ->staffQueueChanged('chat', 'conversation', $conversation->id, 'transferred', 'Conversation transferred.');
 
         return response()->json([
             'success' => true,
@@ -476,7 +550,11 @@ class ChatController extends Controller
         }
 
         $staff = User::find($data['user_id']);
-        if ($staff->role !== 'Marketing') {
+        if ($this->hasInactiveClient($conversation)) {
+            return response()->json(['error' => 'This conversation is archived because the customer account is deactivated.'], 403);
+        }
+
+        if ($staff->role !== 'Marketing' || !$staff->isActive()) {
             return response()->json(['error' => 'Only Marketing staff can be added as collaborators.'], 422);
         }
 
@@ -485,6 +563,8 @@ class ChatController extends Controller
         }
 
         $this->upsertParticipant($conversation, $staff->id, 'collaborator', $user->id);
+        app(OperationalBroadcastService::class)
+            ->staffQueueChanged('chat', 'conversation', $conversation->id, 'collaborator_added', 'Conversation collaborator added.');
 
         return response()->json([
             'success' => true,
@@ -505,10 +585,15 @@ class ChatController extends Controller
             return response()->json(['error' => 'Transfer ownership before removing the owner.'], 422);
         }
 
-        ConversationParticipant::where('conversation_id', $conversation->id)
-            ->where('user_id', $user->id)
-            ->where('role', 'collaborator')
-            ->delete();
+        $this->softRemoveParticipants(
+            ConversationParticipant::where('conversation_id', $conversation->id)
+                ->where('user_id', $user->id)
+                ->where('role', 'collaborator'),
+            'removed_by_staff',
+            $currentUser->id
+        );
+        app(OperationalBroadcastService::class)
+            ->staffQueueChanged('chat', 'conversation', $conversation->id, 'collaborator_removed', 'Conversation collaborator removed.');
 
         return response()->json([
             'success' => true,
@@ -545,6 +630,8 @@ class ChatController extends Controller
         ]);
 
         $message->load('sender:id,username,role');
+        app(OperationalBroadcastService::class)
+            ->staffQueueChanged('chat', 'message', $message->id, 'edited', 'Chat message edited.');
 
         return response()->json($this->formatMessage($message, $user));
     }
@@ -571,6 +658,8 @@ class ChatController extends Controller
             'deleted_by' => $user->id,
             'delete_reason' => $request->input('reason'),
         ])->save();
+        app(OperationalBroadcastService::class)
+            ->staffQueueChanged('chat', 'message', $message->id, 'deleted', 'Chat message deleted.');
 
         return response()->json([
             'message' => 'Message deleted.',
@@ -594,6 +683,7 @@ class ChatController extends Controller
 
         $staff = User::where('role', 'Marketing')
             ->where('id', '!=', $user->id)
+            ->activeAccounts()
             ->select('id', 'username', 'role')
             ->get();
 
@@ -615,7 +705,15 @@ class ChatController extends Controller
                     $q->select('id')
                       ->from('conversations')
                       ->where('client_id', $user->id)
-                      ->where('status', 'active');
+                      ->where('status', 'active')
+                      ->whereExists(function ($client) {
+                          $client->selectRaw('1')
+                              ->from('users')
+                              ->whereColumn('users.id', 'conversations.client_id')
+                              ->where(fn ($account) => $account
+                                  ->whereNull('users.account_status')
+                                  ->orWhere('users.account_status', 'active'));
+                      });
                 })
                 ->where('sender_id', '!=', $user->id)
                 ->whereNull('read_at')
@@ -626,7 +724,15 @@ class ChatController extends Controller
                     $q->select('id')
                       ->from('conversations')
                       ->where('staff_id', $user->id)
-                      ->where('status', 'active');
+                      ->where('status', 'active')
+                      ->whereExists(function ($client) {
+                          $client->selectRaw('1')
+                              ->from('users')
+                              ->whereColumn('users.id', 'conversations.client_id')
+                              ->where(fn ($account) => $account
+                                  ->whereNull('users.account_status')
+                                  ->orWhere('users.account_status', 'active'));
+                      });
                 })
                 ->where('sender_id', '!=', $user->id)
                 ->whereNull('read_at')
@@ -767,24 +873,39 @@ class ChatController extends Controller
 
     private function formatConversation(Conversation $conv, $currentUser): array
     {
-        $conv->loadMissing(['staff:id,username,full_name,role', 'participants.user:id,username,full_name,role']);
+        $conv->loadMissing([
+            'staff:id,username,full_name,role,account_status',
+            'participants.user:id,username,full_name,role,account_status',
+            'participantHistory.user:id,username,full_name,role,account_status',
+        ]);
         $booking = $conv->booking;
         $owner = $conv->staff;
+        $client = $conv->client;
+        $clientIsDeactivated = $client && !$client->isActive();
+        $clientEmail = $client && !$client->hasPlaceholderEmail() ? $client->email : null;
 
         return [
             'id' => $conv->id,
             'client_id' => $conv->client_id,
-            'client_name' => $conv->client->username ?? 'Unknown',
-            'client_email' => $conv->client->email ?? null,
+            'client_name' => $client->username ?? 'Unknown',
+            'client_email' => $clientEmail,
+            'client_account_status' => $client->account_status ?? 'active',
+            'client_is_deactivated' => $clientIsDeactivated,
+            'client_status_label' => $clientIsDeactivated ? 'Deactivated customer' : null,
             'staff_id' => $conv->staff_id,
-            'staff_name' => $conv->staff->username ?? null,
+            'staff_name' => $conv->staff
+                ? ($conv->staff->isActive() ? $conv->staff->username : 'Former staff: ' . $conv->staff->username)
+                : null,
             'owner' => $this->participantUser($owner, 'owner'),
             'collaborators' => $this->participantUsers($conv, 'collaborator'),
             'admin_observers' => $this->participantUsers($conv, 'admin_observer'),
-            'can_reply' => $this->canReplyToConversation($currentUser, $conv),
-            'can_transfer' => $this->canTransferConversation($currentUser, $conv),
-            'can_resolve' => $this->canResolveConversation($currentUser, $conv),
-            'can_invite' => $this->canInviteConversation($currentUser, $conv),
+            'former_participants' => $currentUser->role === 'Admin'
+                ? $this->formerParticipantUsers($conv)
+                : [],
+            'can_reply' => !$clientIsDeactivated && $this->canReplyToConversation($currentUser, $conv),
+            'can_transfer' => !$clientIsDeactivated && $this->canTransferConversation($currentUser, $conv),
+            'can_resolve' => !$clientIsDeactivated && $this->canResolveConversation($currentUser, $conv),
+            'can_invite' => !$clientIsDeactivated && $this->canInviteConversation($currentUser, $conv),
             'booking_id' => $conv->booking_id,
             'booking_label' => $booking ? ($booking->event_name ?: $booking->event_type ?: "Booking #{$booking->id}") : 'General inquiry',
             'booking_event_date' => $booking?->event_date,
@@ -813,7 +934,7 @@ class ChatController extends Controller
     private function getUnassignedQueue(int $limit = 25): array
     {
         return Conversation::unassigned()
-            ->with(['client:id,username,email', 'booking:id,event_name,event_type,event_date,status', 'latestMessage.sender:id,username', 'participants.user:id,username,full_name,role'])
+            ->with(['client:id,username,email,account_status,deactivated_at', 'booking:id,event_name,event_type,event_date,status', 'latestMessage.sender:id,username', 'participants.user:id,username,full_name,role'])
             ->withCount(['messages as unread_count' => function ($q) {
                 $q->whereNull('read_at');
             }])
@@ -830,7 +951,7 @@ class ChatController extends Controller
     private function getMyActiveChats($user, int $limit = 25): array
     {
         return Conversation::claimedBy($user->id)
-            ->with(['client:id,username,email', 'staff:id,username,full_name,role', 'booking:id,event_name,event_type,event_date,status', 'latestMessage.sender:id,username', 'participants.user:id,username,full_name,role'])
+            ->with(['client:id,username,email,account_status,deactivated_at', 'staff:id,username,full_name,role,account_status', 'booking:id,event_name,event_type,event_date,status', 'latestMessage.sender:id,username', 'participants.user:id,username,full_name,role,account_status'])
             ->withCount(['messages as unread_count' => function ($q) use ($user) {
                 $q->where('sender_id', '!=', $user->id)->whereNull('read_at');
             }])
@@ -848,7 +969,7 @@ class ChatController extends Controller
     {
         return Conversation::where('client_id', $user->id)
             ->where('status', 'active')
-            ->with(['client:id,username,email', 'staff:id,username,full_name,role', 'booking:id,event_name,event_type,event_date,status', 'latestMessage.sender:id,username', 'participants.user:id,username,full_name,role'])
+            ->with(['client:id,username,email,account_status,deactivated_at', 'staff:id,username,full_name,role,account_status', 'booking:id,event_name,event_type,event_date,status', 'latestMessage.sender:id,username', 'participants.user:id,username,full_name,role,account_status'])
             ->withCount(['messages as unread_count' => function ($q) use ($user) {
                 $q->where('sender_id', '!=', $user->id)->whereNull('read_at');
             }])
@@ -862,7 +983,8 @@ class ChatController extends Controller
     private function getAllStaffChats($user, int $limit = 25): array
     {
         return Conversation::query()
-            ->with(['client:id,username,email', 'staff:id,username,full_name,role', 'booking:id,event_name,event_type,event_date,status', 'latestMessage.sender:id,username', 'participants.user:id,username,full_name,role'])
+            ->withActiveClient()
+            ->with(['client:id,username,email,account_status,deactivated_at', 'staff:id,username,full_name,role,account_status', 'booking:id,event_name,event_type,event_date,status', 'latestMessage.sender:id,username', 'participants.user:id,username,full_name,role,account_status'])
             ->withCount(['messages as unread_count' => function ($q) use ($user) {
                 $q->where('sender_id', '!=', $user->id)->whereNull('read_at');
             }])
@@ -875,13 +997,14 @@ class ChatController extends Controller
 
     private function getAdminOversightChats($user, int $limit = 25): array
     {
-        $baseRelations = ['client:id,username,email', 'staff:id,username,full_name,role', 'booking:id,event_name,event_type,event_date,status', 'latestMessage.sender:id,username', 'participants.user:id,username,full_name,role'];
+        $baseRelations = ['client:id,username,email,account_status,deactivated_at', 'staff:id,username,full_name,role,account_status', 'booking:id,event_name,event_type,event_date,status', 'latestMessage.sender:id,username', 'participants.user:id,username,full_name,role,account_status'];
         $unreadCount = function ($q) use ($user) {
             $q->where('sender_id', '!=', $user->id)->whereNull('read_at');
         };
 
         $allActive = Conversation::query()
             ->where('status', 'active')
+            ->withActiveClient()
             ->with($baseRelations)
             ->withCount(['messages as unread_count' => $unreadCount])
             ->latest()
@@ -893,7 +1016,10 @@ class ChatController extends Controller
             ->values();
 
         $resolved = Conversation::query()
-            ->where('status', 'resolved')
+            ->where(function ($query) {
+                $query->where('status', 'resolved')
+                    ->orWhereHas('client', fn ($client) => $client->where('account_status', 'deactivated'));
+            })
             ->with($baseRelations)
             ->withCount(['messages as unread_count' => $unreadCount])
             ->latest('updated_at')
@@ -931,8 +1057,46 @@ class ChatController extends Controller
     {
         return ConversationParticipant::updateOrCreate(
             ['conversation_id' => $conversation->id, 'user_id' => $userId],
-            ['role' => $role, 'joined_by' => $joinedBy, 'joined_at' => now()]
+            [
+                'role' => $role,
+                'joined_by' => $joinedBy,
+                'joined_at' => now(),
+                'removed_at' => null,
+                'removed_by' => null,
+                'removal_reason' => null,
+            ]
         );
+    }
+
+    private function formerParticipantUsers(Conversation $conversation): array
+    {
+        return $conversation->participantHistory
+            ->whereNotNull('removed_at')
+            ->map(function ($participant) {
+                $user = $this->participantUser($participant->user, $participant->role);
+
+                if (!$user) {
+                    return null;
+                }
+
+                return array_merge($user, [
+                    'participant_status_label' => $participant->user?->isActive() ? 'Former participant' : 'Former staff',
+                    'removed_at' => optional($participant->removed_at)->toIso8601String(),
+                    'removal_reason' => $participant->removal_reason,
+                ]);
+            })
+            ->filter()
+            ->values()
+            ->toArray();
+    }
+
+    private function softRemoveParticipants($query, string $reason, ?int $removedBy): int
+    {
+        return $query->active()->update([
+            'removed_at' => now(),
+            'removed_by' => $removedBy,
+            'removal_reason' => $reason,
+        ]);
     }
 
     private function canReplyToConversation($user, Conversation $conversation): bool
@@ -979,12 +1143,15 @@ class ChatController extends Controller
             return null;
         }
 
+        $name = $user->full_name ?: $user->username;
+
         return [
             'id' => $user->id,
-            'name' => $user->full_name ?: $user->username,
+            'name' => $user->isActive() ? $name : 'Former staff: ' . $name,
             'username' => $user->username,
             'role' => $role,
             'user_role' => $user->role,
+            'account_status' => $user->account_status ?? 'active',
         ];
     }
 
@@ -992,9 +1159,17 @@ class ChatController extends Controller
     {
         return $conversation->participants
             ->where('role', $role)
+            ->whereNull('removed_at')
             ->map(fn ($participant) => $this->participantUser($participant->user, $role))
             ->filter()
             ->values()
             ->all();
+    }
+
+    private function hasInactiveClient(Conversation $conversation): bool
+    {
+        $conversation->loadMissing('client');
+
+        return $conversation->client && !$conversation->client->isActive();
     }
 }

@@ -22,7 +22,9 @@ class ContactInquiry extends Model
         'status',
         'source',
         'assigned_to',
+        'duplicate_user_id',
         'resolved_at',
+        'archived_at',
         'staff_notes',
         'metadata',
     ];
@@ -33,6 +35,7 @@ class ContactInquiry extends Model
             'event_date' => 'date',
             'pax' => 'integer',
             'resolved_at' => 'datetime',
+            'archived_at' => 'datetime',
             'metadata' => 'array',
         ];
     }
@@ -40,5 +43,10 @@ class ContactInquiry extends Model
     public function assignee()
     {
         return $this->belongsTo(User::class, 'assigned_to');
+    }
+
+    public function duplicateUser()
+    {
+        return $this->belongsTo(User::class, 'duplicate_user_id');
     }
 }

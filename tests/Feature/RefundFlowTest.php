@@ -122,6 +122,178 @@ class RefundFlowTest extends TestCase
         ]);
     }
 
+    public function test_failed_refund_retry_reuses_case_without_duplicate(): void
+    {
+        $accounting = $this->user('Accounting');
+        $client = $this->user('Client');
+        $booking = $this->booking($client, ['status' => 'Cancelled', 'total_cost' => 50000]);
+        $payment = $this->payment($booking, [
+            'amount' => 20000,
+            'status' => 'Paid',
+            'payment_method' => 'PayMongo',
+            'paymongo_payment_id' => 'pay_refund_retry',
+        ]);
+
+        RefundCase::create([
+            'booking_id' => $booking->id,
+            'payment_id' => $payment->id,
+            'amount' => 15000,
+            'non_refundable_amount' => 5000,
+            'reason' => 'cancelled_booking',
+            'status' => 'Failed',
+            'notes' => 'Previous provider failure.',
+        ]);
+
+        $this->mock(PayMongoService::class, function (MockInterface $mock): void {
+            $mock->shouldReceive('createRefund')
+                ->once()
+                ->andReturn(['id' => 'ref_retry_123', 'status' => 'succeeded']);
+        });
+
+        $this->actingAs($accounting)
+            ->postJson("/api/accounting/refund/{$booking->id}")
+            ->assertOk();
+
+        $this->assertSame(1, RefundCase::where('payment_id', $payment->id)->count());
+        $this->assertDatabaseHas('refund_cases', [
+            'payment_id' => $payment->id,
+            'status' => 'Refunded',
+            'provider_refund_id' => 'ref_retry_123',
+        ]);
+    }
+
+    public function test_explicit_provider_refund_retry_updates_case_payment_and_events(): void
+    {
+        $accounting = $this->user('Accounting');
+        $client = $this->user('Client');
+        $booking = $this->booking($client, ['status' => 'Cancelled', 'total_cost' => 50000]);
+        $payment = $this->payment($booking, [
+            'amount' => 20000,
+            'status' => 'Paid',
+            'payment_method' => 'PayMongo',
+            'paymongo_payment_id' => 'pay_explicit_retry',
+        ]);
+        $case = RefundCase::create([
+            'booking_id' => $booking->id,
+            'payment_id' => $payment->id,
+            'amount' => 15000,
+            'non_refundable_amount' => 5000,
+            'reason' => 'cancelled_booking',
+            'status' => 'Failed',
+            'last_action' => 'provider_refund_failed',
+        ]);
+
+        $this->mock(PayMongoService::class, function (MockInterface $mock): void {
+            $mock->shouldReceive('createRefund')
+                ->once()
+                ->with('pay_explicit_retry', 15000.0, 'requested_by_customer', \Mockery::type('string'))
+                ->andReturn(['id' => 'ref_explicit_retry', 'status' => 'succeeded']);
+        });
+
+        $this->actingAs($accounting)
+            ->postJson("/api/accounting/refund/{$booking->id}/retry_provider_refund", [
+                'refund_case_id' => $case->id,
+            ])
+            ->assertOk()
+            ->assertJsonPath('message', 'Provider refund retried successfully.');
+
+        $this->assertSame('Refunded', $payment->fresh()->status);
+        $this->assertDatabaseHas('refund_cases', [
+            'id' => $case->id,
+            'status' => 'Refunded',
+            'provider_refund_id' => 'ref_explicit_retry',
+        ]);
+        $this->assertDatabaseHas('payment_events', [
+            'payment_id' => $payment->id,
+            'event_type' => 'refund_retry_requested',
+            'source' => 'accounting',
+        ]);
+        $this->assertDatabaseHas('payment_events', [
+            'payment_id' => $payment->id,
+            'event_type' => 'refund_completed',
+            'source' => 'paymongo',
+        ]);
+    }
+
+    public function test_explicit_provider_refund_retry_requires_provider_payment_id(): void
+    {
+        $accounting = $this->user('Accounting');
+        $client = $this->user('Client');
+        $booking = $this->booking($client, ['status' => 'Cancelled', 'total_cost' => 50000]);
+        $payment = $this->payment($booking, [
+            'amount' => 20000,
+            'status' => 'Paid',
+            'payment_method' => 'PayMongo',
+            'paymongo_payment_id' => null,
+            'paymongo_checkout_session_id' => 'checkout_missing_reference',
+        ]);
+        $case = RefundCase::create([
+            'booking_id' => $booking->id,
+            'payment_id' => $payment->id,
+            'amount' => 15000,
+            'non_refundable_amount' => 5000,
+            'reason' => 'cancelled_booking',
+            'status' => 'Failed',
+        ]);
+
+        $this->mock(PayMongoService::class, function (MockInterface $mock): void {
+            $mock->shouldNotReceive('createRefund');
+        });
+
+        $this->actingAs($accounting)
+            ->postJson("/api/accounting/refund/{$booking->id}/retry_provider_refund", [
+                'refund_case_id' => $case->id,
+            ])
+            ->assertStatus(422);
+
+        $this->assertSame('Paid', $payment->fresh()->status);
+        $this->assertDatabaseHas('refund_cases', [
+            'id' => $case->id,
+            'status' => 'Failed',
+            'last_action' => 'missing_provider_payment_id',
+        ]);
+    }
+
+    public function test_manual_refund_action_requires_notes_and_closes_case(): void
+    {
+        $accounting = $this->user('Accounting');
+        $client = $this->user('Client');
+        $booking = $this->booking($client, ['status' => 'Cancelled', 'total_cost' => 50000]);
+        $payment = $this->payment($booking, [
+            'amount' => 20000,
+            'status' => 'Paid',
+            'payment_method' => 'Manual',
+        ]);
+        $case = RefundCase::create([
+            'booking_id' => $booking->id,
+            'payment_id' => $payment->id,
+            'amount' => 15000,
+            'non_refundable_amount' => 5000,
+            'reason' => 'cancelled_booking',
+            'status' => 'Manual Review',
+        ]);
+
+        $this->actingAs($accounting)
+            ->postJson("/api/accounting/refund/{$booking->id}/mark_manually_refunded", [
+                'refund_case_id' => $case->id,
+            ])
+            ->assertStatus(422);
+
+        $this->actingAs($accounting)
+            ->postJson("/api/accounting/refund/{$booking->id}/mark_manually_refunded", [
+                'refund_case_id' => $case->id,
+                'notes' => 'Refunded via bank transfer reference ABC123.',
+            ])
+            ->assertOk();
+
+        $this->assertSame('Refunded', $payment->fresh()->status);
+        $this->assertDatabaseHas('refund_cases', [
+            'id' => $case->id,
+            'status' => 'Manual Refunded',
+            'last_action' => 'mark_manually_refunded',
+        ]);
+    }
+
     public function test_non_refundable_reservation_fee_is_forfeited_without_provider_refund(): void
     {
         $accounting = $this->user('Accounting');

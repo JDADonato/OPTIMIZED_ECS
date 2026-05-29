@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\Package;
+use App\Models\EventType;
 use Illuminate\Http\Request;
 
 class PackageController extends Controller
@@ -12,7 +13,9 @@ class PackageController extends Controller
      */
     public function index(Request $request)
     {
+        $activeSlugs = EventType::whereRaw('is_active is true')->pluck('slug')->all();
         $packages = Package::whereRaw('is_active is true')
+            ->whereIn('type', $activeSlugs)
             ->orderBy('type')
             ->orderBy('name')
             ->paginate($request->get('per_page', 50));
@@ -34,6 +37,8 @@ class PackageController extends Controller
      */
     public function byType($type)
     {
+        abort_unless(EventType::where('slug', $type)->whereRaw('is_active is true')->exists(), 404);
+
         $packages = Package::whereRaw('is_active is true')
             ->where(function ($query) use ($type) {
                 $query->where('type', $type)

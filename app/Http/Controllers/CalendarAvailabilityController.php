@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\Booking;
 use App\Models\CalendarAvailabilityOverride;
 use App\Services\CalendarAvailabilityService;
+use App\Services\OperationalBroadcastService;
 use App\Support\ResourceVersion;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
@@ -175,6 +176,9 @@ class CalendarAvailabilityController extends Controller
             $override = CalendarAvailabilityOverride::find($id);
         }
 
+        app(OperationalBroadcastService::class)
+            ->staffQueueChanged('availability', 'calendar_availability_override', $override->id, 'updated', 'Availability updated.');
+
         return response()->json([
             'message' => 'Availability updated.',
             'override' => $availability->serializeOverride($override->fresh(['creator', 'updater'])),
@@ -184,7 +188,11 @@ class CalendarAvailabilityController extends Controller
     public function destroy(string $date): \Illuminate\Http\JsonResponse
     {
         $dateString = Carbon::parse($date)->toDateString();
-        CalendarAvailabilityOverride::whereDate('date', $dateString)->delete();
+        $ids = CalendarAvailabilityOverride::whereDate('date', $dateString)->pluck('id');
+        CalendarAvailabilityOverride::whereIn('id', $ids)->delete();
+
+        app(OperationalBroadcastService::class)
+            ->staffQueueChanged('availability', 'calendar_availability_override', $ids->first() ?: $dateString, 'cleared', 'Availability override cleared.');
 
         return response()->json(['message' => 'Availability override cleared.']);
     }

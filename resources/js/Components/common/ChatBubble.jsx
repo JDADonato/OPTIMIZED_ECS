@@ -1,7 +1,11 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import useSmartRefresh from '../../hooks/useSmartRefresh';
+import useRealtimeStatus from '../../hooks/useRealtimeStatus';
+import ConfirmModal from './ConfirmModal';
+import { LiveSyncIndicator, SoftRefreshBoundary } from './LiveFeedback';
 import { customerBookingStatus } from '../../utils/statusLabels';
 import csrfFetch from '../../utils/csrf';
+import { operationalChannelsForUser } from '../../utils/liveChannels';
 
 /**
  * Phase 2: Client Chat Bubble — WebSocket-powered.
@@ -24,6 +28,8 @@ const sortMessagesOldestFirst = (items = []) => [...items].sort((a, b) => {
 
 const ChatBubble = ({ user, openOnMount = false }) => {
     const hasRealtime = typeof window !== 'undefined' && Boolean(window.Echo);
+    const { syncState: realtimeSyncState } = useRealtimeStatus();
+    const liveChannels = useMemo(() => operationalChannelsForUser(user), [user?.id, user?.role]);
     const [isOpen, setIsOpen] = useState(Boolean(openOnMount));
     const [conversation, setConversation] = useState(null);
     const [messages, setMessages] = useState([]);
@@ -36,11 +42,13 @@ const ChatBubble = ({ user, openOnMount = false }) => {
     const [showBookingPicker, setShowBookingPicker] = useState(false);
     const [staffTyping, setStaffTyping] = useState(false);
     const [loadingConv, setLoadingConv] = useState(false);
+    const [backgroundSyncing, setBackgroundSyncing] = useState(false);
     const [hasOlderMessages, setHasOlderMessages] = useState(false);
     const [loadingOlderMessages, setLoadingOlderMessages] = useState(false);
     const [editingMessageId, setEditingMessageId] = useState(null);
     const [editingText, setEditingText] = useState('');
     const [openActionMessageId, setOpenActionMessageId] = useState(null);
+    const [deleteConfirmModal, setDeleteConfirmModal] = useState({ isOpen: false, message: null, busy: false });
     const messagesEndRef = useRef(null);
     const shouldScrollToBottomRef = useRef(false);
     const typingTimeoutRef = useRef(null);
@@ -170,7 +178,23 @@ const ChatBubble = ({ user, openOnMount = false }) => {
         enabled: Boolean(user),
         interval: hasRealtime ? (isOpen ? 60000 : 120000) : (isOpen ? 15000 : 30000),
         idleAfter: 180000,
-        refresh: fetchUnreadCount,
+        refresh: async () => {
+            setBackgroundSyncing(true);
+            try {
+                await fetchUnreadCount();
+                if (isOpen) {
+                    const conv = await fetchConversation({ force: true });
+                    if (conv?.id) {
+                        await fetchMessages(conv.id, { force: true });
+                    }
+                    await fetchBookings({ force: true });
+                }
+            } finally {
+                setBackgroundSyncing(false);
+            }
+        },
+        channels: liveChannels,
+        resources: ['chat', 'bookings', 'finance'],
     });
 
     // ─── Echo: Subscribe When Conversation Exists ───
@@ -455,13 +479,21 @@ const ChatBubble = ({ user, openOnMount = false }) => {
 
     const deleteMessage = async (msg) => {
         setOpenActionMessageId(null);
-        if (!window.confirm('Delete this message? It will be replaced with "Message deleted."')) return;
+        setDeleteConfirmModal({ isOpen: true, message: msg, busy: false });
+    };
+
+    const confirmDeleteMessage = async () => {
+        const msg = deleteConfirmModal.message;
+        if (!msg) return;
+        setDeleteConfirmModal(prev => ({ ...prev, busy: true }));
         try {
             const res = await csrfFetch(`/api/chat/messages/${msg.id}`, { method: 'DELETE' });
             const payload = await res.json().catch(() => ({}));
             if (!res.ok) throw new Error(payload.error || 'Could not delete message.');
             setMessages(prev => prev.map(item => item.id === msg.id ? payload.data : item));
+            setDeleteConfirmModal({ isOpen: false, message: null, busy: false });
         } catch (e) {
+            setDeleteConfirmModal(prev => ({ ...prev, busy: false }));
             setTopicWarning(e.message || 'Could not delete message.');
         }
     };
@@ -508,6 +540,16 @@ const ChatBubble = ({ user, openOnMount = false }) => {
                                         ? `Currently with ${conversation.staff_name}`
                                         : (conversation ? 'Waiting for staff...' : 'Send a message to get started')}
                                 </p>
+                                <div className="mt-1">
+                                    <LiveSyncIndicator
+                                        state={backgroundSyncing ? 'syncing' : realtimeSyncState}
+                                        compact
+                                        onRetry={() => {
+                                            fetchUnreadCount();
+                                            if (conversation?.id) fetchMessages(conversation.id, { force: true });
+                                        }}
+                                    />
+                                </div>
                             </div>
                         </div>
                         <button onClick={handleClose} className="rounded-full border border-[#ead8cc] bg-[#fffaf3] p-2 text-[#720101] transition-colors hover:bg-[#fff4df]" aria-label="Minimize chat">
@@ -525,6 +567,7 @@ const ChatBubble = ({ user, openOnMount = false }) => {
                                 </div>
                             </div>
                         ) : (
+                            <SoftRefreshBoundary className="h-full" refreshing={backgroundSyncing} stale={realtimeSyncState === 'stale' || realtimeSyncState === 'reconnecting'} staleMessage="Viewing saved chat. New messages will appear when the connection catches up.">
                             <div className="flex flex-col h-full">
                                 <div className="flex-1 overflow-y-auto p-4 space-y-3" style={{ maxHeight: 'calc(560px - 142px)' }}>
                                     {/* Status Indicator */}
@@ -678,6 +721,7 @@ const ChatBubble = ({ user, openOnMount = false }) => {
                                     </div>
                                 )}
                             </div>
+                            </SoftRefreshBoundary>
                         )}
                     </div>
 
@@ -701,6 +745,16 @@ const ChatBubble = ({ user, openOnMount = false }) => {
                     </form>
                 </div>
             )}
+            <ConfirmModal
+                isOpen={deleteConfirmModal.isOpen}
+                title="Delete this message?"
+                message="The message will be replaced with Message deleted."
+                confirmText="Delete"
+                tone="danger"
+                busy={deleteConfirmModal.busy}
+                onCancel={() => setDeleteConfirmModal({ isOpen: false, message: null, busy: false })}
+                onConfirm={confirmDeleteMessage}
+            />
         </>
     );
 };

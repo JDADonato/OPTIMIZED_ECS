@@ -17,12 +17,16 @@ class EventType extends Model
         'security_type',
         'security_label',
         'security_description',
+        'is_active',
+        'archived_at',
     ];
 
     protected function casts(): array
     {
         return [
             'applicable_setups' => 'array',
+            'is_active' => 'boolean',
+            'archived_at' => 'datetime',
         ];
     }
 

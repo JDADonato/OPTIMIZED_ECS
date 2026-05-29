@@ -9,7 +9,11 @@ use App\Models\RefundCase;
 use App\Models\User;
 use App\Notifications\PaymentReminderNotification;
 use App\Services\BookingManagementService;
+use App\Services\NotificationRecipientService;
+use App\Services\OperationalBroadcastService;
 use App\Services\PaymentEventService;
+use App\Services\PaymentScheduleVoidService;
+use App\Services\PayMongoService;
 use App\Support\ApiResponse;
 use App\Support\ResourceVersion;
 use Illuminate\Http\Request;
@@ -55,7 +59,7 @@ class AccountingController extends Controller
                 'event_type',
                 'created_at',
             ])
-            ->with(['user:id,username', 'payments' => function ($q) {
+            ->with(['user:id,username', 'payments' => function ($q) use ($request) {
                 $q->select([
                     'id',
                     'booking_id',
@@ -69,8 +73,12 @@ class AccountingController extends Controller
                     'paymongo_checkout_session_id',
                     'paymongo_payment_id',
                     'paymongo_reference_number',
+                    'voided_at',
+                    'void_reason',
+                    'superseded_by_payment_id',
                 ])
                   ->whereNotNull('payment_type')
+                  ->when(!$request->boolean('include_voided'), fn ($query) => $query->active())
                   ->orderByRaw("CASE payment_type WHEN 'Reservation' THEN 1 WHEN 'DownPayment' THEN 2 WHEN 'Final' THEN 3 ELSE 4 END")
                   ->orderBy('due_date')
                   ->orderBy('id');
@@ -95,19 +103,21 @@ class AccountingController extends Controller
         }
 
         if ($request->query('payment_status') === 'pending') {
-            $query->whereHas('payments', fn ($paymentQuery) => $paymentQuery->whereNotIn('status', ['Paid', 'Verified']));
+            $query->whereHas('payments', fn ($paymentQuery) => $paymentQuery->active()->whereNotIn('status', ['Paid', 'Verified']));
         } elseif ($request->query('payment_status') === 'complete') {
             $query->whereHas('payments')
-                ->whereDoesntHave('payments', fn ($paymentQuery) => $paymentQuery->whereNotIn('status', ['Paid', 'Verified']));
+                ->whereDoesntHave('payments', fn ($paymentQuery) => $paymentQuery->active()->whereNotIn('status', ['Paid', 'Verified']));
         }
 
         match ($request->query('finance_segment')) {
-            'needs_verification' => $query->whereHas('payments', fn ($paymentQuery) => $paymentQuery->where('status', 'Pending')),
+            'needs_verification' => $query->whereHas('payments', fn ($paymentQuery) => $paymentQuery->active()->where('status', 'Pending')),
             'overdue' => $query->whereHas('payments', fn ($paymentQuery) => $paymentQuery
+                ->active()
                 ->where('status', 'Pending')
                 ->whereNotNull('due_date')
                 ->whereDate('due_date', '<', now()->toDateString())),
             'upcoming' => $query->whereHas('payments', fn ($paymentQuery) => $paymentQuery
+                ->active()
                 ->where('status', 'Pending')
                 ->whereNotNull('due_date')
                 ->whereBetween('due_date', [now()->toDateString(), now()->addDays(7)->toDateString()])),
@@ -162,6 +172,7 @@ class AccountingController extends Controller
         $approvedBookings = fn ($query) => $query->whereNotIn('status', ['Pending', 'Cancelled', 'Completed', 'completed']);
 
         $paymentQuery = Payment::query()
+            ->active()
             ->whereHas('booking', $approvedBookings);
 
         $pending = (clone $paymentQuery)->where('status', 'Pending')->count();
@@ -175,7 +186,7 @@ class AccountingController extends Controller
             ->sum('amount');
         $refunds = Booking::query()
             ->where('status', 'Cancelled')
-            ->whereHas('payments', fn ($query) => $query->whereIn('status', ['Verified', 'Paid']))
+            ->whereHas('payments', fn ($query) => $query->active()->whereIn('status', ['Verified', 'Paid']))
             ->count();
         $exceptions = (clone $paymentQuery)
             ->where(function ($query) {
@@ -209,6 +220,7 @@ class AccountingController extends Controller
     public function getPendingPayments(Request $request)
     {
         $query = Payment::with(['booking:id,event_date,client_full_name,user_id', 'booking.user:id,username'])
+            ->active()
             ->where('status', 'Pending')
             ->whereHas('booking', function ($q) {
                 $q->where('status', '!=', 'Pending'); // Only payments for approved/confirmed bookings
@@ -246,7 +258,7 @@ class AccountingController extends Controller
         $newStatus = $request->action === 'Verify' ? 'Verified' : 'Rejected';
         $verifiedBy = Auth::user()->username ?? 'accounting';
 
-        $payment = Payment::find($id);
+        $payment = Payment::active()->find($id);
 
         if (!$payment) {
             return response()->json(['error' => 'Payment not found'], 404);
@@ -270,16 +282,19 @@ class AccountingController extends Controller
         );
 
         // ─── Send notification to the client ───
+        app(OperationalBroadcastService::class)
+            ->financeChanged($payment->booking, 'payment', $payment->id, strtolower($newStatus), "Payment {$newStatus}.");
+
         try {
             $booking = Booking::find($payment->booking_id);
             if ($booking && $newStatus === 'Verified') {
                 $client = \App\Models\User::find($booking->user_id);
                 if ($client) {
-                    $client->notify(new \App\Notifications\PaymentApprovedNotification(
+                    app(NotificationRecipientService::class)->sendToUser($client, new \App\Notifications\PaymentApprovedNotification(
                         $booking,
                         $payment->payment_type,
                         (float) $payment->amount
-                    ));
+                    ), 'payment_approved');
                 }
             }
         } catch (\Exception $e) {
@@ -300,7 +315,7 @@ class AccountingController extends Controller
             'due_date' => 'required|date',
         ]);
 
-        $payment = Payment::find($id);
+        $payment = Payment::active()->find($id);
 
         if (!$payment) {
             return response()->json(['error' => 'Payment not found'], 404);
@@ -315,6 +330,9 @@ class AccountingController extends Controller
             'due_date' => $request->due_date,
         ]);
 
+        app(OperationalBroadcastService::class)
+            ->financeChanged($payment->booking, 'payment', $payment->id, 'updated', 'Payment term updated.');
+
         return response()->json(['success' => true, 'message' => 'Payment updated successfully']);
     }
 
@@ -328,7 +346,7 @@ class AccountingController extends Controller
             'terms.*.due_date' => 'required|date',
         ]);
 
-        $booking = Booking::with('payments')->find($id);
+        $booking = Booking::with(['payments' => fn ($query) => $query->active()])->find($id);
         if (!$booking) {
             return response()->json(['error' => 'Booking not found'], 404);
         }
@@ -364,11 +382,14 @@ class AccountingController extends Controller
         }
 
         DB::transaction(function () use ($booking, $data, $totalCost, $incomingIds) {
-            $stalePayments = $booking->payments();
+            $voider = app(PaymentScheduleVoidService::class);
+            $stalePayments = $booking->payments()->active();
             if (!empty($incomingIds)) {
                 $stalePayments->whereNotIn('id', $incomingIds);
             }
-            $stalePayments->whereNotIn('status', ['Verified', 'Paid', 'Refunded'])->delete();
+            $stalePayments->whereNotIn('status', ['Verified', 'Paid', 'Refunded'])
+                ->get()
+                ->each(fn (Payment $payment) => $voider->void($payment, 'accounting_terms_removed', 'accounting', Auth::id()));
 
             $remaining = round($totalCost, 2);
             $lastIndex = count($data['terms']) - 1;
@@ -396,7 +417,8 @@ class AccountingController extends Controller
                 ];
 
                 if (!empty($term['id'])) {
-                    Payment::where('id', $term['id'])
+                    Payment::active()
+                        ->where('id', $term['id'])
                         ->where('booking_id', $booking->id)
                         ->update($payload);
                 } else {
@@ -408,7 +430,8 @@ class AccountingController extends Controller
         });
 
         $booking->load(['payments' => function ($q) {
-            $q->orderByRaw("CASE payment_type WHEN 'Reservation' THEN 1 WHEN 'DownPayment' THEN 2 WHEN 'Final' THEN 3 ELSE 4 END")
+            $q->active()
+                ->orderByRaw("CASE payment_type WHEN 'Reservation' THEN 1 WHEN 'DownPayment' THEN 2 WHEN 'Final' THEN 3 ELSE 4 END")
                 ->orderBy('due_date')
                 ->orderBy('id');
         }]);
@@ -422,6 +445,9 @@ class AccountingController extends Controller
                 $payment->paymongo_payment_id ?: $payment->paymongo_checkout_session_id
             );
         }
+
+        app(OperationalBroadcastService::class)
+            ->financeChanged($booking->fresh(), 'booking_payment_terms', $booking->id, 'updated', 'Payment terms updated.');
 
         return response()->json([
             'success' => true,
@@ -452,8 +478,12 @@ class AccountingController extends Controller
                 'paymongo_payment_id',
                 'paymongo_reference_number',
                 'paymongo_event_id',
+                'voided_at',
+                'void_reason',
+                'superseded_by_payment_id',
             ])
             ->with(['booking:id,event_date,client_full_name,package_id,user_id', 'booking.user:id,username'])
+            ->when(!$request->boolean('include_voided'), fn ($query) => $query->active())
             ->whereHas('booking', function ($q) {
                 $q->whereNotIn('status', ['Pending', 'Cancelled']); // Hide ledger entries for unapproved/cancelled bookings
             });
@@ -514,6 +544,7 @@ class AccountingController extends Controller
     {
         $payments = Payment::query()
             ->with(['booking:id,event_date,client_full_name,client_email,status,total_cost', 'events'])
+            ->active()
             ->whereHas('booking', fn ($query) => $query->whereNotIn('status', ['Pending']))
             ->latest()
             ->limit(300)
@@ -572,7 +603,7 @@ class AccountingController extends Controller
      */
     public function remindClient(int $paymentId)
     {
-        $payment = Payment::with([
+        $payment = Payment::active()->with([
             'booking:id,user_id,client_email,client_full_name,client_phone',
         ])->find($paymentId);
 
@@ -597,22 +628,28 @@ class AccountingController extends Controller
 
             if ($client) {
                 try {
-                    $client->notify(new PaymentReminderNotification($payment));
-                    $notified = true;
+                    $notified = app(NotificationRecipientService::class)
+                        ->sendToUser($client, new PaymentReminderNotification($payment), 'payment_reminder');
 
-                    PaymentEventService::record(
-                        'payment_reminder_sent',
-                        'accounting',
-                        $payment,
-                        ['channel' => 'notification'],
-                        $payment->paymongo_payment_id ?: $payment->paymongo_checkout_session_id
-                    );
+                    if ($notified) {
+                        PaymentEventService::record(
+                            'payment_reminder_sent',
+                            'accounting',
+                            $payment,
+                            ['channel' => 'notification'],
+                            $payment->paymongo_payment_id ?: $payment->paymongo_checkout_session_id
+                        );
 
-                    Log::info('Payment reminder notification sent.', [
-                        'payment_id' => $paymentId,
-                        'user_id'    => $client->id,
-                        'email'      => $client->email,
-                    ]);
+                        Log::info('Payment reminder notification sent.', [
+                            'payment_id' => $paymentId,
+                            'user_id'    => $client->id,
+                            'email'      => $client->email,
+                        ]);
+                    } else {
+                        return response()->json([
+                            'error' => 'This client account is not reachable for operational notifications.',
+                        ], 422);
+                    }
                 } catch (\Throwable $e) {
                     Log::error('PaymentReminderNotification failed.', [
                         'payment_id' => $paymentId,
@@ -630,7 +667,7 @@ class AccountingController extends Controller
         if (!$notified) {
             $email = $booking->client_email;
 
-            if (!$email) {
+            if (!$email || str_ends_with((string) $email, '@eloquente.invalid')) {
                 return response()->json([
                     'error' => 'No email address found for this client. Please update the booking with a valid email first.',
                 ], 422);
@@ -723,11 +760,11 @@ class AccountingController extends Controller
     {
         $items = Booking::query()
             ->with([
-                'payments' => fn ($query) => $query->whereIn('status', ['Verified', 'Paid']),
-                'refundCases:id,booking_id,status',
+                'payments' => fn ($query) => $query->active()->whereIn('status', ['Verified', 'Paid']),
+                'refundCases:id,booking_id,payment_id,amount,non_refundable_amount,status,last_action,provider_refund_id,notes,updated_at',
             ])
             ->where('status', 'Cancelled')
-            ->whereHas('payments', fn ($query) => $query->whereIn('status', ['Verified', 'Paid']))
+            ->whereHas('payments', fn ($query) => $query->active()->whereIn('status', ['Verified', 'Paid']))
             ->get()
             ->map(function (Booking $booking) {
                 $refundCases = $booking->refundCases;
@@ -742,10 +779,24 @@ class AccountingController extends Controller
                     'refund_case_count' => $refundCases->count(),
                     'refund_status' => match (true) {
                         $refundCases->contains(fn (RefundCase $case) => in_array($case->status, ['Failed', 'Manual Review'], true)) => 'Manual Review',
-                        $refundCases->contains(fn (RefundCase $case) => in_array($case->status, ['Processing', 'Approved', 'Requested'], true)) => 'In Progress',
+                        $refundCases->contains(fn (RefundCase $case) => in_array($case->status, ['Processing', 'Approved', 'Requested'], true)) => 'Provider refund',
+                        $refundCases->contains(fn (RefundCase $case) => in_array($case->status, ['Manual Refunded', 'Refunded'], true)) => 'Completed',
+                        $refundCases->contains(fn (RefundCase $case) => in_array($case->status, ['Forfeited', 'No Refund Due'], true)) => 'Forfeited/no refund',
                         $refundCases->isNotEmpty() => 'Reviewed',
                         default => 'Needs Review',
                     },
+                    'refund_cases' => $refundCases->map(fn (RefundCase $case) => [
+                        'id' => $case->id,
+                        'payment_id' => $case->payment_id,
+                        'amount' => (float) $case->amount,
+                        'non_refundable_amount' => (float) $case->non_refundable_amount,
+                        'status' => $case->status,
+                        'last_action' => $case->last_action,
+                        'provider_refund_id' => $case->provider_refund_id,
+                        'notes' => $case->notes,
+                        'updated_at' => $case->updated_at?->toIso8601String(),
+                        'next_actions' => $this->refundCaseNextActions($case),
+                    ])->values(),
                 ];
             })
             ->values();
@@ -767,6 +818,7 @@ class AccountingController extends Controller
         }
 
         $payments = Payment::where('booking_id', $bookingId)
+            ->active()
             ->whereIn('status', ['Verified', 'Paid'])
             ->orderByRaw("CASE payment_type WHEN 'Reservation' THEN 1 WHEN 'DownPayment' THEN 2 WHEN 'Final' THEN 3 ELSE 4 END")
             ->orderBy('id')
@@ -792,17 +844,36 @@ class AccountingController extends Controller
                 $nonRefundableRemaining = round($nonRefundableRemaining - $forfeitedForPayment, 2);
                 $refundAmount = min(round($paidAmount - $forfeitedForPayment, 2), $remainingRefundable);
 
-                $refundCase = RefundCase::create([
+                $refundCase = RefundCase::where('payment_id', $payment->id)
+                    ->whereNotIn('status', ['Refunded', 'Manual Refunded', 'Forfeited', 'No Refund Due', 'Rejected', 'Cancelled'])
+                    ->latest()
+                    ->first();
+
+                if ($refundCase && in_array($refundCase->status, ['Processing', 'Approved', 'Requested'], true)) {
+                    $errors[] = 'A refund case is already in progress for one payment.';
+                    continue;
+                }
+
+                $refundCase ??= new RefundCase([
+                    'booking_id' => $booking->id,
+                    'payment_id' => $payment->id,
+                    'requested_by' => Auth::id(),
+                ]);
+
+                $refundCase->fill([
                     'booking_id' => $booking->id,
                     'payment_id' => $payment->id,
                     'amount' => max($refundAmount, 0),
                     'non_refundable_amount' => $forfeitedForPayment,
                     'reason' => 'cancelled_booking',
                     'status' => $refundAmount > 0 ? 'Approved' : 'Refunded',
+                    'last_action' => 'retry_provider_refund',
                     'requested_by' => Auth::id(),
                     'approved_by' => Auth::id(),
+                    'resolved_by' => $refundAmount > 0 ? null : Auth::id(),
+                    'resolved_at' => $refundAmount > 0 ? null : now(),
                     'notes' => $refundAmount > 0 ? null : 'Paid amount was fully non-refundable under cancellation policy.',
-                ]);
+                ])->save();
 
                 PaymentEventService::record(
                     'refund_requested',
@@ -841,7 +912,7 @@ class AccountingController extends Controller
                 // If it was paid via PayMongo and has a payment ID, issue a real refund
                 if ($payment->paymongo_payment_id) {
                     try {
-                        $refundCase->update(['status' => 'Processing']);
+                        $refundCase->update(['status' => 'Processing', 'last_action' => 'retry_provider_refund']);
                         $providerResponse = $payMongo->createRefund(
                             paymentId: $payment->paymongo_payment_id,
                             amount: $refundAmount,
@@ -850,6 +921,9 @@ class AccountingController extends Controller
                         );
                         $refundCase->update([
                             'status' => 'Refunded',
+                            'last_action' => 'provider_refund_completed',
+                            'resolved_by' => Auth::id(),
+                            'resolved_at' => now(),
                             'provider_refund_id' => data_get($providerResponse, 'id'),
                             'provider_response' => $providerResponse,
                         ]);
@@ -860,6 +934,7 @@ class AccountingController extends Controller
                         ]);
                         $refundCase->update([
                             'status' => 'Failed',
+                            'last_action' => 'provider_refund_failed',
                             'provider_response' => ['error' => $apiException->getMessage()],
                             'notes' => 'Automatic provider refund failed. Review PayMongo logs before retrying.',
                         ]);
@@ -883,6 +958,7 @@ class AccountingController extends Controller
                     ]);
                     $refundCase->update([
                         'status' => 'Failed',
+                        'last_action' => 'missing_provider_payment_id',
                         'notes' => $safeMissingReferenceMessage,
                     ]);
                     PaymentEventService::record(
@@ -926,6 +1002,7 @@ class AccountingController extends Controller
                 Log::error("Failed to process refund for payment #{$payment->id}: " . $e->getMessage());
                 $refundCase?->update([
                     'status' => 'Failed',
+                    'last_action' => 'refund_case_error',
                     'notes' => 'Refund case could not be completed. Please review server logs.',
                     'provider_response' => ['error' => $e->getMessage()],
                 ]);
@@ -934,6 +1011,9 @@ class AccountingController extends Controller
         }
 
         if (count($errors) > 0 && $refundCount === 0) {
+            app(OperationalBroadcastService::class)
+                ->financeChanged($booking->fresh(), 'refund_case', $booking->id, 'failed', 'Refund cases need review.');
+
             return response()->json([
                 'error' => 'Failed to process refunds.',
                 'details' => array_values(array_unique($errors))
@@ -953,7 +1033,245 @@ class AccountingController extends Controller
             'errors' => $errors,
         ]);
 
+        app(OperationalBroadcastService::class)
+            ->financeChanged($booking->fresh(), 'refund_case', $booking->id, count($errors) > 0 ? 'partially_failed' : 'processed', 'Refund cases updated.');
+
         return response()->json(['success' => true, 'message' => $message]);
+    }
+
+    public function refundAction(Request $request, int $bookingId, string $action, PayMongoService $payMongo)
+    {
+        $validated = $request->validate([
+            'refund_case_id' => ['nullable', 'integer', 'exists:refund_cases,id'],
+            'payment_id' => ['nullable', 'integer', 'exists:payments,id'],
+            'notes' => ['nullable', 'string', 'max:3000'],
+        ]);
+
+        if (!in_array($action, ['retry_provider_refund', 'mark_manually_refunded', 'mark_forfeited', 'close_no_refund_due', 'reopen_manual_review'], true)) {
+            return response()->json(['error' => 'Unsupported refund action.'], 422);
+        }
+
+        if (in_array($action, ['mark_manually_refunded', 'mark_forfeited', 'close_no_refund_due'], true) && blank($validated['notes'] ?? null)) {
+            return response()->json(['error' => 'Notes are required for manual refund closure actions.'], 422);
+        }
+
+        $booking = Booking::findOrFail($bookingId);
+        $case = isset($validated['refund_case_id'])
+            ? RefundCase::where('booking_id', $booking->id)->findOrFail($validated['refund_case_id'])
+            : RefundCase::where('booking_id', $booking->id)
+                ->when($validated['payment_id'] ?? null, fn ($q, $paymentId) => $q->where('payment_id', $paymentId))
+                ->latest()
+                ->first();
+
+        if (!$case && !empty($validated['payment_id'])) {
+            $payment = Payment::active()->where('booking_id', $booking->id)->findOrFail($validated['payment_id']);
+            $case = RefundCase::create([
+                'booking_id' => $booking->id,
+                'payment_id' => $payment->id,
+                'amount' => 0,
+                'non_refundable_amount' => (float) $payment->amount,
+                'reason' => 'manual_review',
+                'status' => 'Manual Review',
+                'last_action' => 'reopen_manual_review',
+                'requested_by' => Auth::id(),
+                'approved_by' => Auth::id(),
+                'notes' => 'Manual refund case opened by staff.',
+            ]);
+        }
+
+        if (!$case) {
+            return response()->json(['error' => 'No refund case was found for this booking.'], 404);
+        }
+
+        $payment = $case->payment;
+        $notes = trim((string) ($validated['notes'] ?? ''));
+        $verifiedBy = Auth::user()->username ?? 'accounting';
+
+        if ($action === 'retry_provider_refund') {
+            return $this->retryProviderRefund($case, $payMongo);
+        }
+
+        match ($action) {
+            'mark_manually_refunded' => $case->update([
+                'status' => 'Manual Refunded',
+                'last_action' => $action,
+                'resolved_by' => Auth::id(),
+                'resolved_at' => now(),
+                'notes' => $notes,
+            ]),
+            'mark_forfeited' => $case->update([
+                'status' => 'Forfeited',
+                'last_action' => $action,
+                'resolved_by' => Auth::id(),
+                'resolved_at' => now(),
+                'amount' => 0,
+                'notes' => $notes,
+            ]),
+            'close_no_refund_due' => $case->update([
+                'status' => 'No Refund Due',
+                'last_action' => $action,
+                'resolved_by' => Auth::id(),
+                'resolved_at' => now(),
+                'amount' => 0,
+                'notes' => $notes,
+            ]),
+            'reopen_manual_review' => $case->update([
+                'status' => 'Manual Review',
+                'last_action' => $action,
+                'resolved_by' => null,
+                'resolved_at' => null,
+                'notes' => $notes ?: $case->notes,
+            ]),
+        };
+
+        if ($payment && in_array($action, ['mark_manually_refunded', 'mark_forfeited', 'close_no_refund_due'], true)) {
+            $payment->update([
+                'status' => 'Refunded',
+                'verified_by' => $verifiedBy,
+                'verified_at' => now(),
+            ]);
+
+            PaymentEventService::record(
+                $action,
+                'accounting',
+                $payment,
+                ['refund_case_id' => $case->id, 'notes' => $notes],
+                $payment->paymongo_payment_id ?: $payment->paymongo_checkout_session_id
+            );
+        }
+
+        app(OperationalBroadcastService::class)
+            ->financeChanged($booking->fresh(), 'refund_case', $case->id, $action, 'Refund case updated.');
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Refund case updated.',
+            'refund_case' => $case->fresh(),
+        ]);
+    }
+
+    private function retryProviderRefund(RefundCase $case, PayMongoService $payMongo)
+    {
+        $payment = $case->payment;
+
+        if (!in_array($case->status, ['Failed', 'Manual Review'], true)) {
+            return response()->json(['error' => 'Only failed or manual-review refund cases can be retried.'], 422);
+        }
+
+        if (!$payment || $payment->voided_at || !in_array($payment->status, ['Paid', 'Verified'], true)) {
+            return response()->json(['error' => 'This refund case is not linked to an active paid payment.'], 422);
+        }
+
+        $refundAmount = round((float) $case->amount, 2);
+        if ($refundAmount <= 0) {
+            return response()->json(['error' => 'This refund case has no provider-refundable amount.'], 422);
+        }
+
+        if (!$payment->paymongo_payment_id) {
+            $case->update([
+                'status' => 'Failed',
+                'last_action' => 'missing_provider_payment_id',
+                'notes' => 'This payment cannot be refunded automatically because the original online payment reference is missing.',
+            ]);
+
+            PaymentEventService::record(
+                'refund_failed',
+                'accounting',
+                $payment,
+                ['refund_case_id' => $case->id, 'reason' => 'missing_provider_payment_id'],
+                $payment->paymongo_checkout_session_id
+            );
+
+            app(OperationalBroadcastService::class)
+                ->financeChanged($case->booking, 'refund_case', $case->id, 'missing_provider_payment_id', 'Refund case needs manual review.');
+
+            return response()->json(['error' => $case->notes], 422);
+        }
+
+        PaymentEventService::record(
+            'refund_retry_requested',
+            'accounting',
+            $payment,
+            ['refund_case_id' => $case->id, 'amount' => $refundAmount],
+            $payment->paymongo_payment_id
+        );
+
+        $case->update([
+            'status' => 'Processing',
+            'last_action' => 'retry_provider_refund',
+            'provider_response' => null,
+        ]);
+
+        try {
+            $providerResponse = $payMongo->createRefund(
+                paymentId: $payment->paymongo_payment_id,
+                amount: $refundAmount,
+                reason: 'requested_by_customer',
+                notes: "Refund retry via Accounting Dashboard for Booking #{$case->booking_id}, Payment #{$payment->id}"
+            );
+
+            $case->update([
+                'status' => 'Refunded',
+                'last_action' => 'provider_refund_completed',
+                'resolved_by' => Auth::id(),
+                'resolved_at' => now(),
+                'provider_refund_id' => data_get($providerResponse, 'id'),
+                'provider_response' => $providerResponse,
+            ]);
+
+            $payment->update([
+                'status' => 'Refunded',
+                'verified_by' => Auth::user()->username ?? 'accounting',
+                'verified_at' => now(),
+            ]);
+
+            PaymentEventService::record(
+                'refund_completed',
+                'paymongo',
+                $payment,
+                ['refund_case_id' => $case->id, 'amount' => $refundAmount],
+                $payment->paymongo_payment_id
+            );
+
+            app(OperationalBroadcastService::class)
+                ->financeChanged($case->booking, 'refund_case', $case->id, 'retry_provider_refund_completed', 'Provider refund completed.');
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Provider refund retried successfully.',
+                'refund_case' => $case->fresh(),
+            ]);
+        } catch (\Throwable $e) {
+            $case->update([
+                'status' => 'Failed',
+                'last_action' => 'provider_refund_failed',
+                'provider_response' => ['error' => $e->getMessage()],
+                'notes' => 'Automatic provider refund failed. Review PayMongo logs before retrying.',
+            ]);
+
+            PaymentEventService::record(
+                'refund_failed',
+                'paymongo',
+                $payment,
+                ['refund_case_id' => $case->id, 'reason' => 'provider_error'],
+                $payment->paymongo_payment_id
+            );
+
+            app(OperationalBroadcastService::class)
+                ->financeChanged($case->booking, 'refund_case', $case->id, 'retry_provider_refund_failed', 'Provider refund failed.');
+
+            return response()->json(['error' => 'Automatic provider refund failed. Please review the refund case before retrying.'], 500);
+        }
+    }
+
+    private function refundCaseNextActions(RefundCase $case): array
+    {
+        return match ($case->status) {
+            'Failed', 'Manual Review' => ['retry_provider_refund', 'mark_manually_refunded', 'mark_forfeited', 'close_no_refund_due'],
+            'Requested', 'Approved', 'Processing' => ['mark_manually_refunded', 'reopen_manual_review'],
+            'Refunded', 'Manual Refunded', 'Forfeited', 'No Refund Due' => ['reopen_manual_review'],
+            default => ['reopen_manual_review'],
+        };
     }
 
     private function paymentWithBookingContext(Payment $payment): array

@@ -2,6 +2,8 @@
 
 namespace App\Http\Controllers;
 
+use App\Services\OperationalBroadcastService;
+use App\Support\ResourceVersion;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 
@@ -15,15 +17,24 @@ class NotificationController extends Controller
      * Get all notifications for the authenticated user.
      * Returns the most recent 50 notifications.
      */
-    public function index()
+    public function index(Request $request)
     {
         $user = Auth::user();
+        $query = $user->notifications()->latest();
+        $latestNotificationId = (clone $query)
+            ->orderByDesc('created_at')
+            ->value('id');
+        $versionMeta = ResourceVersion::make(
+            (clone $query)->count(),
+            collect([(clone $query)->max('created_at'), (clone $query)->max('read_at')])->filter()->max(),
+            $latestNotificationId
+        );
 
-        $notifications = $user->notifications()
-            ->latest()
-            ->take(50)
-            ->get()
-            ->map(function ($notification) {
+        if (ResourceVersion::matches($request, $versionMeta)) {
+            return ResourceVersion::unchanged($versionMeta);
+        }
+
+        $format = function ($notification) {
                 $type = $notification->data['type'] ?? 'general';
                 $message = $notification->data['message'] ?? '';
                 $priority = $notification->data['priority'] ?? $this->notificationPriority($type, $message);
@@ -43,7 +54,26 @@ class NotificationController extends Controller
                     'created_at' => $notification->created_at->toISOString(),
                     'time_ago' => $notification->created_at->diffForHumans(),
                 ];
-            });
+            };
+
+        if ($request->boolean('paginated') || $request->has('page') || $request->has('per_page')) {
+            $perPage = min(max((int) $request->query('per_page', 25), 1), 75);
+            $paginator = $query->paginate($perPage);
+
+            return response()->json([
+                'data' => collect($paginator->items())->map($format)->values(),
+                'meta' => [
+                    'current_page' => $paginator->currentPage(),
+                    'per_page' => $paginator->perPage(),
+                    'total' => $paginator->total(),
+                    'last_page' => $paginator->lastPage(),
+                    ...$versionMeta,
+                    'changed' => true,
+                ],
+            ]);
+        }
+
+        $notifications = $query->take(50)->get()->map($format);
 
         return response()->json($notifications);
     }
@@ -62,8 +92,10 @@ class NotificationController extends Controller
      */
     public function markAsRead(string $id)
     {
-        $notification = Auth::user()->notifications()->findOrFail($id);
+        $user = Auth::user();
+        $notification = $user->notifications()->findOrFail($id);
         $notification->markAsRead();
+        $this->broadcastNotificationChange($user, $id, 'read');
 
         return response()->json(['success' => true]);
     }
@@ -73,7 +105,9 @@ class NotificationController extends Controller
      */
     public function markAllAsRead()
     {
-        Auth::user()->unreadNotifications->markAsRead();
+        $user = Auth::user();
+        $user->unreadNotifications->markAsRead();
+        $this->broadcastNotificationChange($user, null, 'read_all');
 
         return response()->json(['success' => true]);
     }
@@ -83,10 +117,26 @@ class NotificationController extends Controller
      */
     public function destroy(string $id)
     {
-        $notification = Auth::user()->notifications()->findOrFail($id);
+        $user = Auth::user();
+        $notification = $user->notifications()->findOrFail($id);
         $notification->delete();
+        $this->broadcastNotificationChange($user, $id, 'dismissed');
 
         return response()->json(['success' => true]);
+    }
+
+    private function broadcastNotificationChange($user, ?string $id, string $action): void
+    {
+        $channels = match ($user->role) {
+            'Client' => ['client.' . $user->id],
+            'Admin' => ['admin.dashboard'],
+            'Marketing' => ['marketing.dashboard', 'staff.queue'],
+            'Accounting' => ['accounting.dashboard'],
+            default => [],
+        };
+
+        app(OperationalBroadcastService::class)
+            ->changed('notifications', 'notification', $id, $action, null, $channels);
     }
 
     private function notificationPriority(string $type, string $message): string
