@@ -21,7 +21,7 @@ The app is built for four main roles:
 | Payments | PayMongo checkout and webhooks |
 | Realtime | Laravel Reverb, Laravel Echo, Pusher protocol |
 | Email/Jobs | Laravel notifications and queue workers |
-| Documents | Server-generated branded PDF exports |
+| Documents | Dompdf + Blade branded PDF exports |
 | Build tool | Vite 7 |
 
 ## Prerequisites
@@ -41,7 +41,7 @@ Install these separately:
 Clone and enter the repository:
 
 ```powershell
-git clone https://github.com/JDADonato/DAREV-ECS.git
+git clone https://github.com/JDADonato/OPTIMIZED_ECS.git
 cd DAREVECS-main
 ```
 
@@ -114,7 +114,7 @@ This starts:
 | Laravel server | http://127.0.0.1:8080 | Main app |
 | Vite | http://localhost:5173 | Frontend dev assets |
 | Queue listener | background | Emails and queued notifications |
-| Reverb | ws://localhost:8085 | Realtime chat, if enabled |
+| Reverb | ws://localhost:8085 | Realtime chat and live refresh hints, if enabled |
 
 Keep the terminal open while testing.
 
@@ -231,7 +231,21 @@ Common email statuses:
 | failed | The app attempted delivery but the mailer failed |
 | mail_not_configured | Required mail settings are missing |
 
-Admin can check mail/session health from the diagnostics area in the Admin workspace.
+Admin can check mail/session health from Admin Settings and system/preflight areas.
+
+## Scheduled Jobs And Live Updates
+
+The app has scheduled and background work that must run outside normal page requests:
+
+| Command or service | Purpose |
+| --- | --- |
+| `php artisan schedule:run` | Runs due scheduled tasks in production |
+| `php artisan queue:work` | Sends queued mail, notifications, and background jobs |
+| `php artisan reverb:start` | Enables realtime chat and operational refresh hints when Reverb is enabled |
+| `php artisan announcements:publish-due` | Publishes scheduled announcements and queues announcement emails |
+| `php artisan uploads:purge-orphans` | Discards unattached temporary uploads after their expiry window |
+
+Realtime events are treated as refresh hints only. The frontend still uses cached polling/focus refresh fallbacks, so a missed websocket event should not require users to reload manually.
 
 ## PayMongo Testing
 
@@ -250,13 +264,40 @@ Download the CA bundle if it is missing:
 Invoke-WebRequest -Uri "https://curl.se/ca/cacert.pem" -OutFile "storage\app\cacert.pem"
 ```
 
-For webhook testing, start the app, then run in another PowerShell window:
+For local or staging webhook testing, start the app, then run in another PowerShell window:
 
 ```powershell
 .\php\php.exe artisan paymongo:webhook-sync
 ```
 
-If multiple teammates share the same PayMongo test account, only the latest synced ngrok URL receives webhooks.
+Useful options:
+
+```powershell
+.\php\php.exe artisan paymongo:webhook-sync --no-disable-old
+.\php\php.exe artisan paymongo:webhook-sync --ngrok-path C:\path\to\ngrok.exe
+```
+
+The command is guarded in production. If it is ever intentionally used there, it requires:
+
+```powershell
+.\php\php.exe artisan paymongo:webhook-sync --force-production
+```
+
+If multiple teammates share the same PayMongo test account, only the latest synced ngrok URL receives webhooks unless `--no-disable-old` is used.
+
+## Generated Documents
+
+Generated PDFs use branded Blade templates rendered through Dompdf. Current document exports include:
+
+| Document | Route |
+| --- | --- |
+| Payment receipt | `/documents/payments/{payment}/receipt.pdf` |
+| Event preparation checklist | `/documents/bookings/{booking}/preparation.pdf` |
+| Calendar export | `/documents/calendar.pdf` |
+| Management report PDF | `/api/admin/report-runs/{run}/export?format=pdf` |
+| Management report CSV | `/api/admin/report-runs/{run}/export?format=csv` |
+
+See `docs/document-inventory.md` for ownership, audience, renderer, limits, and test coverage.
 
 ## Default Seed Accounts
 
@@ -278,9 +319,24 @@ New staff/admin accounts created through Admin use generated temporary passwords
 - Accounting workspace with Today, Payments, Refunds, Ledger & Receipts, and Event History.
 - Admin workspace with account lifecycle controls, business settings, diagnostics, audit logs, reports, and system oversight.
 - Branded server-generated PDFs for receipts, prep lists, calendar reports, and reports.
-- Chat message editing/deletion, booking detail cards, conversation claiming, transfer/collaboration, and CSRF-safe requests.
-- Account safety features including deactivation, reactivation, temporary password reset, forced password change, forgot password, OTP hardening, and audit entries.
-- Security headers, CSP report mode for development, production preflight checks, and environment diagnostics.
+- Chat message editing/soft deletion, booking detail cards, conversation claiming, transfer/collaboration, soft-removed participant history, and CSRF-safe requests.
+- Account safety features including deactivation, reactivation, temporary password reset, forced password change, forgot password, OTP hashing, and audit entries.
+- Operational lifecycle preservation: customer history hiding, catalog archiving, payment schedule voiding, refund case actions, guest lead/tasting lifecycle states, and upload ownership/cleanup.
+- Live operational UI with Reverb hints, cached polling fallback, quiet sync states, compact notification feedback, and notification sound opt-in.
+- Admin full-surface workspace pattern, collapsible staff sidebar, role-local settings, and reusable operational UI components.
+- Security headers, CSP report mode for development, production preflight checks, PostgreSQL guardrails, and environment diagnostics.
+
+## Staff UI Guidelines
+
+Admin and staff interfaces follow the rules in `docs/rulesforstaffui.md`.
+
+Key points:
+
+- Operational Admin tabs should use the page itself as the work surface, not nested card containers.
+- Page headers should not be repeated inside the tab body.
+- Tables should align header and body columns and respond cleanly to sidebar collapse.
+- Normal live/saved/syncing states should be quiet; offline, stale, failed, and blocking loading states should be visible.
+- Use consistent action wording such as `Open`, `Save changes`, `Archive`, `Deactivate access`, `Hide from my history`, `Download PDF`, and `Download spreadsheet`.
 
 ## Verification Commands
 
@@ -289,6 +345,7 @@ Run these before pushing important changes:
 ```powershell
 npm.cmd run build
 .\php\php.exe artisan test
+.\php\php.exe artisan preflight:scan --json
 .\php\php.exe artisan route:list --except-vendor
 git diff --check
 ```
@@ -359,6 +416,30 @@ Usually the PayMongo webhook did not reach the app.
 3. Check the ngrok inspector at `http://127.0.0.1:4040`.
 4. Accounting can manually verify payments when needed.
 
+### Scheduled announcement did not publish
+
+Make sure the scheduler is running:
+
+```powershell
+.\php\php.exe artisan schedule:run
+```
+
+For a direct local check, run:
+
+```powershell
+.\php\php.exe artisan announcements:publish-due
+```
+
+Queued announcement emails still require the queue worker unless `QUEUE_CONNECTION=sync`.
+
+### Images or uploaded files are stale during testing
+
+Temporary uploads are registered and attached to bookings or other supported records. To purge expired unattached uploads locally:
+
+```powershell
+.\php\php.exe artisan uploads:purge-orphans
+```
+
 ## Git Workflow
 
 Before starting:
@@ -381,10 +462,21 @@ git push
 ## Notes For Production
 
 - Do not commit real `.env` secrets.
-- Use real SMTP/provider credentials and a running queue worker.
+- Use real SMTP/provider credentials.
+- Keep a queue worker running.
+- Keep the Laravel scheduler running.
+- Run Reverb if realtime chat/live refresh is enabled.
+- Verify PayMongo webhooks are reachable.
 - Use production PayMongo keys only after final business approval.
 - Point the web server document root to `public/`.
 - Keep `APP_DEBUG=false`.
 - Use HTTPS and set `SESSION_SECURE_COOKIE=true`.
+- Use `DB_CONNECTION=pgsql` for the production PostgreSQL database.
 - Run migrations with `--force`.
-- Run the production preflight scan before launch.
+- Run the production preflight scan before launch:
+
+```powershell
+.\php\php.exe artisan preflight:scan --json
+```
+
+Production deletion policy is preservation-first: business records are deactivated, archived, hidden, or voided instead of physically deleted unless the record is explicitly disposable, such as draft cleanup, notification dismissal, password reset token cleanup, or orphan upload cleanup.
