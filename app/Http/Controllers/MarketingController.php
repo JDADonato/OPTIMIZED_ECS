@@ -3,11 +3,13 @@
 namespace App\Http\Controllers;
 
 use App\Http\Resources\BookingSummaryResource;
+use App\Mail\BookingLiveStatusUpdate;
 use App\Models\AuditLog;
 use App\Models\Booking;
 use App\Models\BookingReviewTask;
 use App\Models\Payment;
 use App\Models\User;
+use App\Notifications\BookingLiveStatusNotification;
 use App\Notifications\CustomerAssistedBookingInviteNotification;
 use App\Notifications\NewBookingNotification;
 use App\Services\BookingValidationService;
@@ -24,6 +26,8 @@ use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Str;
 use Inertia\Inertia;
 
@@ -907,12 +911,28 @@ class MarketingController extends Controller
             return $guard;
         }
 
+        if ($booking->status !== 'Confirmed') {
+            return response()->json([
+                'error' => 'Live tracking unlocks after the booking is approved.',
+                'booking' => new BookingSummaryResource($booking->fresh(['user', 'assignee', 'reviewTasks', 'preparationTasks', 'historyNotes'])),
+            ], 422);
+        }
+
+        $previousLiveStatus = $booking->live_status ?: 'Not Started';
         $booking->update(['live_status' => $request->live_status]);
+        $freshBooking = $booking->fresh(['user', 'assignee', 'reviewTasks', 'preparationTasks', 'historyNotes']);
+
+        if ($previousLiveStatus !== $request->live_status) {
+            $this->sendLiveStatusUpdates($freshBooking, $request->live_status);
+        }
+
+        app(OperationalBroadcastService::class)
+            ->bookingChanged($freshBooking, 'live_status_updated', 'Live status updated.');
 
         return response()->json([
             'success' => true,
             'message' => 'Live status updated',
-            'booking' => new BookingSummaryResource($booking->fresh(['user', 'assignee', 'reviewTasks', 'preparationTasks', 'historyNotes'])),
+            'booking' => new BookingSummaryResource($freshBooking),
         ]);
     }
 
@@ -968,5 +988,29 @@ class MarketingController extends Controller
             'error' => "This booking is owned by {$ownerName}. Ask the owner or an admin to transfer it before making changes.",
             'booking' => new BookingSummaryResource($booking->fresh(['user', 'assignee', 'reviewTasks', 'preparationTasks', 'historyNotes'])),
         ], 403);
+    }
+
+    private function sendLiveStatusUpdates(Booking $booking, string $liveStatus): void
+    {
+        if ($booking->user) {
+            app(NotificationRecipientService::class)
+                ->sendToUser($booking->user, new BookingLiveStatusNotification($booking, $liveStatus), 'booking_live_status_update');
+        }
+
+        $email = $booking->client_email ?: $booking->user?->email;
+
+        if (!$email) {
+            return;
+        }
+
+        try {
+            Mail::to($email)->queue(new BookingLiveStatusUpdate($booking, $liveStatus, Auth::user()));
+        } catch (\Throwable $exception) {
+            Log::warning('Live status email delivery failed.', [
+                'booking_id' => $booking->id,
+                'live_status' => $liveStatus,
+                'message' => $exception->getMessage(),
+            ]);
+        }
     }
 }

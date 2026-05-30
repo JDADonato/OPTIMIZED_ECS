@@ -13,26 +13,32 @@ class MenuController extends Controller
      */
     public function index(Request $request)
     {
-        $query = MenuItem::query();
-
-        // Filter by category
-        if ($request->has('category')) {
-            $query->where('category', $request->category);
-        }
-
-        // Filter by best seller
-        if ($request->has('best_seller') && $request->boolean('best_seller')) {
-            $query->whereRaw('is_best_seller is true');
-        }
-
-        // Public menu endpoints default to customer-visible items only.
+        $perPage = min(max((int) $request->get('per_page', 50), 1), 100);
+        $page = max((int) $request->get('page', 1), 1);
+        $category = (string) $request->query('category', 'all');
+        $bestSeller = $request->has('best_seller') && $request->boolean('best_seller');
         $active = $request->has('active') ? $request->boolean('active') : true;
-        $query->whereRaw('is_active is ' . ($active ? 'true' : 'false'));
+        $version = (int) Cache::get('catalog.version', 1);
+        $cacheKey = "catalog.public.menu.v{$version}.category:{$category}.best:" . (int) $bestSeller . '.active:' . (int) $active . ".page:{$page}.per:{$perPage}";
 
-        // Order by category and then name
-        $items = $query->orderBy('category')
-            ->orderBy('name')
-            ->paginate($request->get('per_page', 50));
+        $items = Cache::remember($cacheKey, now()->addMinutes(10), function () use ($active, $bestSeller, $category, $perPage) {
+            $query = MenuItem::query();
+
+            if ($category !== 'all' && $category !== '') {
+                $query->where('category', $category);
+            }
+
+            if ($bestSeller) {
+                $query->whereRaw('is_best_seller is true');
+            }
+
+            return $query
+                ->whereRaw('is_active is ' . ($active ? 'true' : 'false'))
+                ->orderBy('category')
+                ->orderBy('name')
+                ->paginate($perPage)
+                ->toArray();
+        });
 
         return response()->json($items);
     }

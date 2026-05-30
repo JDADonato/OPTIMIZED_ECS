@@ -13,6 +13,7 @@ use Carbon\Carbon;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use RuntimeException;
 
 class AnalyticsDemoSeeder extends Seeder
@@ -34,6 +35,11 @@ class AnalyticsDemoSeeder extends Seeder
 
         mt_srand(20260520);
 
+        if ($this->generatedAnalyticsBookingsExist()) {
+            $this->command?->info('Analytics demo data already exists; keeping existing demo accounts and bookings.');
+            return;
+        }
+
         DB::transaction(function () {
             $this->cleanGeneratedAnalyticsData();
             $this->ensureMenuVolume();
@@ -48,18 +54,85 @@ class AnalyticsDemoSeeder extends Seeder
         $this->command?->info('Seeded analytics demo data: 125 clients, 216 bookings from 2024-2026, payments, and booking menu items.');
     }
 
+    private function generatedAnalyticsBookingsExist(): bool
+    {
+        return Booking::where('client_email', 'like', '%@' . self::DEMO_DOMAIN)->exists();
+    }
+
     private function cleanGeneratedAnalyticsData(): void
     {
         $bookingIds = Booking::where('client_email', 'like', '%@' . self::DEMO_DOMAIN)->pluck('id');
 
         if ($bookingIds->isNotEmpty()) {
+            $this->deleteGeneratedBookingChildren($bookingIds->all());
+
             Payment::whereIn('booking_id', $bookingIds)->delete();
             BookingItem::whereIn('booking_id', $bookingIds)->delete();
             Booking::whereIn('id', $bookingIds)->delete();
         }
 
-        User::where('email', 'like', '%@' . self::DEMO_DOMAIN)->delete();
+        $this->deleteGeneratedAnalyticsUsers();
         MenuItem::where('dish_id', 'like', 'demo_%')->delete();
+    }
+
+    private function deleteGeneratedBookingChildren(array $bookingIds): void
+    {
+        $children = [
+            'feedback_responses',
+            'feedback_requests',
+            'payment_events',
+            'refund_cases',
+            'event_preparation_tasks',
+            'booking_review_tasks',
+            'booking_history_notes',
+            'conversion_events',
+        ];
+
+        foreach ($children as $table) {
+            if (Schema::hasTable($table) && Schema::hasColumn($table, 'booking_id')) {
+                DB::table($table)->whereIn('booking_id', $bookingIds)->delete();
+            }
+        }
+    }
+
+    private function deleteGeneratedAnalyticsUsers(): void
+    {
+        $userIds = User::where('username', 'like', 'ecs_demo_client_%')->pluck('id')->all();
+
+        if (empty($userIds)) {
+            return;
+        }
+
+        $conversationIds = [];
+
+        if (Schema::hasTable('conversations')) {
+            $conversationIds = DB::table('conversations')
+                ->whereIn('client_id', $userIds)
+                ->orWhereIn('staff_id', $userIds)
+                ->pluck('id')
+                ->all();
+        }
+
+        if (Schema::hasTable('messages')) {
+            DB::table('messages')
+                ->when(!empty($conversationIds), fn ($query) => $query->whereIn('conversation_id', $conversationIds))
+                ->orWhereIn('sender_id', $userIds)
+                ->orWhereIn('receiver_id', $userIds)
+                ->delete();
+        }
+
+        if (Schema::hasTable('conversation_participants')) {
+            DB::table('conversation_participants')
+                ->when(!empty($conversationIds), fn ($query) => $query->whereIn('conversation_id', $conversationIds))
+                ->orWhereIn('user_id', $userIds)
+                ->delete();
+        }
+
+        if (!empty($conversationIds)) {
+            DB::table('conversations')->whereIn('id', $conversationIds)->delete();
+        }
+
+        User::whereIn('id', $userIds)->delete();
     }
 
     private function ensureMenuVolume(): void

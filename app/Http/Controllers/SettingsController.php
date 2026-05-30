@@ -9,6 +9,7 @@ use App\Models\MenuItem;
 use App\Models\Package;
 use App\Services\OperationalBroadcastService;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 
@@ -85,6 +86,7 @@ class SettingsController extends Controller
 
         $rule = $this->activeBusinessRule();
         $rule->update($data);
+        Cache::forget('business_rules.active');
 
         app(OperationalBroadcastService::class)
             ->adminChanged('finance', 'payment_rules', $rule->id, 'updated', 'Payment rules updated.');
@@ -105,17 +107,25 @@ class SettingsController extends Controller
 
     public function menuItems()
     {
-        return response()->json(MenuItem::query()
-            ->orderBy('category')
-            ->orderBy('name')
-            ->get());
+        $version = $this->catalogVersion();
+
+        return response()->json(Cache::remember("catalog.settings.menu_items.v{$version}", now()->addMinutes(10), fn () => (
+            MenuItem::query()
+                ->orderBy('category')
+                ->orderBy('name')
+                ->get()
+        )));
     }
 
     public function eventTypes()
     {
-        return response()->json(EventType::query()
-            ->orderBy('label')
-            ->get());
+        $version = $this->catalogVersion();
+
+        return response()->json(Cache::remember("catalog.settings.event_types.v{$version}", now()->addMinutes(10), fn () => (
+            EventType::query()
+                ->orderBy('label')
+                ->get()
+        )));
     }
 
     public function createPackage(Request $request)
@@ -146,6 +156,7 @@ class SettingsController extends Controller
         $data['is_active'] = $data['is_active'] ?? true;
 
         $package = Package::create($data);
+        $this->bumpCatalogVersion();
 
         app(OperationalBroadcastService::class)
             ->adminChanged('catalog', 'package', $package->id, 'created', 'Package created.');
@@ -191,6 +202,7 @@ class SettingsController extends Controller
         }
 
         $package->update($data);
+        $this->bumpCatalogVersion();
 
         app(OperationalBroadcastService::class)
             ->adminChanged('catalog', 'package', $package->id, 'updated', 'Package updated.');
@@ -210,6 +222,7 @@ class SettingsController extends Controller
             'cost_per_head' => $data['cost_per_head'],
             'price_adj' => $data['price_adj'] ?? 0,
         ]);
+        $this->bumpCatalogVersion();
 
         app(OperationalBroadcastService::class)
             ->adminChanged('catalog', 'menu_item', $item->id, 'pricing_updated', 'Dish pricing updated.');
@@ -245,6 +258,7 @@ class SettingsController extends Controller
         }
 
         $eventType = EventType::create($data);
+        $this->bumpCatalogVersion();
 
         app(OperationalBroadcastService::class)
             ->adminChanged('catalog', 'event_type', $eventType->id, 'created', 'Event type created.');
@@ -293,6 +307,7 @@ class SettingsController extends Controller
         }
 
         $eventType->update($data);
+        $this->bumpCatalogVersion();
 
         app(OperationalBroadcastService::class)
             ->adminChanged('catalog', 'event_type', $eventType->id, 'updated', 'Event type updated.');
@@ -308,6 +323,7 @@ class SettingsController extends Controller
             'is_active' => false,
             'archived_at' => $eventType->archived_at ?: now(),
         ])->save();
+        $this->bumpCatalogVersion();
 
         app(OperationalBroadcastService::class)
             ->adminChanged('catalog', 'event_type', $eventType->id, 'archived', 'Event type archived.');
@@ -346,5 +362,17 @@ class SettingsController extends Controller
 
         $decoded = json_decode((string) $value, true);
         return is_array($decoded) ? $decoded : [];
+    }
+
+    private function catalogVersion(): int
+    {
+        return (int) Cache::get('catalog.version', 1);
+    }
+
+    private function bumpCatalogVersion(): void
+    {
+        Cache::put('catalog.version', $this->catalogVersion() + 1, now()->addDays(30));
+        Cache::forget('menu_categories');
+        Cache::forget('menu_bestsellers');
     }
 }

@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Facades\Cache;
 
 class BusinessRule extends Model
 {
@@ -39,6 +40,8 @@ class BusinessRule extends Model
 
     public static function getActive(): ?self
     {
-        return self::whereRaw('is_active is true')->first() ?? self::first();
+        return Cache::remember('business_rules.active', now()->addMinutes(5), fn () => (
+            self::whereRaw('is_active is true')->first() ?? self::first()
+        ));
     }
 }

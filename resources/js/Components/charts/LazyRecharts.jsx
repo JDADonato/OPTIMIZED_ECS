@@ -22,6 +22,7 @@ export const XAxis = loadRechartsComponent('XAxis');
 export const YAxis = loadRechartsComponent('YAxis');
 export const CartesianGrid = loadRechartsComponent('CartesianGrid');
 export const Tooltip = loadRechartsComponent('Tooltip');
+export const Legend = loadRechartsComponent('Legend');
 export const LineChart = loadRechartsComponent('LineChart');
 export const Line = loadRechartsComponent('Line');
 

@@ -169,6 +169,7 @@ class ClientDashboardController extends Controller
                 'pax',
                 'total_cost',
                 'status',
+                'live_status',
                 'selected_menu',
                 'venue_address_line',
                 'event_timeline',

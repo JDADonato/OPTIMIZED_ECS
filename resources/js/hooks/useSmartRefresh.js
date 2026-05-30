@@ -35,7 +35,7 @@ export default function useSmartRefresh({
         const runRefresh = (reason) => {
             if (!canRefresh()) return;
             lastRefreshRef.current = getNow();
-            refreshRef.current({ silent: true, reason });
+            refreshRef.current({ silent: true, reason, force: reason === 'realtime' });
         };
 
         const handleFocus = () => {
@@ -86,7 +86,7 @@ export default function useSmartRefresh({
 
             window.clearTimeout(timer);
             timer = window.setTimeout(() => {
-                refreshRef.current?.({ silent: true, reason: 'realtime' });
+                refreshRef.current?.({ silent: true, reason: 'realtime', force: true });
             }, 180);
         };
 

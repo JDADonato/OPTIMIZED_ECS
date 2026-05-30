@@ -1,7 +1,7 @@
 import React, { Suspense, lazy, useState, useEffect, useMemo, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { router } from '@inertiajs/react';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, LineChart, Line } from '../Components/charts/LazyRecharts';
+import { BarChart, Bar as RechartsBar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, LineChart, Line as RechartsLine } from '../Components/charts/LazyRecharts';
 import { CalendarDays, CheckCircle2, ChevronDown, ClipboardList, CreditCard, Filter, Loader2, Maximize2, Package, RefreshCw, Users, X } from 'lucide-react';
 import useCachedJson from '../hooks/useCachedJson';
 import useSmartRefresh from '../hooks/useSmartRefresh';
@@ -43,6 +43,8 @@ const StaffMessaging = lazy(() => import('../Components/common/StaffMessaging'))
 const FoodTastingQueue = lazy(() => import('../Components/operations/FoodTastingQueue'));
 
 const paymentLabel = paymentTypeLabel;
+const Bar = (props) => <RechartsBar animationDuration={650} {...props} />;
+const Line = (props) => <RechartsLine animationDuration={650} {...props} />;
 
 const PACKAGE_CATEGORY_OPTIONS = [
     { value: 'premium', label: 'Weddings & Debuts' },
@@ -111,7 +113,34 @@ const MENU_CATEGORY_OPTIONS = [
     { value: 'drink', label: 'Drinks' },
 ];
 
+const ANALYTICS_PACKAGE_CATEGORY_OPTIONS = [
+    { value: '', label: 'All package categories' },
+    { value: 'premium', label: 'Wedding & Debut Packages' },
+    { value: 'birthday', label: 'Birthday Packages' },
+    { value: 'standard', label: 'Standard Event Packages' },
+    { value: 'custom', label: 'Custom / Unassigned' },
+];
+
+const ANALYTICS_BOOKING_STATUS_OPTIONS = [
+    { value: '', label: 'All booking statuses' },
+    { value: 'Pending', label: 'Pending' },
+    { value: 'Confirmed', label: 'Confirmed' },
+    { value: 'Completed', label: 'Completed' },
+    { value: 'Cancelled', label: 'Cancelled' },
+];
+
+const ANALYTICS_TIMEFRAME_OPTIONS = [
+    { value: 'all', label: 'All time' },
+    { value: '3m', label: 'Last 3 months' },
+    { value: '6m', label: 'Last 6 months' },
+    { value: '12m', label: 'Last 12 months' },
+    { value: '24m', label: 'Last 24 months' },
+    { value: 'ytd', label: 'Year to date' },
+];
+
+const TREND_MONTH_OPTIONS = [3, 6, 9, 12, 18, 24];
 const PERFORMANCE_LIMIT_OPTIONS = [5, 8, 10, 15, 20];
+const HEATMAP_YEAR_OPTIONS = Array.from({ length: 5 }, (_, index) => new Date().getFullYear() - 2 + index);
 const ACCOUNT_ROLE_OPTIONS = [
     { value: 'Marketing', label: 'Marketing', description: 'Booking review, customer communication, event preparation, and feedback follow-up.' },
     { value: 'Accounting', label: 'Accounting', description: 'Payment verification, receipts, refunds, and finance follow-up.' },
@@ -129,6 +158,8 @@ const DEFAULT_ANALYTICS_FILTERS = {
     pax_projection_year: '',
     pax_projection_quarter: '',
     snapshot_window: 'all',
+    package_category: '',
+    booking_status: '',
 };
 
 const ADMIN_EMPLOYEES_URL = '/api/admin/employees?paginated=1&per_page=25';
@@ -338,6 +369,7 @@ const DashboardAdmin = () => {
     const [analyticsLoading, setAnalyticsLoading] = useState(false);
     const [expandedAnalyticsPanel, setExpandedAnalyticsPanel] = useState(null);
     const [analyticsSlowLoading, setAnalyticsSlowLoading] = useState(false);
+    const [analyticsChartsAnimated, setAnalyticsChartsAnimated] = useState(true);
     const [analyticsFilters, setAnalyticsFilters] = useState(DEFAULT_ANALYTICS_FILTERS);
     const [activeAnalyticsFilterPanel, setActiveAnalyticsFilterPanel] = useState(null);
     const [packageViewFilters, setPackageViewFilters] = useState({
@@ -358,6 +390,13 @@ const DashboardAdmin = () => {
         status: 'all',
         minPax: '',
     });
+    const [peakSeasonFilters, setPeakSeasonFilters] = useState({
+        year: 'all',
+        status: '',
+        event_type: '',
+    });
+    const [peakSeasonHeatmap, setPeakSeasonHeatmap] = useState(null);
+    const [peakSeasonLoading, setPeakSeasonLoading] = useState(false);
     const [alertFilters, setAlertFilters] = useState({
         severity: 'all',
     });
@@ -414,11 +453,17 @@ const DashboardAdmin = () => {
     const operationsLoadData = analytics?.operationsLoad || [];
     const operationalAlerts = analytics?.operationalAlerts || analytics?.alerts || [];
     const topSellerData = analytics?.topSellers || [];
-    const peakSeasonData = analytics?.peakSeasons || [];
-    const revenueForecast = analytics?.revenueForecast || {};
+    const peakSeasonData = Array.isArray(peakSeasonHeatmap) ? peakSeasonHeatmap : (analytics?.peakSeasons || []);
+    const salesFrequencyDistribution = analytics?.salesFrequencyDistribution || {};
+    const salesFrequencyData = salesFrequencyDistribution.rows || [];
+    const salesFrequencySummary = salesFrequencyDistribution.summary || {};
+    const topSalesFrequency = salesFrequencyData[0] || null;
+    const revenueForecast = analytics?.revenueRegression || analytics?.revenueForecast || {};
     const revenueForecastData = revenueForecast.rows || [];
     const revenueForecastSummary = revenueForecast.summary || {};
-    const paxDemandProjection = analytics?.paxDemandProjection || {};
+    const revenueRegressionHistoryMonths = Math.max(Number(analyticsFilters.trend_months || 12), 6);
+    const revenueRegressionHorizon = Number(revenueForecast.horizon || 3);
+    const paxDemandProjection = analytics?.demandMovingAverage || analytics?.paxDemandProjection || {};
     const paxDemandData = paxDemandProjection.rows || [];
     const paxDemandSummary = paxDemandProjection.summary || {};
     const businessSnapshot = analytics?.businessSnapshot || {};
@@ -468,6 +513,25 @@ const DashboardAdmin = () => {
     const visibleOperationalAlerts = useMemo(() => (
         operationalAlerts.filter(alert => alertFilters.severity === 'all' || alert.severity === alertFilters.severity)
     ), [operationalAlerts, alertFilters.severity]);
+    const peakSeasonEventTypeOptions = useMemo(() => {
+        const optionMap = new Map();
+
+        eventTypes.forEach((type) => {
+            const value = type.slug || type.name || type.title;
+            if (value) optionMap.set(value, type.name || type.title || type.slug || value);
+        });
+
+        bookings.forEach((booking) => {
+            const value = booking.event_type;
+            if (value && !optionMap.has(value)) optionMap.set(value, booking.event_display_name || booking.event_name || value);
+        });
+
+        return Array.from(optionMap, ([value, label]) => ({ value, label })).sort((a, b) => a.label.localeCompare(b.label));
+    }, [bookings, eventTypes]);
+    const peakSeasonTotalEvents = peakSeasonData.reduce((total, item) => total + Number(item.events || item.count || 0), 0);
+    const peakSeasonBusiestMonth = peakSeasonData.reduce((best, item) => (
+        Number(item.events || item.count || 0) > Number(best?.events || best?.count || 0) ? item : best
+    ), null);
     const maxPackageRevenue = Math.max(...visiblePackagePerformanceData.map(pkg => Number(pkg.revenue || 0)), 1);
     const visibleReportWidgetIds = reportBuilder.widgets;
     const reportCanvasOffset = 0;
@@ -675,6 +739,7 @@ const DashboardAdmin = () => {
         } else if (activeTab === 'bookings-intake') {
             bustAdminCache(ADMIN_BOOKINGS_URL);
             fetchBookings({ silent });
+            fetchAnalyticsSummary({ silent });
         } else if (activeTab === 'finance') {
             bustAdminCache('/api/admin/refunds/queue');
             fetchRefundQueue({ silent });
@@ -1182,6 +1247,7 @@ const DashboardAdmin = () => {
             fetchCustomMenuItems();
             fetchPackages();
         } else if (activeTab === 'today') {
+            if (!eventTypes.length) fetchPackages();
             fetchAnalyticsSummary();
         } else if (activeTab === 'analytics' || activeTab === 'reports') {
             if (!packages.length || !eventTypes.length) fetchPackages();
@@ -1190,6 +1256,7 @@ const DashboardAdmin = () => {
             fetchReportPreview();
         } else if (activeTab === 'bookings-intake') {
             fetchBookings();
+            fetchAnalyticsSummary();
         } else if (activeTab === 'finance') {
             fetchBookings();
             fetchRefundQueue();
@@ -1201,6 +1268,12 @@ const DashboardAdmin = () => {
             fetchAudits();
         }
     }, [activeTab, availabilityMonth, customerStatusFilter, employeeFilters, customerFilters]);
+
+    useEffect(() => {
+        if (activeTab === 'today') {
+            fetchPeakSeasonHeatmap();
+        }
+    }, [activeTab, peakSeasonFilters]);
 
     useSmartRefresh({
         enabled: ['today', 'analytics', 'reports', 'bookings-intake', 'calendar', 'handoff', 'finance', 'accounts', 'public-content', 'availability', 'system-audit'].includes(activeTab),
@@ -1232,11 +1305,12 @@ const DashboardAdmin = () => {
     const fetchAvailabilityOverrides = async ({ silent = false } = {}) => {
         if (!silent) setAvailabilityLoading(true);
         try {
-            const response = await fetch(`/api/calendar-availability?month=${availabilityMonth}`, {
-                headers: { Accept: 'application/json' },
+            const url = `/api/calendar-availability?month=${availabilityMonth}`;
+            const result = await fetchSmartResource(url, {
+                cacheKey: smartCacheKey(url),
+                ttl: 30000,
             });
-            if (!response.ok) throw new Error('Availability load failed');
-            const data = await response.json();
+            const data = result.raw || result.data;
             setAvailabilityOverrides(getListData(data));
             setAvailabilityEvents(Array.isArray(data.events) ? data.events : []);
         } catch (error) {
@@ -1302,6 +1376,7 @@ const DashboardAdmin = () => {
             });
             if (!response.ok) throw new Error('Save failed');
             showToast('Availability updated.');
+            bustAdminCache(`/api/calendar-availability?month=${availabilityMonth}`);
             fetchAvailabilityOverrides({ silent: true });
         } catch (error) {
             console.error(error);
@@ -1318,6 +1393,7 @@ const DashboardAdmin = () => {
             if (!response.ok) throw new Error('Clear failed');
             setAvailabilityForm({ is_locked: false, remaining_events: '', remaining_pax: '', note: '' });
             showToast('Availability override cleared.');
+            bustAdminCache(`/api/calendar-availability?month=${availabilityMonth}`);
             fetchAvailabilityOverrides({ silent: true });
         } catch (error) {
             console.error(error);
@@ -1683,6 +1759,22 @@ const DashboardAdmin = () => {
             }));
     }
 
+    const restoreAnalyticsScroll = (scrollY) => {
+        if (typeof window === 'undefined' || scrollY === null || scrollY === undefined) return;
+
+        const restore = () => {
+            if (window.scrollY < scrollY - 120) {
+                window.scrollTo({ top: scrollY, left: window.scrollX, behavior: 'auto' });
+            }
+        };
+
+        window.requestAnimationFrame(() => window.requestAnimationFrame(restore));
+        window.setTimeout(restore, 120);
+        window.setTimeout(restore, 420);
+    };
+
+    const currentScrollY = () => (typeof window === 'undefined' ? null : window.scrollY);
+
     const fetchAnalyticsSummary = async ({ silent = false, filters = analyticsFilters } = {}) => {
         if (!silent) setAnalyticsLoading(true);
         try {
@@ -1695,6 +1787,9 @@ const DashboardAdmin = () => {
                     ...(current || {}),
                     summary: cached.data.summary || {},
                     businessSnapshot: cached.data.businessSnapshot || {},
+                    salesFrequencyDistribution: cached.data.salesFrequencyDistribution || current?.salesFrequencyDistribution || {},
+                    revenueRegression: cached.data.revenueRegression || current?.revenueRegression || {},
+                    demandMovingAverage: cached.data.demandMovingAverage || current?.demandMovingAverage || {},
                 }));
                 setAnalyticsLoading(false);
             }
@@ -1709,6 +1804,9 @@ const DashboardAdmin = () => {
                 summary: summary.summary || {},
                 businessSnapshot: summary.businessSnapshot || {},
                 conversionFunnel: summary.conversionFunnel || current?.conversionFunnel || {},
+                salesFrequencyDistribution: summary.salesFrequencyDistribution || current?.salesFrequencyDistribution || {},
+                revenueRegression: summary.revenueRegression || current?.revenueRegression || {},
+                demandMovingAverage: summary.demandMovingAverage || current?.demandMovingAverage || {},
                 insights: summary.insights || current?.insights || {},
             }));
         } catch (error) {
@@ -1719,53 +1817,52 @@ const DashboardAdmin = () => {
         }
     };
 
-    const fetchAnalytics = async ({ silent = false, filters = analyticsFilters } = {}) => {
+    const fetchPeakSeasonHeatmap = async ({ silent = false, filters = peakSeasonFilters } = {}) => {
+        if (!silent) setPeakSeasonLoading(true);
+        try {
+            const params = new URLSearchParams();
+
+            if (filters.year && filters.year !== 'all') {
+                params.set('date_from', `${filters.year}-01-01`);
+                params.set('date_to', `${filters.year}-12-31`);
+            }
+
+            if (filters.status) params.set('booking_status', filters.status);
+            if (filters.event_type) params.set('event_type', filters.event_type);
+
+            const query = params.toString() ? `?${params.toString()}` : '';
+            const result = await fetchSmartResource(`/api/admin/analytics/operations${query}`, {
+                cacheKey: smartCacheKey(`/api/admin/analytics/operations${query}`),
+                ttl: 60000,
+            });
+            const data = result.raw || result.data;
+            setPeakSeasonHeatmap(data.operationsLoad || []);
+        } catch (error) {
+            console.error(error);
+            if (!silent) showToast('Could not load the peak season heatmap filter.', 'error');
+        } finally {
+            if (!silent) setPeakSeasonLoading(false);
+        }
+    };
+
+    const fetchAnalytics = async ({ silent = false, filters = analyticsFilters, preserveScrollY = null } = {}) => {
         if (!silent) setAnalyticsLoading(true);
         try {
             const params = new URLSearchParams(Object.entries(filters).filter(([, value]) => value !== ''));
             const query = params.toString() ? `?${params.toString()}` : '';
-            const fetchPart = async (path) => {
-                const res = await fetch(`${path}${query}`);
-                if (!res.ok) throw new Error(`Analytics request failed: ${path}`);
-                return res.json();
-            };
-            const [summary, revenueHealth, pipeline, menu, customerExperience, operations, forecasts] = await Promise.all([
-                fetchPart('/api/admin/analytics/summary'),
-                fetchPart('/api/admin/analytics/revenue'),
-                fetchPart('/api/admin/analytics/pipeline'),
-                fetchPart('/api/admin/analytics/menu-performance'),
-                fetchPart('/api/admin/analytics/customer-experience'),
-                fetchPart('/api/admin/analytics/operations'),
-                fetchPart('/api/admin/analytics/forecasts'),
-            ]);
-
-            setAnalytics({
-                summary: summary.summary || {},
-                businessSnapshot: summary.businessSnapshot || {},
-                conversionFunnel: summary.conversionFunnel || {},
-                revenueTrends: revenueHealth.settledRevenueOverTime || [],
-                revenueHealth,
-                paymentAging: revenueHealth.paymentAging || [],
-                bookingPipeline: pipeline.bookingPipeline || [],
-                upcomingWorkload: pipeline.upcomingWorkload || [],
-                packagePerformance: menu.packagePerformance || [],
-                menuPerformance: menu.menuPerformance || [],
-                customerExperience,
-                operationsLoad: operations.operationsLoad || [],
-                alerts: operations.alerts || [],
-                operationalAlerts: operations.alerts || [],
-                revenueForecast: forecasts.revenueForecast || {},
-                paxDemandProjection: forecasts.paxDemandProjection || {},
-                insights: summary.insights || {},
-                projectedPaxDemand: forecasts.projectedPaxDemand || [],
-                topSellers: menu.packagePerformance || [],
-                peakSeasons: operations.operationsLoad || [],
+            const result = await fetchSmartResource(`/api/admin/analytics${query}`, {
+                cacheKey: smartCacheKey(`/api/admin/analytics${query}`),
+                ttl: 60000,
             });
+            const data = result.raw || result.data;
+
+            setAnalytics(data?.data || data || {});
         } catch (error) {
             console.error(error);
             if (!silent) showToast('We could not load the latest analytics. Showing saved data if available.', 'error');
         } finally {
             if (!silent) setAnalyticsLoading(false);
+            restoreAnalyticsScroll(preserveScrollY);
         }
     };
 
@@ -2030,7 +2127,10 @@ const DashboardAdmin = () => {
     };
 
     const toggleAnalyticsFilterPanel = (panel) => {
+        const scrollY = currentScrollY();
+        setAnalyticsChartsAnimated(false);
         setActiveAnalyticsFilterPanel(current => current === panel ? null : panel);
+        restoreAnalyticsScroll(scrollY);
     };
 
     const toggleDashboardFilterPanel = (panel) => {
@@ -2048,6 +2148,273 @@ const DashboardAdmin = () => {
             {label}
             <ChevronDown className={`h-4 w-4 transition-transform ${activeAnalyticsFilterPanel === panel ? 'rotate-180' : ''}`} />
         </button>
+    );
+
+    const analyticsFilterInputClass = 'mt-2 w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-black normal-case tracking-normal text-gray-800 outline-none';
+    const analyticsFilterLabelClass = 'text-[11px] font-black uppercase tracking-widest text-gray-400';
+
+    const updateAnalyticsFilters = (patch) => {
+        const scrollY = currentScrollY();
+        const nextFilters = { ...analyticsFilters, ...patch };
+        setAnalyticsChartsAnimated(true);
+        setAnalyticsFilters(nextFilters);
+        fetchAnalytics({ filters: nextFilters, silent: true, preserveScrollY: scrollY });
+    };
+
+    const updatePaymentRiskFilters = (patch) => {
+        setAnalyticsChartsAnimated(true);
+        setPaymentRiskFilters(current => ({ ...current, ...patch }));
+    };
+
+    const updatePackageViewFilters = (patch) => {
+        setAnalyticsChartsAnimated(true);
+        setPackageViewFilters(current => ({ ...current, ...patch }));
+    };
+
+    const updateMenuViewFilters = (patch) => {
+        setAnalyticsChartsAnimated(true);
+        setMenuViewFilters(current => ({ ...current, ...patch }));
+    };
+
+    const renderAnalyticsFilterPanel = (panel) => {
+        if (!panel || activeAnalyticsFilterPanel !== panel) return null;
+
+        const tray = (children, columns = 'sm:grid-cols-2') => (
+            <div className="admin-analytics-filter-popover">
+                <div className={`grid grid-cols-1 gap-3 ${columns}`}>
+                    {children}
+                </div>
+            </div>
+        );
+
+        if (panel === 'snapshot') {
+            return tray(
+                <label className={analyticsFilterLabelClass}>
+                    Snapshot timeframe
+                    <select
+                        value={analyticsFilters.snapshot_window}
+                        onChange={(event) => updateAnalyticsFilters({ snapshot_window: event.target.value })}
+                        className={analyticsFilterInputClass}
+                    >
+                        {SNAPSHOT_WINDOW_OPTIONS.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+                    </select>
+                </label>,
+                'sm:grid-cols-1'
+            );
+        }
+
+        if (panel === 'revenueTrend') {
+            return tray(
+                <label className={analyticsFilterLabelClass}>
+                    Trend window
+                    <select
+                        value={analyticsFilters.trend_months}
+                        onChange={(event) => updateAnalyticsFilters({ trend_months: event.target.value })}
+                        className={analyticsFilterInputClass}
+                    >
+                        {TREND_MONTH_OPTIONS.map(months => <option key={months} value={months}>Last {months} months</option>)}
+                    </select>
+                </label>,
+            );
+        }
+
+        if (panel === 'dashboardPayment' || panel === 'paymentRisk') {
+            return tray(
+                <>
+                    <label className={analyticsFilterLabelClass}>
+                        Payment status
+                        <select value={paymentRiskFilters.status} onChange={(event) => updatePaymentRiskFilters({ status: event.target.value })} className={analyticsFilterInputClass}>
+                            <option value="all">All statuses</option>
+                            {paymentStatusBreakdown.map(row => <option key={row.label} value={String(row.label || '').toLowerCase()}>{row.label}</option>)}
+                        </select>
+                    </label>
+                    <label className={analyticsFilterLabelClass}>
+                        Minimum aging balance
+                        <input type="number" min="0" value={paymentRiskFilters.minBalance} onChange={(event) => updatePaymentRiskFilters({ minBalance: event.target.value })} placeholder="Show all" className={analyticsFilterInputClass} />
+                    </label>
+                </>
+            );
+        }
+
+        if (panel === 'revenueForecast') {
+            return tray(
+                <>
+                    <label className={analyticsFilterLabelClass}>
+                        Period
+                        <select value={analyticsFilters.revenue_forecast_period} onChange={(event) => updateAnalyticsFilters({ revenue_forecast_period: event.target.value })} className={analyticsFilterInputClass}>
+                            {FORECAST_PERIOD_OPTIONS.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+                        </select>
+                    </label>
+                    <label className={analyticsFilterLabelClass}>
+                        Smoothing
+                        <select value={analyticsFilters.revenue_sma_window} onChange={(event) => updateAnalyticsFilters({ revenue_sma_window: event.target.value })} className={analyticsFilterInputClass}>
+                            {SMA_WINDOW_OPTIONS.map(value => <option key={value} value={value}>{value}-period SMA</option>)}
+                        </select>
+                    </label>
+                    <label className={analyticsFilterLabelClass}>
+                        Forecast
+                        <select value={analyticsFilters.revenue_forecast_horizon} onChange={(event) => updateAnalyticsFilters({ revenue_forecast_horizon: event.target.value })} className={analyticsFilterInputClass}>
+                            {FORECAST_HORIZON_OPTIONS.map(value => <option key={value} value={value}>{value} periods ahead</option>)}
+                        </select>
+                    </label>
+                </>,
+                'sm:grid-cols-3'
+            );
+        }
+
+        if (panel === 'bookingPipeline') {
+            return tray(
+                <label className={analyticsFilterLabelClass}>
+                    Booking status
+                    <select value={analyticsFilters.booking_status || ''} onChange={(event) => updateAnalyticsFilters({ booking_status: event.target.value })} className={analyticsFilterInputClass}>
+                        {ANALYTICS_BOOKING_STATUS_OPTIONS.map(option => <option key={option.value || 'all'} value={option.value}>{option.label}</option>)}
+                    </select>
+                </label>,
+            );
+        }
+
+        if (panel === 'salesFrequency') {
+            return tray(
+                <label className={analyticsFilterLabelClass}>
+                    Package category
+                    <select value={analyticsFilters.package_category || ''} onChange={(event) => updateAnalyticsFilters({ package_category: event.target.value })} className={analyticsFilterInputClass}>
+                        {ANALYTICS_PACKAGE_CATEGORY_OPTIONS.map(option => <option key={option.value || 'all'} value={option.value}>{option.label}</option>)}
+                    </select>
+                </label>,
+            );
+        }
+
+        if (panel === 'conversionFunnel') {
+            return tray(
+                <label className={analyticsFilterLabelClass}>
+                    Funnel timeframe
+                    <select value={analyticsFilters.snapshot_window} onChange={(event) => updateAnalyticsFilters({ snapshot_window: event.target.value })} className={analyticsFilterInputClass}>
+                        {ANALYTICS_TIMEFRAME_OPTIONS.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+                    </select>
+                </label>,
+            );
+        }
+
+        if (panel === 'packagePerformance') {
+            return tray(
+                <>
+                    <label className={analyticsFilterLabelClass}>
+                        Package category
+                        <select value={analyticsFilters.package_category || ''} onChange={(event) => updateAnalyticsFilters({ package_category: event.target.value })} className={analyticsFilterInputClass}>
+                            {ANALYTICS_PACKAGE_CATEGORY_OPTIONS.map(option => <option key={option.value || 'all'} value={option.value}>{option.label}</option>)}
+                        </select>
+                    </label>
+                    <label className={analyticsFilterLabelClass}>
+                        Show
+                        <select value={packageViewFilters.limit} onChange={(event) => updatePackageViewFilters({ limit: event.target.value })} className={analyticsFilterInputClass}>
+                            {PERFORMANCE_LIMIT_OPTIONS.map(limit => <option key={limit} value={limit}>Top {limit}</option>)}
+                        </select>
+                    </label>
+                    <label className={analyticsFilterLabelClass}>
+                        Sort by
+                        <select value={packageViewFilters.sort} onChange={(event) => updatePackageViewFilters({ sort: event.target.value })} className={analyticsFilterInputClass}>
+                            <option value="revenue">Revenue</option>
+                            <option value="bookings">Bookings</option>
+                            <option value="name">Package name</option>
+                        </select>
+                    </label>
+                    <label className={analyticsFilterLabelClass}>
+                        Minimum bookings
+                        <input type="number" min="0" value={packageViewFilters.minBookings} onChange={(event) => updatePackageViewFilters({ minBookings: event.target.value })} placeholder="All" className={analyticsFilterInputClass} />
+                    </label>
+                </>,
+                'sm:grid-cols-2'
+            );
+        }
+
+        if (panel === 'menuPerformance') {
+            return tray(
+                <>
+                    <label className={analyticsFilterLabelClass}>
+                        Dish type
+                        <select value={menuViewFilters.category} onChange={(event) => updateMenuViewFilters({ category: event.target.value })} className={analyticsFilterInputClass}>
+                            {MENU_CATEGORY_OPTIONS.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+                        </select>
+                    </label>
+                    <label className={analyticsFilterLabelClass}>
+                        Show
+                        <select value={menuViewFilters.limit} onChange={(event) => updateMenuViewFilters({ limit: event.target.value })} className={analyticsFilterInputClass}>
+                            {PERFORMANCE_LIMIT_OPTIONS.map(limit => <option key={limit} value={limit}>Top {limit}</option>)}
+                        </select>
+                    </label>
+                    <label className={analyticsFilterLabelClass}>
+                        Sort by
+                        <select value={menuViewFilters.sort} onChange={(event) => updateMenuViewFilters({ sort: event.target.value })} className={analyticsFilterInputClass}>
+                            <option value="selections">Selections</option>
+                            <option value="pax">Guests served</option>
+                            <option value="name">Dish name</option>
+                        </select>
+                    </label>
+                </>,
+                'sm:grid-cols-3'
+            );
+        }
+
+        if (panel === 'revenueRegression') {
+            return tray(
+                <label className={analyticsFilterLabelClass}>
+                    Regression history
+                    <select value={analyticsFilters.trend_months} onChange={(event) => updateAnalyticsFilters({ trend_months: event.target.value })} className={analyticsFilterInputClass}>
+                        {[6, 9, 12, 18, 24].map(months => <option key={months} value={months}>{months} months history + 3 projected months</option>)}
+                    </select>
+                </label>,
+            );
+        }
+
+        if (panel === 'paxForecast') {
+            return tray(
+                <>
+                    <label className={analyticsFilterLabelClass}>
+                        Forecast period
+                        <select value={analyticsFilters.pax_projection_period} onChange={(event) => updateAnalyticsFilters({ pax_projection_period: event.target.value })} className={analyticsFilterInputClass}>
+                            <option value="monthly">Monthly</option>
+                            <option value="quarterly">Quarterly</option>
+                        </select>
+                    </label>
+                    <label className={analyticsFilterLabelClass}>
+                        Year
+                        <select value={analyticsFilters.pax_projection_year} onChange={(event) => updateAnalyticsFilters({ pax_projection_year: event.target.value })} className={analyticsFilterInputClass}>
+                            <option value="">All years</option>
+                            {ANALYTICS_YEARS.map(year => <option key={year} value={year}>{year}</option>)}
+                        </select>
+                    </label>
+                    <label className={analyticsFilterLabelClass}>
+                        Quarter
+                        <select value={analyticsFilters.pax_projection_quarter} onChange={(event) => updateAnalyticsFilters({ pax_projection_quarter: event.target.value })} className={analyticsFilterInputClass}>
+                            <option value="">All quarters</option>
+                            {[1, 2, 3, 4].map(q => <option key={q} value={q}>Q{q}</option>)}
+                        </select>
+                    </label>
+                    <label className={analyticsFilterLabelClass}>
+                        SMA window
+                        <select value={analyticsFilters.pax_sma_window} onChange={(event) => updateAnalyticsFilters({ pax_sma_window: event.target.value })} className={analyticsFilterInputClass}>
+                            {[2, 3, 4, 6].map(window => <option key={window} value={window}>{window} periods</option>)}
+                        </select>
+                    </label>
+                    <label className={analyticsFilterLabelClass}>
+                        Projection horizon
+                        <select value={analyticsFilters.pax_projection_horizon} onChange={(event) => updateAnalyticsFilters({ pax_projection_horizon: event.target.value })} className={analyticsFilterInputClass}>
+                            {[3, 6, 9, 12].map(horizon => <option key={horizon} value={horizon}>{horizon} periods</option>)}
+                        </select>
+                    </label>
+                </>,
+                'sm:grid-cols-3'
+            );
+        }
+
+        return null;
+    };
+
+    const renderAnalyticsFilterControl = (panel, label = 'Filters') => (
+        <div className="admin-dashboard-filter-anchor">
+            {renderAnalyticsFilterButton(panel, label)}
+            {renderAnalyticsFilterPanel(panel)}
+        </div>
     );
 
     const insightToneClass = (severity = 'good') => ({
@@ -2094,8 +2461,38 @@ const DashboardAdmin = () => {
         );
     };
 
-    const AnalyticsPanel = ({ id, kicker, title, description, insight, actions, children, loading = false, className = '', chartHeight = 'h-64' }) => (
-        <section className={`admin-panel admin-analytics-panel overflow-hidden ${className}`}>
+    const chartInsight = (headline, meaning, recommended_action = 'Use this chart together with the active queues before making decisions.', severity = 'watch') => ({
+        headline,
+        meaning,
+        recommended_action,
+        severity,
+    });
+
+    const ChartGuide = ({ x, y, items = [] }) => (
+        <div className="admin-chart-guide">
+            <div className="admin-chart-axis-guide">
+                <span>X</span>
+                <strong>{x}</strong>
+            </div>
+            <div className="admin-chart-axis-guide">
+                <span>Y</span>
+                <strong>{y}</strong>
+            </div>
+            {!!items.length && (
+                <div className="admin-chart-legend" aria-label="Chart legend">
+                    {items.map((item) => (
+                        <span key={item.label}>
+                        <i style={{ backgroundColor: item.dashed ? 'transparent' : item.color, borderColor: item.color, borderStyle: item.dashed ? 'dashed' : 'solid' }} />
+                            {item.label}
+                        </span>
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+
+    const AnalyticsPanel = ({ id, filterKey = null, kicker, title, description, insight, fallbackInsight = null, guide = null, actions, children, loading = false, className = '', chartHeight = 'h-64' }) => (
+        <section className={`admin-panel admin-analytics-panel ${className}`}>
             <div className="admin-analytics-panel-head">
                 <div>
                     {kicker && <p className="admin-kicker">{kicker}</p>}
@@ -2108,12 +2505,14 @@ const DashboardAdmin = () => {
                         <Maximize2 className="h-3.5 w-3.5" />
                         Expand
                     </button>
+                    {renderAnalyticsFilterPanel(filterKey)}
                 </div>
             </div>
             <div className="admin-analytics-panel-body">
                 {loading && <LoadingFeedback label="Preparing analytics..." compact />}
                 <div className={chartHeight}>{children}</div>
-                <InsightLine insight={insight} />
+                {guide && <ChartGuide {...guide} />}
+                <InsightLine insight={insight || fallbackInsight} compact={false} />
             </div>
         </section>
     );
@@ -2156,6 +2555,21 @@ const DashboardAdmin = () => {
                         <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#6B7280' }} />
                         <RechartsTooltip />
                         <Bar dataKey="count" fill="#720101" radius={[6, 6, 0, 0]} name="Bookings" />
+                    </BarChart>
+                </ResponsiveContainer>
+            ) : null;
+        }
+
+        if (panelId === 'sales-frequency') {
+            return salesFrequencyData.length ? (
+                <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={salesFrequencyData}>
+                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E5E7EB" />
+                        <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#6B7280' }} />
+                        <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#6B7280' }} />
+                        <RechartsTooltip formatter={(value, name) => name === 'percentage' ? `${value}%` : value} />
+                        <Bar dataKey="frequency" fill="#720101" radius={[6, 6, 0, 0]} name="Bookings" />
+                        <Bar dataKey="percentage" fill="#f0aa0b" radius={[6, 6, 0, 0]} name="Share" />
                     </BarChart>
                 </ResponsiveContainer>
             ) : null;
@@ -2213,14 +2627,14 @@ const DashboardAdmin = () => {
         if (panelId === 'revenue-forecast') {
             return revenueForecastData.length ? (
                 <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={revenueForecastData}>
+                    <LineChart data={revenueForecastData}>
                         <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E5E7EB" />
                         <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#6B7280' }} />
                         <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#6B7280' }} tickFormatter={(value) => `PHP ${Math.round(value / 1000)}k`} />
                         <RechartsTooltip formatter={(value) => formatCurrency(value)} />
-                        <Bar dataKey="revenue" fill="#720101" radius={[6, 6, 0, 0]} name="Actual collected" />
-                        <Bar dataKey="forecast" fill="#f0aa0b" radius={[6, 6, 0, 0]} name="SMA forecast" />
-                    </BarChart>
+                        <Line type="monotone" dataKey="cumulativeRevenue" stroke="#720101" strokeWidth={3} dot={{ r: 4 }} name="Cumulative actual" connectNulls={false} />
+                        <Line type="monotone" dataKey="trendLine" stroke="#f0aa0b" strokeWidth={3} strokeDasharray="6 4" dot={{ r: 3 }} name="OLS trend" connectNulls />
+                    </LineChart>
                 </ResponsiveContainer>
             ) : null;
         }
@@ -2247,11 +2661,12 @@ const DashboardAdmin = () => {
         'revenue-trend': ['Revenue trend', analyticsInsightItems.revenue],
         'payment-breakdown': ['Payment breakdown', analyticsInsightItems.payments],
         'booking-pipeline': ['Booking pipeline', analyticsInsightItems.pipeline],
+        'sales-frequency': ['Booked package mix', analyticsInsightItems.salesFrequency || salesFrequencyDistribution.insight],
         'conversion-funnel': ['Conversion funnel', analyticsInsightItems.conversion],
         'package-performance': ['Package performance', analyticsInsightItems.menu],
         'menu-performance': ['Menu performance', analyticsInsightItems.menu],
-        'revenue-forecast': ['Revenue forecast', analyticsInsightItems.forecast || normalizeInsight(revenueForecast.insight, 'Forecast gives planning context.')],
-        'pax-forecast': ['Guest demand forecast', analyticsInsightItems.forecast || normalizeInsight(paxDemandProjection.insight, 'Demand forecast gives planning context.')],
+        'revenue-forecast': ['Revenue regression', revenueForecast.interpretation || analyticsInsightItems.forecast || normalizeInsight(revenueForecast.insight, 'Forecast gives planning context.')],
+        'pax-forecast': ['Guest demand forecast', paxDemandProjection.interpretation || analyticsInsightItems.forecast || normalizeInsight(paxDemandProjection.insight, 'Demand forecast gives planning context.')],
     };
 
     const renderAnalyticsWorkbench = () => {
@@ -2286,7 +2701,7 @@ const DashboardAdmin = () => {
                 value: Number(analyticsSummary.totalPax || 0).toLocaleString(),
                 context: `Average booking value is ${formatCurrency(analyticsSummary.averageBookingValue || 0)}.`,
                 action: 'Review menu demand',
-                onClick: () => setActiveAnalyticsFilterPanel(activeAnalyticsFilterPanel === 'menuPerformance' ? null : 'menuPerformance'),
+                onClick: () => toggleAnalyticsFilterPanel('menuPerformance'),
             },
         ];
         const topAlerts = visibleOperationalAlerts.slice(0, 3);
@@ -2300,7 +2715,7 @@ const DashboardAdmin = () => {
 
         return (
             <div className="admin-insight-workbench animate-fadeIn space-y-5">
-                <section className="admin-panel overflow-hidden">
+                <section className="admin-panel overflow-visible">
                     <div className="flex flex-col gap-4 border-b border-gray-100 bg-[#fffaf3] p-6 lg:flex-row lg:items-center lg:justify-between">
                         <div>
                             <p className="admin-kicker">Insight workbench</p>
@@ -2308,31 +2723,13 @@ const DashboardAdmin = () => {
                             <p className="mt-2 max-w-3xl text-sm font-semibold leading-6 text-gray-500">Start with the signals that need decisions, then drill into revenue, bookings, payments, menu demand, operations, and forecasts.</p>
                         </div>
                         <div className="flex flex-wrap gap-2">
-                            {renderAnalyticsFilterButton('snapshot', businessSnapshot.label || 'Timeframe')}
-                            <button onClick={() => fetchAnalytics()} disabled={analyticsLoading} className="admin-button-primary inline-flex items-center justify-center gap-2 px-5 py-2.5 text-sm font-black">
+                            {renderAnalyticsFilterControl('snapshot', businessSnapshot.label || 'Timeframe')}
+                            <button type="button" onClick={() => fetchAnalytics()} disabled={analyticsLoading} className="admin-button-primary inline-flex items-center justify-center gap-2 px-5 py-2.5 text-sm font-black">
                                 <RefreshCw className={`h-4 w-4 ${analyticsLoading ? 'animate-spin' : ''}`} />
                                 {analyticsLoading ? 'Refreshing...' : 'Refresh insights'}
                             </button>
                         </div>
                     </div>
-                    {activeAnalyticsFilterPanel === 'snapshot' && (
-                        <div className="border-b border-gray-100 bg-white p-5">
-                            <label className="text-[11px] font-black uppercase tracking-widest text-gray-400">
-                                Timeframe
-                                <select
-                                    value={analyticsFilters.snapshot_window}
-                                    onChange={(event) => {
-                                        const nextFilters = { ...analyticsFilters, snapshot_window: event.target.value };
-                                        setAnalyticsFilters(nextFilters);
-                                        fetchAnalytics({ filters: nextFilters });
-                                    }}
-                                    className="mt-2 w-full max-w-xs rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-black normal-case tracking-normal text-gray-800 outline-none"
-                                >
-                                    {SNAPSHOT_WINDOW_OPTIONS.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
-                                </select>
-                            </label>
-                        </div>
-                    )}
                     {analyticsLoading && !analytics ? (
                         <StaffSkeleton variant="metrics" rows={4} />
                     ) : (
@@ -2399,21 +2796,24 @@ const DashboardAdmin = () => {
                 <div className="admin-analytics-grid">
                     <AnalyticsPanel
                         id="revenue-trend"
+                        filterKey="revenueTrend"
                         kicker="Revenue"
                         title="Revenue trend"
                         description="Verified collections over the selected window."
                         insight={analyticsInsightItems.revenue}
+                        fallbackInsight={chartInsight('Revenue trend is ready.', 'Bars show verified collected revenue for each month in the active analytics window.', 'Use dips or spikes to plan payment follow-ups and purchasing timing.')}
+                        guide={{ x: 'Month', y: 'Verified revenue' }}
                         loading={analyticsLoading && !!analytics}
                         actions={renderAnalyticsFilterButton('revenueTrend', `Last ${analyticsFilters.trend_months} months`)}
                     >
                         {revenueTrendData.length ? (
                             <ResponsiveContainer width="100%" height="100%">
-                                <BarChart data={revenueTrendData}>
+                                <BarChart data={revenueTrendData} margin={{ top: 12, right: 16, bottom: 4, left: 8 }}>
                                     <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E5E7EB" />
                                     <XAxis dataKey="month" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#6B7280' }} />
-                                    <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#6B7280' }} />
+                                    <YAxis width={70} axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#6B7280' }} tickFormatter={(value) => `PHP ${Math.round(value / 1000)}k`} />
                                     <RechartsTooltip formatter={(value) => formatCurrency(value)} />
-                                    <Bar dataKey="revenue" fill="#720101" radius={[6, 6, 0, 0]} name="Revenue" />
+                                    <Bar dataKey="revenue" fill="#720101" radius={[6, 6, 0, 0]} name="Revenue" isAnimationActive={analyticsChartsAnimated} />
                                 </BarChart>
                             </ResponsiveContainer>
                         ) : <div className="admin-chart-empty">No collected revenue for this window.</div>}
@@ -2421,21 +2821,24 @@ const DashboardAdmin = () => {
 
                     <AnalyticsPanel
                         id="payment-breakdown"
+                        filterKey="dashboardPayment"
                         kicker="Finance"
                         title="Payment breakdown"
                         description="Shows payment exposure by current status."
                         insight={analyticsInsightItems.payments}
+                        fallbackInsight={chartInsight('Payment breakdown is ready.', 'Bars compare outstanding and collected payment value by status.', 'Use the largest unpaid status as the first collection follow-up queue.')}
+                        guide={{ x: 'Payment status', y: 'Payment amount' }}
                         loading={analyticsLoading && !!analytics}
                         actions={renderAnalyticsFilterButton('dashboardPayment', paymentRiskFilters.status === 'all' ? 'Payment status' : paymentRiskFilters.status)}
                     >
                         {visiblePaymentStatusBreakdown.length ? (
                             <ResponsiveContainer width="100%" height="100%">
-                                <BarChart data={visiblePaymentStatusBreakdown}>
+                                <BarChart data={visiblePaymentStatusBreakdown} margin={{ top: 12, right: 16, bottom: 4, left: 8 }}>
                                     <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E5E7EB" />
                                     <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#6B7280' }} />
-                                    <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#6B7280' }} tickFormatter={(value) => `PHP ${Math.round(value / 1000)}k`} />
+                                    <YAxis width={70} axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#6B7280' }} tickFormatter={(value) => `PHP ${Math.round(value / 1000)}k`} />
                                     <RechartsTooltip formatter={(value) => formatCurrency(value)} />
-                                    <Bar dataKey="total" fill="#720101" radius={[6, 6, 0, 0]} name="Amount" />
+                                    <Bar dataKey="total" fill="#720101" radius={[6, 6, 0, 0]} name="Amount" isAnimationActive={analyticsChartsAnimated} />
                                 </BarChart>
                             </ResponsiveContainer>
                         ) : <div className="admin-chart-empty">No payment rows for this filter.</div>}
@@ -2443,32 +2846,65 @@ const DashboardAdmin = () => {
 
                     <AnalyticsPanel
                         id="booking-pipeline"
+                        filterKey="bookingPipeline"
                         kicker="Bookings"
                         title="Booking pipeline"
                         description="Counts requests and confirmed work by status."
                         insight={analyticsInsightItems.pipeline}
+                        fallbackInsight={chartInsight('Booking pipeline is ready.', 'Bars show how many bookings currently sit in each operational status.', 'Use high pending counts as a signal to review intake and approvals.')}
+                        guide={{ x: 'Booking status', y: 'Booking count' }}
                         loading={analyticsLoading && !!analytics}
+                        actions={renderAnalyticsFilterButton('bookingPipeline', analyticsFilters.booking_status || 'Booking status')}
                     >
                         {bookingPipelineData.length ? (
                             <ResponsiveContainer width="100%" height="100%">
-                                <BarChart data={bookingPipelineData}>
+                                <BarChart data={bookingPipelineData} margin={{ top: 12, right: 16, bottom: 4, left: 0 }}>
                                     <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E5E7EB" />
                                     <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#6B7280' }} />
                                     <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#6B7280' }} />
                                     <RechartsTooltip />
-                                    <Bar dataKey="count" fill="#720101" radius={[6, 6, 0, 0]} name="Bookings" />
+                                    <Bar dataKey="count" fill="#720101" radius={[6, 6, 0, 0]} name="Bookings" isAnimationActive={analyticsChartsAnimated} />
                                 </BarChart>
                             </ResponsiveContainer>
                         ) : <div className="admin-chart-empty">No booking pipeline data yet.</div>}
                     </AnalyticsPanel>
 
                     <AnalyticsPanel
+                        id="sales-frequency"
+                        filterKey="salesFrequency"
+                        kicker="Descriptive sales"
+                        title="Booked package mix"
+                        description="Verified bookings grouped by the package categories configured in the system."
+                        insight={analyticsInsightItems.salesFrequency || salesFrequencyDistribution.insight}
+                        fallbackInsight={chartInsight('Booked package mix is ready.', 'Bars show how verified bookings are distributed across real package categories.', 'Use the leading category to tune package defaults and campaign focus.')}
+                        guide={{ x: 'Package category', y: 'Verified bookings' }}
+                        loading={analyticsLoading && !!analytics}
+                        actions={renderAnalyticsFilterButton('salesFrequency', ANALYTICS_PACKAGE_CATEGORY_OPTIONS.find(option => option.value === (analyticsFilters.package_category || ''))?.label || 'Package category')}
+                    >
+                        {salesFrequencyData.length ? (
+                            <ResponsiveContainer width="100%" height="100%">
+                                <BarChart data={salesFrequencyData} margin={{ top: 12, right: 16, bottom: 4, left: 0 }}>
+                                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E5E7EB" />
+                                    <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#6B7280' }} />
+                                    <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#6B7280' }} />
+                                    <RechartsTooltip formatter={(value, name) => name === 'Share' ? `${value}%` : value} />
+                                    <Bar dataKey="frequency" fill="#720101" radius={[6, 6, 0, 0]} name="Bookings" isAnimationActive={analyticsChartsAnimated} />
+                                </BarChart>
+                            </ResponsiveContainer>
+                        ) : <div className="admin-chart-empty">No verified sales frequency data yet.</div>}
+                    </AnalyticsPanel>
+
+                    <AnalyticsPanel
                         id="conversion-funnel"
+                        filterKey="conversionFunnel"
                         kicker="Conversion"
                         title="Booking completion funnel"
                         description="Tracks starts, submissions, payment movement, and feedback."
                         insight={analyticsInsightItems.conversion}
+                        fallbackInsight={chartInsight('Booking funnel is ready.', 'Bars show the main conversion steps from booking activity through feedback capture.', 'Watch for the first major drop-off before adjusting customer follow-up.')}
+                        guide={{ x: 'Funnel step', y: 'Record count' }}
                         loading={analyticsLoading && !!analytics}
+                        actions={renderAnalyticsFilterButton('conversionFunnel', businessSnapshot.label || 'Timeframe')}
                     >
                         <ResponsiveContainer width="100%" height="100%">
                             <BarChart data={[
@@ -2476,33 +2912,36 @@ const DashboardAdmin = () => {
                                 { label: 'Bookings', value: conversionFunnel.booking_submissions || 0 },
                                 { label: 'Payments', value: conversionFunnel.payment_confirmations || 0 },
                                 { label: 'Feedback', value: conversionFunnel.feedback_submissions || 0 },
-                            ]}>
+                            ]} margin={{ top: 12, right: 16, bottom: 4, left: 0 }}>
                                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E5E7EB" />
                                 <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#6B7280' }} />
                                 <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#6B7280' }} />
                                 <RechartsTooltip />
-                                <Bar dataKey="value" fill="#720101" radius={[6, 6, 0, 0]} name="Events" />
+                                <Bar dataKey="value" fill="#720101" radius={[6, 6, 0, 0]} name="Events" isAnimationActive={analyticsChartsAnimated} />
                             </BarChart>
                         </ResponsiveContainer>
                     </AnalyticsPanel>
 
                     <AnalyticsPanel
                         id="package-performance"
+                        filterKey="packagePerformance"
                         kicker="Menu demand"
                         title="Package performance"
                         description="Top package choices by revenue."
                         insight={analyticsInsightItems.menu}
+                        fallbackInsight={chartInsight('Package performance is ready.', 'Bars rank packages by verified booking value.', 'Use the leading packages to guide recommendations and sales scripts.')}
+                        guide={{ x: 'Verified revenue', y: 'Package' }}
                         loading={analyticsLoading && !!analytics}
                         actions={renderAnalyticsFilterButton('packagePerformance', `Top ${packageViewFilters.limit}`)}
                     >
                         {visiblePackagePerformanceData.length ? (
                             <ResponsiveContainer width="100%" height="100%">
-                                <BarChart data={visiblePackagePerformanceData} layout="vertical" margin={{ left: 24, right: 12 }}>
+                                <BarChart data={visiblePackagePerformanceData} layout="vertical" margin={{ top: 12, left: 28, right: 20, bottom: 4 }}>
                                     <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#E5E7EB" />
                                     <XAxis type="number" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#6B7280' }} tickFormatter={(value) => `PHP ${Math.round(value / 1000)}k`} />
                                     <YAxis type="category" dataKey="label" width={130} axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#374151', fontWeight: 700 }} />
                                     <RechartsTooltip formatter={(value) => formatCurrency(value)} />
-                                    <Bar dataKey="revenue" fill="#720101" radius={[0, 6, 6, 0]} name="Revenue" />
+                                    <Bar dataKey="revenue" fill="#720101" radius={[0, 6, 6, 0]} name="Revenue" isAnimationActive={analyticsChartsAnimated} />
                                 </BarChart>
                             </ResponsiveContainer>
                         ) : <div className="admin-chart-empty">No package data for this filter.</div>}
@@ -2510,21 +2949,24 @@ const DashboardAdmin = () => {
 
                     <AnalyticsPanel
                         id="menu-performance"
+                        filterKey="menuPerformance"
                         kicker="Kitchen signal"
                         title="Menu performance"
                         description="Most selected dishes from actual bookings."
                         insight={analyticsInsightItems.menu}
+                        fallbackInsight={chartInsight('Menu performance is ready.', 'Bars rank dishes by the active menu filter.', 'Use high-demand dishes for purchasing and package menu defaults.')}
+                        guide={{ x: menuViewFilters.sort === 'pax' ? 'Guests served' : 'Selections', y: 'Dish' }}
                         loading={analyticsLoading && !!analytics}
                         actions={renderAnalyticsFilterButton('menuPerformance', MENU_CATEGORY_OPTIONS.find(option => option.value === menuViewFilters.category)?.label || 'Dish type')}
                     >
                         {visibleMenuPerformanceData.length ? (
                             <ResponsiveContainer width="100%" height="100%">
-                                <BarChart data={visibleMenuPerformanceData} layout="vertical" margin={{ left: 24, right: 12 }}>
+                                <BarChart data={visibleMenuPerformanceData} layout="vertical" margin={{ top: 12, left: 28, right: 20, bottom: 4 }}>
                                     <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#E5E7EB" />
                                     <XAxis type="number" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#6B7280' }} />
                                     <YAxis type="category" dataKey="label" width={130} axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#374151', fontWeight: 700 }} />
                                     <RechartsTooltip />
-                                    <Bar dataKey={menuViewFilters.sort === 'pax' ? 'paxServed' : 'selections'} fill="#720101" radius={[0, 6, 6, 0]} name={menuViewFilters.sort === 'pax' ? 'Guests served' : 'Selections'} />
+                                    <Bar dataKey={menuViewFilters.sort === 'pax' ? 'paxServed' : 'selections'} fill="#720101" radius={[0, 6, 6, 0]} name={menuViewFilters.sort === 'pax' ? 'Guests served' : 'Selections'} isAnimationActive={analyticsChartsAnimated} />
                                 </BarChart>
                             </ResponsiveContainer>
                         ) : <div className="admin-chart-empty">No menu selections for this filter.</div>}
@@ -2532,45 +2974,55 @@ const DashboardAdmin = () => {
 
                     <AnalyticsPanel
                         id="revenue-forecast"
+                        filterKey="revenueRegression"
                         kicker="Forecast"
-                        title="Revenue forecast"
-                        description="Moving average forecast for collected revenue."
-                        insight={analyticsInsightItems.forecast || normalizeInsight(revenueForecast.insight, 'Forecast gives planning context.')}
+                        title="Revenue regression"
+                        description={`${revenueRegressionHistoryMonths}-month history with a ${revenueRegressionHorizon}-month projection.`}
+                        insight={revenueForecast.interpretation || analyticsInsightItems.forecast || normalizeInsight(revenueForecast.insight, 'Forecast gives planning context.')}
+                        fallbackInsight={chartInsight('Revenue regression is ready.', 'The line compares cumulative actual revenue with the OLS trend and projected path.', 'Use the next projected month to plan buffers before committing purchases.')}
+                        guide={{ x: 'Month (history + projection)', y: 'Cumulative verified revenue', items: [{ label: 'Cumulative actual', color: '#720101' }, { label: 'OLS trend / projection', color: '#f0aa0b', dashed: true }] }}
                         loading={analyticsLoading && !!analytics}
-                        actions={renderAnalyticsFilterButton('revenueForecast', `${analyticsFilters.revenue_forecast_period} forecast`)}
+                        className="admin-analytics-panel-wide"
+                        chartHeight="h-72"
+                        actions={renderAnalyticsFilterButton('revenueRegression', `${revenueRegressionHistoryMonths} mo history + ${revenueRegressionHorizon} mo projection`)}
                     >
                         {revenueForecastData.length ? (
                             <ResponsiveContainer width="100%" height="100%">
-                                <BarChart data={revenueForecastData}>
+                                <LineChart data={revenueForecastData} margin={{ top: 12, right: 20, bottom: 4, left: 14 }}>
                                     <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E5E7EB" />
                                     <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#6B7280' }} />
-                                    <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#6B7280' }} tickFormatter={(value) => `PHP ${Math.round(value / 1000)}k`} />
+                                    <YAxis width={76} axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#6B7280' }} tickFormatter={(value) => `PHP ${Math.round(value / 1000)}k`} />
                                     <RechartsTooltip formatter={(value) => formatCurrency(value)} />
-                                    <Bar dataKey="revenue" fill="#720101" radius={[6, 6, 0, 0]} name="Actual collected" />
-                                    <Bar dataKey="forecast" fill="#f0aa0b" radius={[6, 6, 0, 0]} name="SMA forecast" />
-                                </BarChart>
+                                    <Line type="monotone" dataKey="cumulativeRevenue" stroke="#720101" strokeWidth={3} dot={{ r: 3 }} name="Cumulative actual" connectNulls={false} isAnimationActive={analyticsChartsAnimated} />
+                                    <Line type="monotone" dataKey="trendLine" stroke="#f0aa0b" strokeWidth={3} strokeDasharray="6 4" dot={{ r: 3 }} name="OLS trend" connectNulls isAnimationActive={analyticsChartsAnimated} />
+                                </LineChart>
                             </ResponsiveContainer>
-                        ) : <div className="admin-chart-empty">No revenue forecast data yet.</div>}
+                        ) : <div className="admin-chart-empty">No revenue regression data yet.</div>}
                     </AnalyticsPanel>
 
                     <AnalyticsPanel
                         id="pax-forecast"
+                        filterKey="paxForecast"
                         kicker="Operations forecast"
                         title="Guest demand forecast"
                         description="Projected pax for staffing and preparation planning."
-                        insight={analyticsInsightItems.forecast || normalizeInsight(paxDemandProjection.insight, 'Demand forecast gives planning context.')}
+                        insight={paxDemandProjection.interpretation || analyticsInsightItems.forecast || normalizeInsight(paxDemandProjection.insight, 'Demand forecast gives planning context.')}
+                        fallbackInsight={chartInsight('Guest demand forecast is ready.', 'Bars compare actual guest volume with simple moving-average demand forecasts.', 'Use the forecast to plan staffing, purchasing, and prep capacity.')}
+                        guide={{ x: 'Period', y: 'Guest count', items: [{ label: 'Actual guests', color: '#720101' }, { label: 'SMA forecast', color: '#f0aa0b' }] }}
                         loading={analyticsLoading && !!analytics}
+                        className="admin-analytics-panel-wide"
+                        chartHeight="h-72"
                         actions={renderAnalyticsFilterButton('paxForecast', `${analyticsFilters.pax_projection_period} demand`)}
                     >
                         {paxDemandData.length ? (
                             <ResponsiveContainer width="100%" height="100%">
-                                <BarChart data={paxDemandData}>
+                                <BarChart data={paxDemandData} margin={{ top: 12, right: 20, bottom: 4, left: 0 }}>
                                     <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E5E7EB" />
                                     <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#6B7280' }} />
                                     <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#6B7280' }} />
                                     <RechartsTooltip />
-                                    <Bar dataKey="pax" fill="#720101" radius={[6, 6, 0, 0]} name="Actual guests" />
-                                    <Bar dataKey="forecast" fill="#f0aa0b" radius={[6, 6, 0, 0]} name="SMA forecast" />
+                                    <Bar dataKey="pax" fill="#720101" radius={[6, 6, 0, 0]} name="Actual guests" isAnimationActive={analyticsChartsAnimated} />
+                                    <Bar dataKey="forecast" fill="#f0aa0b" radius={[6, 6, 0, 0]} name="SMA forecast" isAnimationActive={analyticsChartsAnimated} />
                                 </BarChart>
                             </ResponsiveContainer>
                         ) : <div className="admin-chart-empty">No guest demand forecast data yet.</div>}
@@ -2588,21 +3040,8 @@ const DashboardAdmin = () => {
                             <div className="rounded-xl border border-gray-100 p-4">
                                 <div className="mb-3 flex items-center justify-between">
                                     <h4 className="text-sm font-black text-gray-950">Revenue trend</h4>
-                                    {renderAnalyticsFilterButton('revenueTrend', `Last ${analyticsFilters.trend_months} months`)}
+                                    {renderAnalyticsFilterControl('revenueTrend', `Last ${analyticsFilters.trend_months} months`)}
                                 </div>
-                                {activeAnalyticsFilterPanel === 'revenueTrend' && (
-                                    <select
-                                        value={analyticsFilters.trend_months}
-                                        onChange={(event) => {
-                                            const nextFilters = { ...analyticsFilters, trend_months: event.target.value };
-                                            setAnalyticsFilters(nextFilters);
-                                            fetchAnalytics({ filters: nextFilters });
-                                        }}
-                                        className="mb-3 w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-black text-gray-800 outline-none"
-                                    >
-                                        {[3, 6, 9, 12, 18, 24].map(months => <option key={months} value={months}>Last {months} months</option>)}
-                                    </select>
-                                )}
                                 <div className="h-64">
                                     {revenueTrendData.length ? (
                                         <ResponsiveContainer width="100%" height="100%">
@@ -2657,7 +3096,7 @@ const DashboardAdmin = () => {
                                 <p className="admin-kicker">Menu demand</p>
                                 <h3 className="mt-1 text-xl font-black text-gray-950">Top packages</h3>
                             </div>
-                            {renderAnalyticsFilterButton('packagePerformance', `Top ${packageViewFilters.limit}`)}
+                            {renderAnalyticsFilterControl('packagePerformance', `Top ${packageViewFilters.limit}`)}
                         </div>
                         <div className="space-y-3 p-5">
                             {topPackages.map((pkg, index) => (
@@ -2678,7 +3117,7 @@ const DashboardAdmin = () => {
                                 <p className="admin-kicker">Kitchen signal</p>
                                 <h3 className="mt-1 text-xl font-black text-gray-950">Most selected dishes</h3>
                             </div>
-                            {renderAnalyticsFilterButton('menuPerformance', MENU_CATEGORY_OPTIONS.find(option => option.value === menuViewFilters.category)?.label || 'Dish type')}
+                            {renderAnalyticsFilterControl('menuPerformance', MENU_CATEGORY_OPTIONS.find(option => option.value === menuViewFilters.category)?.label || 'Dish type')}
                         </div>
                         <div className="space-y-3 p-5">
                             {topDishes.map((dish, index) => (
@@ -2709,6 +3148,19 @@ const DashboardAdmin = () => {
             {label}
             <ChevronDown className={`h-4 w-4 transition-transform ${activeDashboardFilterPanel === panel ? 'rotate-180' : ''}`} />
         </button>
+    );
+
+    const renderDashboardFilterControl = (panel, label, children, columns = 'sm:grid-cols-2') => (
+        <div className="admin-dashboard-filter-anchor">
+            {renderDashboardFilterButton(panel, label)}
+            {activeDashboardFilterPanel === panel && (
+                <div className="admin-dashboard-filter-popover">
+                    <div className={`grid grid-cols-1 gap-3 ${columns}`}>
+                        {children}
+                    </div>
+                </div>
+            )}
+        </div>
     );
 
     const fetchAudits = async ({ silent = false } = {}) => {
@@ -3332,7 +3784,7 @@ const DashboardAdmin = () => {
                     {activeTab === 'today' && (
                         <div className="animate-fadeIn">
                             <div className="space-y-6">
-                                <section className="admin-panel admin-today-command overflow-hidden">
+                                <section className="admin-panel admin-today-command overflow-visible">
                                     <div className="admin-compact-command border-0 bg-[#fffaf3]">
                                         <div>
                                             <p className="admin-kicker">Daily work</p>
@@ -3352,7 +3804,25 @@ const DashboardAdmin = () => {
                                                 </button>
                                             </div>
                                             <div className="admin-utility-actions">
-                                                {renderDashboardFilterButton('dashboardSnapshot', businessSnapshot.label || 'Timeframe')}
+                                                {renderDashboardFilterControl(
+                                                    'dashboardSnapshot',
+                                                    businessSnapshot.label || 'Timeframe',
+                                                    <label className="text-[11px] font-black uppercase tracking-widest text-gray-400">
+                                                        <span className="flex items-center gap-2"><CalendarDays className="h-3.5 w-3.5" /> Overview timeframe</span>
+                                                        <select
+                                                            value={analyticsFilters.snapshot_window}
+                                                            onChange={(event) => {
+                                                                const nextFilters = { ...analyticsFilters, snapshot_window: event.target.value };
+                                                                setAnalyticsFilters(nextFilters);
+                                                                fetchAnalytics({ filters: nextFilters });
+                                                            }}
+                                                            className="mt-2 w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-black normal-case tracking-normal text-gray-800 outline-none"
+                                                        >
+                                                            {SNAPSHOT_WINDOW_OPTIONS.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+                                                        </select>
+                                                    </label>,
+                                                    'sm:grid-cols-1'
+                                                )}
                                                 <button
                                                     onClick={() => fetchAnalytics()}
                                                     disabled={analyticsLoading}
@@ -3365,24 +3835,6 @@ const DashboardAdmin = () => {
                                             </div>
                                         </div>
                                     </div>
-                                    {activeDashboardFilterPanel === 'dashboardSnapshot' && (
-                                        <div className="border-t border-gray-100 bg-white px-4 py-3">
-                                            <label className="block max-w-xs text-[11px] font-black uppercase tracking-widest text-gray-400">
-                                                <span className="flex items-center gap-2"><CalendarDays className="h-3.5 w-3.5" /> Overview timeframe</span>
-                                                <select
-                                                    value={analyticsFilters.snapshot_window}
-                                                    onChange={(event) => {
-                                                        const nextFilters = { ...analyticsFilters, snapshot_window: event.target.value };
-                                                        setAnalyticsFilters(nextFilters);
-                                                        fetchAnalytics({ filters: nextFilters });
-                                                    }}
-                                                    className="mt-2 w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-black normal-case tracking-normal text-gray-800 outline-none"
-                                                >
-                                                    {SNAPSHOT_WINDOW_OPTIONS.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
-                                                </select>
-                                            </label>
-                                        </div>
-                                    )}
                                     <div className="admin-stat-strip border-t border-gray-100 bg-white px-4 py-3">
                                         {[
                                             ['Total revenue', formatCurrency(analyticsSummary.totalRevenue || 0), `Collected ${formatCurrency(analyticsSummary.settledRevenue || 0)}`],
@@ -3396,6 +3848,51 @@ const DashboardAdmin = () => {
                                                 <small>{hint}</small>
                                             </span>
                                         ))}
+                                    </div>
+                                </section>
+
+                                <section className="admin-panel overflow-hidden">
+                                    <div className="flex flex-col gap-2 border-b border-gray-100 bg-white p-5 md:flex-row md:items-end md:justify-between">
+                                        <div>
+                                            <p className="admin-kicker">Decision support</p>
+                                            <h3 className="mt-1 text-xl font-black text-gray-950">Advanced analytics snapshot</h3>
+                                            <p className="mt-1 text-sm font-semibold text-gray-500">Sales concentration, revenue trajectory, and smoothed guest demand for today&apos;s admin decisions.</p>
+                                        </div>
+                                        {salesFrequencyDistribution.is_fallback && (
+                                            <span className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-black uppercase tracking-widest text-amber-700">Fallback data</span>
+                                        )}
+                                    </div>
+                                    <div className="grid gap-4 p-5 xl:grid-cols-3">
+                                        <div className="rounded-xl border border-gray-100 bg-[#fffaf3] p-4">
+                                            <p className="text-xs font-black uppercase tracking-widest text-[#9f6500]">Dominant package category</p>
+                                            <p className="mt-2 text-2xl font-black text-gray-950">{topSalesFrequency?.label || 'No category yet'}</p>
+                                            <p className="mt-1 text-sm font-semibold text-gray-600">{Number(topSalesFrequency?.percentage || 0).toFixed(1)}% of verified booking volume</p>
+                                            <div className="mt-4 h-40">
+                                                {salesFrequencyData.length ? (
+                                                    <ResponsiveContainer width="100%" height="100%">
+                                                        <BarChart data={salesFrequencyData}>
+                                                            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E5E7EB" />
+                                                            <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{ fontSize: 9, fill: '#6B7280' }} />
+                                                            <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#6B7280' }} />
+                                                            <RechartsTooltip />
+                                                            <Bar dataKey="frequency" fill="#720101" radius={[6, 6, 0, 0]} name="Bookings" />
+                                                        </BarChart>
+                                                    </ResponsiveContainer>
+                                                ) : <div className="flex h-full items-center justify-center text-sm font-bold text-gray-400">Waiting for sales data.</div>}
+                                            </div>
+                                        </div>
+                                        <div className="rounded-xl border border-gray-100 bg-white p-4">
+                                            <p className="text-xs font-black uppercase tracking-widest text-[#9f6500]">Next revenue trajectory</p>
+                                            <p className="mt-2 text-2xl font-black text-gray-950">{formatCurrency(revenueForecastSummary.nextForecast || 0)}</p>
+                                            <p className="mt-1 text-sm font-semibold text-gray-600">{revenueForecastSummary.method || 'OLS linear regression'} / {revenueForecastSummary.direction || 'upward'}</p>
+                                            <InsightLine insight={revenueForecast.interpretation || normalizeInsight(revenueForecast.insight)} compact={false} />
+                                        </div>
+                                        <div className="rounded-xl border border-gray-100 bg-white p-4">
+                                            <p className="text-xs font-black uppercase tracking-widest text-[#9f6500]">Guest demand baseline</p>
+                                            <p className="mt-2 text-2xl font-black text-gray-950">{Number(paxDemandSummary.nextForecast || 0).toLocaleString()} guests</p>
+                                            <p className="mt-1 text-sm font-semibold text-gray-600">{paxDemandSummary.method || 'SMA'} / next planning period</p>
+                                            <InsightLine insight={paxDemandProjection.interpretation || normalizeInsight(paxDemandProjection.insight)} compact={false} />
+                                        </div>
                                     </div>
                                 </section>
 
@@ -3416,10 +3913,9 @@ const DashboardAdmin = () => {
                                                 <h3 className="mt-1 text-lg font-black text-gray-950">Collected Revenue Trend</h3>
                                                 <p className="mt-1 text-sm font-semibold text-gray-500">Verified collections across the selected historical window.</p>
                                             </div>
-                                            {renderDashboardFilterButton('dashboardRevenue', `Last ${analyticsFilters.trend_months} months`)}
-                                        </div>
-                                        {activeDashboardFilterPanel === 'dashboardRevenue' && (
-                                            <div className="mb-5 grid grid-cols-1 gap-3 rounded-xl border border-gray-100 bg-gray-50 p-4 sm:grid-cols-2">
+                                            {renderDashboardFilterControl(
+                                                'dashboardRevenue',
+                                                `Last ${analyticsFilters.trend_months} months`,
                                                 <label className="text-[11px] font-black uppercase tracking-widest text-gray-400">
                                                     <span className="flex items-center gap-2"><CalendarDays className="h-3.5 w-3.5" /> Trend window</span>
                                                     <select
@@ -3433,9 +3929,10 @@ const DashboardAdmin = () => {
                                                     >
                                                         {[3, 6, 9, 12, 18, 24].map(months => <option key={months} value={months}>Last {months} months</option>)}
                                                     </select>
-                                                </label>
-                                            </div>
-                                        )}
+                                                </label>,
+                                                'sm:grid-cols-1'
+                                            )}
+                                        </div>
                                         <div className="h-72">
                                             {revenueTrendData.length ? (
                                                 <ResponsiveContainer width="100%" height="100%">
@@ -3458,10 +3955,9 @@ const DashboardAdmin = () => {
                                                 <h3 className="mt-1 text-lg font-black text-gray-950">Operational Alerts</h3>
                                                 <p className="mt-1 text-sm font-semibold text-gray-500">Items that need admin action.</p>
                                             </div>
-                                            {renderDashboardFilterButton('dashboardAlerts', alertFilters.severity === 'all' ? 'Severity' : alertFilters.severity)}
-                                        </div>
-                                        {activeDashboardFilterPanel === 'dashboardAlerts' && (
-                                            <div className="mb-5 rounded-xl border border-gray-100 bg-gray-50 p-4">
+                                            {renderDashboardFilterControl(
+                                                'dashboardAlerts',
+                                                alertFilters.severity === 'all' ? 'Severity' : alertFilters.severity,
                                                 <label className="text-[11px] font-black uppercase tracking-widest text-gray-400">
                                                     Alert severity
                                                     <select value={alertFilters.severity} onChange={(e) => setAlertFilters({ ...alertFilters, severity: e.target.value })} className="mt-2 w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-black normal-case tracking-normal text-gray-800 outline-none">
@@ -3470,9 +3966,10 @@ const DashboardAdmin = () => {
                                                         <option value="warning">Warning</option>
                                                         <option value="success">Healthy</option>
                                                     </select>
-                                                </label>
-                                            </div>
-                                        )}
+                                                </label>,
+                                                'sm:grid-cols-1'
+                                            )}
+                                        </div>
                                         <div className="space-y-3">
                                             {visibleOperationalAlerts.map((alert) => (
                                                 <div key={alert.label} className={`rounded-xl border p-4 ${alert.severity === 'danger' ? 'border-red-200 bg-red-50' : alert.severity === 'warning' ? 'border-amber-200 bg-amber-50' : 'border-emerald-100 bg-emerald-50'}`}>
@@ -3496,23 +3993,24 @@ const DashboardAdmin = () => {
                                                 <h3 className="mt-1 text-lg font-black text-gray-950">Payment Risk</h3>
                                                 <p className="mt-1 text-sm font-semibold text-gray-500">Payment exposure by status and aging bucket.</p>
                                             </div>
-                                            {renderDashboardFilterButton('dashboardPayment', paymentRiskFilters.status === 'all' ? 'Risk filters' : paymentRiskFilters.status)}
+                                            {renderDashboardFilterControl(
+                                                'dashboardPayment',
+                                                paymentRiskFilters.status === 'all' ? 'Risk filters' : paymentRiskFilters.status,
+                                                <>
+                                                    <label className="text-[11px] font-black uppercase tracking-widest text-gray-400">
+                                                        <span className="flex items-center gap-2"><CreditCard className="h-3.5 w-3.5" /> Payment status</span>
+                                                        <select value={paymentRiskFilters.status} onChange={(e) => setPaymentRiskFilters({ ...paymentRiskFilters, status: e.target.value })} className="mt-2 w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-black normal-case tracking-normal text-gray-800 outline-none">
+                                                            <option value="all">All statuses</option>
+                                                            {paymentStatusBreakdown.map(row => <option key={row.label} value={String(row.label || '').toLowerCase()}>{row.label}</option>)}
+                                                        </select>
+                                                    </label>
+                                                    <label className="text-[11px] font-black uppercase tracking-widest text-gray-400">
+                                                        Minimum aging balance
+                                                        <input type="number" min="0" value={paymentRiskFilters.minBalance} onChange={(e) => setPaymentRiskFilters({ ...paymentRiskFilters, minBalance: e.target.value })} placeholder="Show all" className="mt-2 w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-black normal-case tracking-normal text-gray-800 outline-none" />
+                                                    </label>
+                                                </>
+                                            )}
                                         </div>
-                                        {activeDashboardFilterPanel === 'dashboardPayment' && (
-                                            <div className="mb-5 grid grid-cols-1 gap-3 rounded-xl border border-gray-100 bg-gray-50 p-4 sm:grid-cols-2">
-                                                <label className="text-[11px] font-black uppercase tracking-widest text-gray-400">
-                                                    <span className="flex items-center gap-2"><CreditCard className="h-3.5 w-3.5" /> Payment status</span>
-                                                    <select value={paymentRiskFilters.status} onChange={(e) => setPaymentRiskFilters({ ...paymentRiskFilters, status: e.target.value })} className="mt-2 w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-black normal-case tracking-normal text-gray-800 outline-none">
-                                                        <option value="all">All statuses</option>
-                                                        {paymentStatusBreakdown.map(row => <option key={row.label} value={String(row.label || '').toLowerCase()}>{row.label}</option>)}
-                                                    </select>
-                                                </label>
-                                                <label className="text-[11px] font-black uppercase tracking-widest text-gray-400">
-                                                    Minimum aging balance
-                                                    <input type="number" min="0" value={paymentRiskFilters.minBalance} onChange={(e) => setPaymentRiskFilters({ ...paymentRiskFilters, minBalance: e.target.value })} placeholder="Show all" className="mt-2 w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-black normal-case tracking-normal text-gray-800 outline-none" />
-                                                </label>
-                                            </div>
-                                        )}
                                         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
                                             <div className="h-56">
                                                 {visiblePaymentStatusBreakdown.length ? (
@@ -3548,23 +4046,24 @@ const DashboardAdmin = () => {
                                                 <h3 className="mt-1 text-lg font-black text-gray-950">Booking Pipeline & Next Events</h3>
                                                 <p className="mt-1 text-sm font-semibold text-gray-500">Operational volume and near-term service load.</p>
                                             </div>
-                                            {renderDashboardFilterButton('dashboardWorkload', workloadFilters.status === 'all' ? 'Workload filters' : workloadFilters.status)}
+                                            {renderDashboardFilterControl(
+                                                'dashboardWorkload',
+                                                workloadFilters.status === 'all' ? 'Workload filters' : workloadFilters.status,
+                                                <>
+                                                    <label className="text-[11px] font-black uppercase tracking-widest text-gray-400">
+                                                        <span className="flex items-center gap-2"><CheckCircle2 className="h-3.5 w-3.5" /> Upcoming status</span>
+                                                        <select value={workloadFilters.status} onChange={(e) => setWorkloadFilters({ ...workloadFilters, status: e.target.value })} className="mt-2 w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-black normal-case tracking-normal text-gray-800 outline-none">
+                                                            <option value="all">All statuses</option>
+                                                            {Array.from(new Set(upcomingWorkloadData.map(event => String(event.status || '').toLowerCase()).filter(Boolean))).map(status => <option key={status} value={status}>{status}</option>)}
+                                                        </select>
+                                                    </label>
+                                                    <label className="text-[11px] font-black uppercase tracking-widest text-gray-400">
+                                                        <span className="flex items-center gap-2"><Users className="h-3.5 w-3.5" /> Minimum guests</span>
+                                                        <input type="number" min="0" value={workloadFilters.minPax} onChange={(e) => setWorkloadFilters({ ...workloadFilters, minPax: e.target.value })} placeholder="Show all" className="mt-2 w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-black normal-case tracking-normal text-gray-800 outline-none" />
+                                                    </label>
+                                                </>
+                                            )}
                                         </div>
-                                        {activeDashboardFilterPanel === 'dashboardWorkload' && (
-                                            <div className="mb-5 grid grid-cols-1 gap-3 rounded-xl border border-gray-100 bg-gray-50 p-4 sm:grid-cols-2">
-                                                <label className="text-[11px] font-black uppercase tracking-widest text-gray-400">
-                                                    <span className="flex items-center gap-2"><CheckCircle2 className="h-3.5 w-3.5" /> Upcoming status</span>
-                                                    <select value={workloadFilters.status} onChange={(e) => setWorkloadFilters({ ...workloadFilters, status: e.target.value })} className="mt-2 w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-black normal-case tracking-normal text-gray-800 outline-none">
-                                                        <option value="all">All statuses</option>
-                                                        {Array.from(new Set(upcomingWorkloadData.map(event => String(event.status || '').toLowerCase()).filter(Boolean))).map(status => <option key={status} value={status}>{status}</option>)}
-                                                    </select>
-                                                </label>
-                                                <label className="text-[11px] font-black uppercase tracking-widest text-gray-400">
-                                                    <span className="flex items-center gap-2"><Users className="h-3.5 w-3.5" /> Minimum guests</span>
-                                                    <input type="number" min="0" value={workloadFilters.minPax} onChange={(e) => setWorkloadFilters({ ...workloadFilters, minPax: e.target.value })} placeholder="Show all" className="mt-2 w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-black normal-case tracking-normal text-gray-800 outline-none" />
-                                                </label>
-                                            </div>
-                                        )}
                                         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                                             {bookingPipelineData.slice(0, 3).map((row) => (
                                                 <div key={row.label} className="rounded-xl border border-gray-100 bg-white p-4 shadow-sm">
@@ -3602,23 +4101,24 @@ const DashboardAdmin = () => {
                                                 <p className="admin-kicker">Sales mix</p>
                                                 <h3 className="mt-1 text-lg font-black text-gray-950">Top Packages</h3>
                                             </div>
-                                            {renderDashboardFilterButton('dashboardPackages', `Top ${packageViewFilters.limit}`)}
+                                            {renderDashboardFilterControl(
+                                                'dashboardPackages',
+                                                `Top ${packageViewFilters.limit}`,
+                                                <>
+                                                    <select value={packageViewFilters.limit} onChange={(e) => setPackageViewFilters({ ...packageViewFilters, limit: e.target.value })} className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-black text-gray-800 outline-none">
+                                                        {PERFORMANCE_LIMIT_OPTIONS.map(value => <option key={value} value={value}>Top {value} packages</option>)}
+                                                    </select>
+                                                    <select value={packageViewFilters.sort} onChange={(e) => setPackageViewFilters({ ...packageViewFilters, sort: e.target.value })} className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-black text-gray-800 outline-none">
+                                                        <option value="revenue">Revenue</option>
+                                                        <option value="bookings">Bookings</option>
+                                                        <option value="name">Package name</option>
+                                                    </select>
+                                                </>
+                                            )}
                                         </div>
-                                        {activeDashboardFilterPanel === 'dashboardPackages' && (
-                                            <div className="mb-5 grid grid-cols-1 gap-3 rounded-xl border border-gray-100 bg-gray-50 p-4">
-                                                <select value={packageViewFilters.limit} onChange={(e) => setPackageViewFilters({ ...packageViewFilters, limit: e.target.value })} className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-black text-gray-800 outline-none">
-                                                    {PERFORMANCE_LIMIT_OPTIONS.map(value => <option key={value} value={value}>Top {value} packages</option>)}
-                                                </select>
-                                                <select value={packageViewFilters.sort} onChange={(e) => setPackageViewFilters({ ...packageViewFilters, sort: e.target.value })} className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-black text-gray-800 outline-none">
-                                                    <option value="revenue">Revenue</option>
-                                                    <option value="bookings">Bookings</option>
-                                                    <option value="name">Package name</option>
-                                                </select>
-                                            </div>
-                                        )}
                                         <div className="space-y-3">
-                                            {visiblePackagePerformanceData.slice(0, 5).map((pkg) => (
-                                                <div key={pkg.label || pkg.name}>
+                                            {visiblePackagePerformanceData.slice(0, 5).map((pkg, index) => (
+                                                <div key={`${pkg.label || pkg.name || 'package'}-${index}`}>
                                                     <div className="flex items-center justify-between gap-3 text-sm">
                                                         <span className="truncate font-black text-gray-800">{pkg.label || pkg.name}</span>
                                                         <span className="font-black text-amber-700">{formatCurrency(pkg.revenue || 0)}</span>
@@ -3637,23 +4137,24 @@ const DashboardAdmin = () => {
                                                 <p className="admin-kicker">Menu velocity</p>
                                                 <h3 className="mt-1 text-lg font-black text-gray-950">Top Dishes</h3>
                                             </div>
-                                            {renderDashboardFilterButton('dashboardMenu', MENU_CATEGORY_OPTIONS.find(option => option.value === menuViewFilters.category)?.label || 'Dish type')}
+                                            {renderDashboardFilterControl(
+                                                'dashboardMenu',
+                                                MENU_CATEGORY_OPTIONS.find(option => option.value === menuViewFilters.category)?.label || 'Dish type',
+                                                <>
+                                                    <select value={menuViewFilters.category} onChange={(e) => setMenuViewFilters({ ...menuViewFilters, category: e.target.value })} className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-black text-gray-800 outline-none">
+                                                        {MENU_CATEGORY_OPTIONS.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+                                                    </select>
+                                                    <select value={menuViewFilters.sort} onChange={(e) => setMenuViewFilters({ ...menuViewFilters, sort: e.target.value })} className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-black text-gray-800 outline-none">
+                                                        <option value="selections">Selections</option>
+                                                        <option value="pax">Guests served</option>
+                                                        <option value="name">Dish name</option>
+                                                    </select>
+                                                </>
+                                            )}
                                         </div>
-                                        {activeDashboardFilterPanel === 'dashboardMenu' && (
-                                            <div className="mb-5 grid grid-cols-1 gap-3 rounded-xl border border-gray-100 bg-gray-50 p-4">
-                                                <select value={menuViewFilters.category} onChange={(e) => setMenuViewFilters({ ...menuViewFilters, category: e.target.value })} className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-black text-gray-800 outline-none">
-                                                    {MENU_CATEGORY_OPTIONS.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
-                                                </select>
-                                                <select value={menuViewFilters.sort} onChange={(e) => setMenuViewFilters({ ...menuViewFilters, sort: e.target.value })} className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-black text-gray-800 outline-none">
-                                                    <option value="selections">Selections</option>
-                                                    <option value="pax">Guests served</option>
-                                                    <option value="name">Dish name</option>
-                                                </select>
-                                            </div>
-                                        )}
                                         <div className="space-y-3">
-                                            {visibleMenuPerformanceData.slice(0, 6).map((dish) => (
-                                                <div key={dish.label} className="flex items-center justify-between gap-3 rounded-xl bg-gray-50 px-4 py-3">
+                                            {visibleMenuPerformanceData.slice(0, 6).map((dish, index) => (
+                                                <div key={`${dish.label || 'dish'}-${index}`} className="flex items-center justify-between gap-3 rounded-xl bg-gray-50 px-4 py-3">
                                                     <div className="min-w-0">
                                                         <p className="truncate text-sm font-black text-gray-900">{dish.label}</p>
                                                         <p className="text-xs font-bold uppercase text-gray-400">{dish.category}</p>
@@ -3665,12 +4166,66 @@ const DashboardAdmin = () => {
                                     </section>
 
                                     <section className="admin-panel p-6">
-                                        <div className="mb-5">
-                                            <p className="admin-kicker">Demand intensity</p>
-                                            <h3 className="mt-1 text-lg font-black text-gray-950">Peak Season Heatmap</h3>
-                                            <p className="mt-1 text-sm font-semibold text-gray-500">Monthly event load for planning purchasing and staffing.</p>
+                                        <div className="mb-5 flex items-start justify-between gap-3">
+                                            <div>
+                                                <p className="admin-kicker">Demand intensity</p>
+                                                <h3 className="mt-1 text-lg font-black text-gray-950">Peak Season Heatmap</h3>
+                                                <p className="mt-1 text-sm font-semibold text-gray-500">Monthly event load for planning purchasing and staffing.</p>
+                                            </div>
+                                            {renderDashboardFilterControl(
+                                                'dashboardPeakSeason',
+                                                peakSeasonFilters.year === 'all' ? 'All years' : peakSeasonFilters.year,
+                                                <>
+                                                    <label className="text-[11px] font-black uppercase tracking-widest text-gray-400">
+                                                        Year
+                                                        <select
+                                                            value={peakSeasonFilters.year}
+                                                            onChange={(event) => setPeakSeasonFilters(current => ({ ...current, year: event.target.value }))}
+                                                            className="mt-2 w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-black normal-case tracking-normal text-gray-800 outline-none"
+                                                        >
+                                                            <option value="all">All years</option>
+                                                            {HEATMAP_YEAR_OPTIONS.map(year => <option key={year} value={year}>{year}</option>)}
+                                                        </select>
+                                                    </label>
+                                                    <label className="text-[11px] font-black uppercase tracking-widest text-gray-400">
+                                                        Booking status
+                                                        <select
+                                                            value={peakSeasonFilters.status}
+                                                            onChange={(event) => setPeakSeasonFilters(current => ({ ...current, status: event.target.value }))}
+                                                            className="mt-2 w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-black normal-case tracking-normal text-gray-800 outline-none"
+                                                        >
+                                                            <option value="">Pending, confirmed, completed</option>
+                                                            <option value="Pending">Pending</option>
+                                                            <option value="Confirmed">Confirmed</option>
+                                                            <option value="Completed">Completed</option>
+                                                        </select>
+                                                    </label>
+                                                    <label className="text-[11px] font-black uppercase tracking-widest text-gray-400">
+                                                        Event type
+                                                        <select
+                                                            value={peakSeasonFilters.event_type}
+                                                            onChange={(event) => setPeakSeasonFilters(current => ({ ...current, event_type: event.target.value }))}
+                                                            className="mt-2 w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-black normal-case tracking-normal text-gray-800 outline-none"
+                                                        >
+                                                            <option value="">All event types</option>
+                                                            {peakSeasonEventTypeOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+                                                        </select>
+                                                    </label>
+                                                </>,
+                                                'sm:grid-cols-3'
+                                            )}
                                         </div>
-                                        <div className="grid grid-cols-3 gap-3 text-center text-xs sm:grid-cols-4">
+                                        <div className="mb-4 grid grid-cols-2 gap-3">
+                                            <div className="rounded-xl border border-gray-100 bg-[#fffaf3] p-3">
+                                                <p className="text-[10px] font-black uppercase tracking-widest text-[#9f6500]">Events shown</p>
+                                                <p className="mt-1 text-xl font-black text-gray-950">{peakSeasonTotalEvents}</p>
+                                            </div>
+                                            <div className="rounded-xl border border-gray-100 bg-white p-3">
+                                                <p className="text-[10px] font-black uppercase tracking-widest text-[#9f6500]">Busiest month</p>
+                                                <p className="mt-1 text-xl font-black text-gray-950">{peakSeasonBusiestMonth?.month || 'None'}</p>
+                                            </div>
+                                        </div>
+                                        <div className={`grid grid-cols-3 gap-3 text-center text-xs sm:grid-cols-4 ${peakSeasonLoading ? 'opacity-60' : ''}`}>
                                             {['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'].map((month) => {
                                                 const val = peakSeasonData.find(item => item.month === month)?.events || peakSeasonData.find(item => item.month === month)?.count || 0;
                                                 const bgColor = val <= 3 ? 'bg-green-100 text-green-800' : val <= 6 ? 'bg-yellow-200 text-yellow-800' : val <= 8 ? 'bg-orange-300 text-orange-900' : 'bg-red-500 text-white font-bold';
@@ -3868,26 +4423,8 @@ const DashboardAdmin = () => {
                                             <h4 className="text-lg font-black text-gray-950">Business Snapshot</h4>
                                             <p className="mt-1 text-sm font-semibold text-gray-500">High-signal metrics for revenue, demand, bookings, and collection health.</p>
                                         </div>
-                                        {renderAnalyticsFilterButton('snapshot', businessSnapshot.label || 'Timeframe')}
+                                        {renderAnalyticsFilterControl('snapshot', businessSnapshot.label || 'Timeframe')}
                                     </div>
-                                    {activeAnalyticsFilterPanel === 'snapshot' && (
-                                        <div className="mb-4 grid grid-cols-1 gap-3 rounded-xl border border-gray-100 bg-gray-50 p-4 sm:grid-cols-2 lg:grid-cols-4">
-                                            <label className="text-[11px] font-black uppercase tracking-widest text-gray-400">
-                                                <span className="flex items-center gap-2"><CalendarDays className="h-3.5 w-3.5" /> Snapshot timeframe</span>
-                                                <select
-                                                    value={analyticsFilters.snapshot_window}
-                                                    onChange={(event) => {
-                                                        const nextFilters = { ...analyticsFilters, snapshot_window: event.target.value };
-                                                        setAnalyticsFilters(nextFilters);
-                                                        fetchAnalytics({ filters: nextFilters });
-                                                    }}
-                                                    className="mt-2 w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-black normal-case tracking-normal text-gray-800 outline-none focus:ring-2 focus:ring-amber-100"
-                                                >
-                                                    {SNAPSHOT_WINDOW_OPTIONS.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
-                                                </select>
-                                            </label>
-                                        </div>
-                                    )}
                                     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
                                         {businessSnapshotCards.map((card) => (
                                             <div key={card.label} className="rounded-2xl border border-gray-100 bg-white p-4 shadow-sm">
@@ -3909,38 +4446,17 @@ const DashboardAdmin = () => {
                                         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                                             <div>
                                                 <p className="admin-kicker">Finance Forecast</p>
-                                                <h3 className="mt-1 text-xl font-black text-gray-950">Revenue Forecast Using SMA</h3>
-                                                <p className="mt-2 text-sm font-semibold leading-6 text-gray-500">Projects short-term collected revenue by smoothing verified payment history.</p>
+                                                <h3 className="mt-1 text-xl font-black text-gray-950">Revenue Forecast Using OLS Regression</h3>
+                                                <p className="mt-2 text-sm font-semibold leading-6 text-gray-500">Projects cumulative verified revenue with a deterministic linear trend line.</p>
                                             </div>
-                                            {renderAnalyticsFilterButton('revenueForecast', `${analyticsFilters.revenue_forecast_period} forecast`)}
+                                            {renderAnalyticsFilterControl('revenueForecast', 'Forecast filters')}
                                         </div>
-                                        {activeAnalyticsFilterPanel === 'revenueForecast' && <div className="mt-4 grid grid-cols-1 gap-3 rounded-xl border border-gray-100 bg-gray-50 p-4 sm:grid-cols-3">
-                                            <label className="text-[11px] font-black uppercase tracking-widest text-gray-400">
-                                                Period
-                                                <select value={analyticsFilters.revenue_forecast_period} onChange={(e) => setAnalyticsFilters({ ...analyticsFilters, revenue_forecast_period: e.target.value })} className="mt-2 w-full rounded-xl border border-gray-200 px-3 py-2 text-xs font-black normal-case tracking-normal text-gray-800 outline-none">
-                                                    {FORECAST_PERIOD_OPTIONS.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
-                                                </select>
-                                            </label>
-                                            <label className="text-[11px] font-black uppercase tracking-widest text-gray-400">
-                                                Smoothing
-                                                <select value={analyticsFilters.revenue_sma_window} onChange={(e) => setAnalyticsFilters({ ...analyticsFilters, revenue_sma_window: e.target.value })} className="mt-2 w-full rounded-xl border border-gray-200 px-3 py-2 text-xs font-black normal-case tracking-normal text-gray-800 outline-none">
-                                                    {SMA_WINDOW_OPTIONS.map(value => <option key={value} value={value}>{value}-period SMA</option>)}
-                                                </select>
-                                            </label>
-                                            <label className="text-[11px] font-black uppercase tracking-widest text-gray-400">
-                                                Forecast
-                                                <select value={analyticsFilters.revenue_forecast_horizon} onChange={(e) => setAnalyticsFilters({ ...analyticsFilters, revenue_forecast_horizon: e.target.value })} className="mt-2 w-full rounded-xl border border-gray-200 px-3 py-2 text-xs font-black normal-case tracking-normal text-gray-800 outline-none">
-                                                    {FORECAST_HORIZON_OPTIONS.map(value => <option key={value} value={value}>{value} periods ahead</option>)}
-                                                </select>
-                                            </label>
-                                            <button type="button" onClick={() => fetchAnalytics()} className="rounded-xl bg-[#720101] px-4 py-2.5 text-xs font-black text-white shadow-sm transition-colors hover:bg-[#8d0808] sm:col-span-3">Apply Forecast Filters</button>
-                                        </div>}
                                     </div>
                                     <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-3">
                                         {[
                                             ['Next forecast', formatCurrency(revenueForecastSummary.nextForecast || 0)],
                                             ['Last actual', formatCurrency(revenueForecastSummary.lastActual || 0)],
-                                            ['Movement', `${revenueForecastSummary.changePercent || 0}% ${revenueForecastSummary.direction === 'up' ? 'increase' : 'decrease'}`],
+                                            ['Movement', `${revenueForecastSummary.changePercent || 0}% ${revenueForecastSummary.direction === 'upward' ? 'increase' : 'decrease'}`],
                                         ].map(([label, value]) => (
                                             <div key={label} className="rounded-2xl border border-gray-100 bg-gray-50 p-4">
                                                 <p className="text-[11px] font-black uppercase tracking-widest text-gray-400">{label}</p>
@@ -3951,14 +4467,14 @@ const DashboardAdmin = () => {
                                     <div className="mt-6 h-80">
                                         {revenueForecastData.length ? (
                                             <ResponsiveContainer width="100%" height="100%">
-                                                <BarChart data={revenueForecastData}>
+                                                <LineChart data={revenueForecastData}>
                                                     <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E5E7EB" />
                                                     <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#6B7280' }} />
                                                     <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#6B7280' }} tickFormatter={(value) => `PHP ${Math.round(value / 1000)}k`} />
                                                     <RechartsTooltip formatter={(value) => formatCurrency(value)} />
-                                                    <Bar dataKey="revenue" fill="#720101" radius={[6, 6, 0, 0]} name="Actual collected" />
-                                                    <Bar dataKey="forecast" fill="#f0aa0b" radius={[6, 6, 0, 0]} name="SMA forecast" />
-                                                </BarChart>
+                                                    <Line type="monotone" dataKey="cumulativeRevenue" stroke="#720101" strokeWidth={3} dot={{ r: 3 }} name="Cumulative actual" connectNulls={false} />
+                                                    <Line type="monotone" dataKey="trendLine" stroke="#f0aa0b" strokeWidth={3} strokeDasharray="6 4" dot={{ r: 3 }} name="OLS trend" connectNulls />
+                                                </LineChart>
                                             </ResponsiveContainer>
                                         ) : <div className="flex h-full items-center justify-center rounded-xl bg-gray-50 text-sm font-bold text-gray-400">No revenue data available.</div>}
                                     </div>
@@ -3973,43 +4489,8 @@ const DashboardAdmin = () => {
                                                 <h3 className="mt-1 text-xl font-black text-gray-950">Moving Averages for Guest Demand Projection</h3>
                                                 <p className="mt-2 text-sm font-semibold leading-6 text-gray-500">Smooths historical guest demand so culinary and logistics planning is not distorted by one-off spikes.</p>
                                             </div>
-                                            {renderAnalyticsFilterButton('paxForecast', `${analyticsFilters.pax_projection_period} demand`)}
+                                            {renderAnalyticsFilterControl('paxForecast', `${analyticsFilters.pax_projection_period} demand`)}
                                         </div>
-                                        {activeAnalyticsFilterPanel === 'paxForecast' && <div className="mt-4 grid grid-cols-1 gap-3 rounded-xl border border-gray-100 bg-gray-50 p-4 sm:grid-cols-3">
-                                            <label className="text-[11px] font-black uppercase tracking-widest text-gray-400">
-                                                Period
-                                                <select value={analyticsFilters.pax_projection_period} onChange={(e) => setAnalyticsFilters({ ...analyticsFilters, pax_projection_period: e.target.value })} className="mt-2 w-full rounded-xl border border-gray-200 px-3 py-2 text-xs font-black normal-case tracking-normal text-gray-800 outline-none">
-                                                    {FORECAST_PERIOD_OPTIONS.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
-                                                </select>
-                                            </label>
-                                            <label className="text-[11px] font-black uppercase tracking-widest text-gray-400">
-                                                Year
-                                                <select value={analyticsFilters.pax_projection_year} onChange={(e) => setAnalyticsFilters({ ...analyticsFilters, pax_projection_year: e.target.value })} className="mt-2 w-full rounded-xl border border-gray-200 px-3 py-2 text-xs font-black normal-case tracking-normal text-gray-800 outline-none">
-                                                    <option value="">All years</option>
-                                                    {ANALYTICS_YEARS.map(year => <option key={year} value={year}>{year}</option>)}
-                                                </select>
-                                            </label>
-                                            <label className="text-[11px] font-black uppercase tracking-widest text-gray-400">
-                                                Quarter
-                                                <select value={analyticsFilters.pax_projection_quarter} onChange={(e) => setAnalyticsFilters({ ...analyticsFilters, pax_projection_quarter: e.target.value })} className="mt-2 w-full rounded-xl border border-gray-200 px-3 py-2 text-xs font-black normal-case tracking-normal text-gray-800 outline-none">
-                                                    <option value="">All quarters</option>
-                                                    {[1, 2, 3, 4].map(q => <option key={q} value={q}>Q{q}</option>)}
-                                                </select>
-                                            </label>
-                                            <label className="text-[11px] font-black uppercase tracking-widest text-gray-400">
-                                                Smoothing
-                                                <select value={analyticsFilters.pax_sma_window} onChange={(e) => setAnalyticsFilters({ ...analyticsFilters, pax_sma_window: e.target.value })} className="mt-2 w-full rounded-xl border border-gray-200 px-3 py-2 text-xs font-black normal-case tracking-normal text-gray-800 outline-none">
-                                                    {SMA_WINDOW_OPTIONS.map(value => <option key={value} value={value}>{value}-period SMA</option>)}
-                                                </select>
-                                            </label>
-                                            <label className="text-[11px] font-black uppercase tracking-widest text-gray-400 sm:col-span-2">
-                                                Forecast horizon
-                                                <select value={analyticsFilters.pax_projection_horizon} onChange={(e) => setAnalyticsFilters({ ...analyticsFilters, pax_projection_horizon: e.target.value })} className="mt-2 w-full rounded-xl border border-gray-200 px-3 py-2 text-xs font-black normal-case tracking-normal text-gray-800 outline-none">
-                                                    {FORECAST_HORIZON_OPTIONS.map(value => <option key={value} value={value}>{value} periods ahead</option>)}
-                                                </select>
-                                            </label>
-                                            <button type="button" onClick={() => fetchAnalytics()} className="rounded-xl bg-[#720101] px-4 py-2.5 text-xs font-black text-white shadow-sm transition-colors hover:bg-[#8d0808] sm:col-span-3">Apply Demand Filters</button>
-                                        </div>}
                                     </div>
                                     <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-3">
                                         {[
@@ -4048,26 +4529,8 @@ const DashboardAdmin = () => {
                                             <h3 className="text-lg font-black text-gray-950">Collected Revenue Trend</h3>
                                             <p className="mt-1 text-sm font-semibold text-gray-500">Historical verified collections ending at the current month.</p>
                                         </div>
-                                        {renderAnalyticsFilterButton('revenueTrend', `Last ${analyticsFilters.trend_months} months`)}
+                                        {renderAnalyticsFilterControl('revenueTrend', `Last ${analyticsFilters.trend_months} months`)}
                                     </div>
-                                    {activeAnalyticsFilterPanel === 'revenueTrend' && (
-                                        <div className="mb-5 grid grid-cols-1 gap-3 rounded-xl border border-gray-100 bg-gray-50 p-4 sm:grid-cols-2">
-                                            <label className="text-[11px] font-black uppercase tracking-widest text-gray-400">
-                                                <span className="flex items-center gap-2"><CalendarDays className="h-3.5 w-3.5" /> Trend window</span>
-                                                <select
-                                                    value={analyticsFilters.trend_months}
-                                                    onChange={(event) => {
-                                                        const nextFilters = { ...analyticsFilters, trend_months: event.target.value };
-                                                        setAnalyticsFilters(nextFilters);
-                                                        fetchAnalytics({ filters: nextFilters });
-                                                    }}
-                                                    className="mt-2 w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-black normal-case tracking-normal text-gray-800 outline-none"
-                                                >
-                                                    {[3, 6, 9, 12, 18, 24].map(months => <option key={months} value={months}>Last {months} months</option>)}
-                                                </select>
-                                            </label>
-                                        </div>
-                                    )}
                                     <div className="h-72">
                                         {revenueTrendData.length ? (
                                             <ResponsiveContainer width="100%" height="100%">
@@ -4089,23 +4552,8 @@ const DashboardAdmin = () => {
                                             <h3 className="text-lg font-black text-gray-950">Payment Risk</h3>
                                             <p className="mt-1 text-sm font-semibold text-gray-500">Balances by payment status and aging bucket.</p>
                                         </div>
-                                        {renderAnalyticsFilterButton('paymentRisk', paymentRiskFilters.status === 'all' ? 'Risk filters' : paymentRiskFilters.status)}
+                                        {renderAnalyticsFilterControl('paymentRisk', paymentRiskFilters.status === 'all' ? 'Risk filters' : paymentRiskFilters.status)}
                                     </div>
-                                    {activeAnalyticsFilterPanel === 'paymentRisk' && (
-                                        <div className="mb-5 grid grid-cols-1 gap-3 rounded-xl border border-gray-100 bg-gray-50 p-4 sm:grid-cols-2">
-                                            <label className="text-[11px] font-black uppercase tracking-widest text-gray-400">
-                                                <span className="flex items-center gap-2"><CreditCard className="h-3.5 w-3.5" /> Payment status</span>
-                                                <select value={paymentRiskFilters.status} onChange={(e) => setPaymentRiskFilters({ ...paymentRiskFilters, status: e.target.value })} className="mt-2 w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-black normal-case tracking-normal text-gray-800 outline-none">
-                                                    <option value="all">All statuses</option>
-                                                    {paymentStatusBreakdown.map(row => <option key={row.label} value={String(row.label || '').toLowerCase()}>{row.label}</option>)}
-                                                </select>
-                                            </label>
-                                            <label className="text-[11px] font-black uppercase tracking-widest text-gray-400">
-                                                Minimum aging balance
-                                                <input type="number" min="0" value={paymentRiskFilters.minBalance} onChange={(e) => setPaymentRiskFilters({ ...paymentRiskFilters, minBalance: e.target.value })} placeholder="Show all" className="mt-2 w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-black normal-case tracking-normal text-gray-800 outline-none" />
-                                            </label>
-                                        </div>
-                                    )}
                                     <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
                                         <div className="h-64">
                                             {visiblePaymentStatusBreakdown.length ? (
@@ -4148,31 +4596,9 @@ const DashboardAdmin = () => {
                                                 <Package className="h-4 w-4" />
                                                 {visiblePackagePerformanceData.length} of {packagePerformanceData.length}
                                             </span>
-                                            {renderAnalyticsFilterButton('packagePerformance', `Top ${packageViewFilters.limit}`)}
+                                            {renderAnalyticsFilterControl('packagePerformance', `Top ${packageViewFilters.limit}`)}
                                         </div>
                                     </div>
-                                    {activeAnalyticsFilterPanel === 'packagePerformance' && (
-                                        <div className="grid grid-cols-1 gap-3 border-b border-gray-100 bg-gray-50 p-5 sm:grid-cols-3">
-                                            <label className="text-[11px] font-black uppercase tracking-widest text-gray-400">
-                                                Show
-                                                <select value={packageViewFilters.limit} onChange={(e) => setPackageViewFilters({ ...packageViewFilters, limit: e.target.value })} className="mt-2 w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-black normal-case tracking-normal text-gray-800 outline-none">
-                                                    {PERFORMANCE_LIMIT_OPTIONS.map(value => <option key={value} value={value}>Top {value} packages</option>)}
-                                                </select>
-                                            </label>
-                                            <label className="text-[11px] font-black uppercase tracking-widest text-gray-400">
-                                                Sort by
-                                                <select value={packageViewFilters.sort} onChange={(e) => setPackageViewFilters({ ...packageViewFilters, sort: e.target.value })} className="mt-2 w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-black normal-case tracking-normal text-gray-800 outline-none">
-                                                    <option value="revenue">Revenue</option>
-                                                    <option value="bookings">Bookings</option>
-                                                    <option value="name">Package name</option>
-                                                </select>
-                                            </label>
-                                            <label className="text-[11px] font-black uppercase tracking-widest text-gray-400">
-                                                Min bookings
-                                                <input type="number" min="0" value={packageViewFilters.minBookings} onChange={(e) => setPackageViewFilters({ ...packageViewFilters, minBookings: e.target.value })} placeholder="Show all" className="mt-2 w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-black normal-case tracking-normal text-gray-800 outline-none" />
-                                            </label>
-                                        </div>
-                                    )}
                                     <div className="max-h-[31rem] space-y-3 overflow-y-auto p-6">
                                         {visiblePackagePerformanceData.map((pkg) => (
                                             <div key={pkg.label || pkg.name} className="rounded-xl border border-gray-100 bg-gray-50 p-4">
@@ -4204,33 +4630,9 @@ const DashboardAdmin = () => {
                                                 <ClipboardList className="h-4 w-4" />
                                                 Top {visibleMenuPerformanceData.length}
                                             </span>
-                                            {renderAnalyticsFilterButton('menuPerformance', MENU_CATEGORY_OPTIONS.find(option => option.value === menuViewFilters.category)?.label || 'Dish type')}
+                                            {renderAnalyticsFilterControl('menuPerformance', MENU_CATEGORY_OPTIONS.find(option => option.value === menuViewFilters.category)?.label || 'Dish type')}
                                         </div>
                                     </div>
-                                    {activeAnalyticsFilterPanel === 'menuPerformance' && (
-                                        <div className="grid grid-cols-1 gap-3 border-b border-gray-100 bg-gray-50 p-5 sm:grid-cols-3">
-                                            <label className="text-[11px] font-black uppercase tracking-widest text-gray-400">
-                                                Dish type
-                                                <select value={menuViewFilters.category} onChange={(e) => setMenuViewFilters({ ...menuViewFilters, category: e.target.value })} className="mt-2 w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-black normal-case tracking-normal text-gray-800 outline-none">
-                                                    {MENU_CATEGORY_OPTIONS.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
-                                                </select>
-                                            </label>
-                                            <label className="text-[11px] font-black uppercase tracking-widest text-gray-400">
-                                                Show
-                                                <select value={menuViewFilters.limit} onChange={(e) => setMenuViewFilters({ ...menuViewFilters, limit: e.target.value })} className="mt-2 w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-black normal-case tracking-normal text-gray-800 outline-none">
-                                                    {PERFORMANCE_LIMIT_OPTIONS.map(value => <option key={value} value={value}>Top {value} dishes</option>)}
-                                                </select>
-                                            </label>
-                                            <label className="text-[11px] font-black uppercase tracking-widest text-gray-400">
-                                                Rank by
-                                                <select value={menuViewFilters.sort} onChange={(e) => setMenuViewFilters({ ...menuViewFilters, sort: e.target.value })} className="mt-2 w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-black normal-case tracking-normal text-gray-800 outline-none">
-                                                    <option value="selections">Selections</option>
-                                                    <option value="pax">Guests served</option>
-                                                    <option value="name">Dish name</option>
-                                                </select>
-                                            </label>
-                                        </div>
-                                    )}
                                     <div className="h-[31rem] p-6">
                                         {visibleMenuPerformanceData.length ? (
                                             <ResponsiveContainer width="100%" height="100%">
@@ -5492,6 +5894,42 @@ const DashboardAdmin = () => {
                                         Create booking
                                     </button>
                                 </AdminCommandStrip>
+
+                                <AdminSurfaceSection
+                                    kicker="Booking decision support"
+                                    title="What the current booking queue means"
+                                    description="Advanced sales and demand models stay visible here so approving or discounting bookings is tied to revenue concentration and operations capacity."
+                                >
+                                    <div className="grid gap-3 lg:grid-cols-3">
+                                        {[
+                                            {
+                                                label: 'Dominant category',
+                                                value: topSalesFrequency?.label || 'No category yet',
+                                                hint: `${Number(topSalesFrequency?.percentage || 0).toFixed(1)}% of verified volume`,
+                                            },
+                                            {
+                                                label: 'Revenue trajectory',
+                                                value: formatCurrency(revenueForecastSummary.nextForecast || 0),
+                                                hint: `${revenueForecastSummary.method || 'OLS linear regression'} / ${revenueForecastSummary.direction || 'upward'}`,
+                                            },
+                                            {
+                                                label: 'Guest baseline',
+                                                value: Number(paxDemandSummary.nextForecast || 0).toLocaleString(),
+                                                hint: `${paxDemandSummary.method || 'SMA'} projected guests`,
+                                            },
+                                        ].map((item) => (
+                                            <div key={item.label} className="rounded-xl border border-gray-100 bg-white p-4">
+                                                <p className="text-[11px] font-black uppercase tracking-widest text-gray-400">{item.label}</p>
+                                                <p className="mt-2 text-xl font-black text-gray-950">{item.value}</p>
+                                                <p className="mt-1 text-sm font-semibold text-gray-500">{item.hint}</p>
+                                            </div>
+                                        ))}
+                                    </div>
+                                    <div className="mt-4 grid gap-3 xl:grid-cols-2">
+                                        <InsightLine insight={salesFrequencyDistribution.insight} compact={false} />
+                                        <InsightLine insight={paxDemandProjection.interpretation || normalizeInsight(paxDemandProjection.insight)} compact={false} />
+                                    </div>
+                                </AdminSurfaceSection>
 
                                 <AdminCommandStrip>
                                     <div className="flex w-full flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">

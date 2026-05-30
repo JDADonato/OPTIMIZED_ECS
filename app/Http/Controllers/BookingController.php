@@ -5,6 +5,8 @@ namespace App\Http\Controllers;
 use App\Models\Booking;
 use App\Models\AuditLog;
 use App\Models\BookingHistoryNote;
+use App\Models\BusinessRule;
+use App\Models\CalendarAvailabilityOverride;
 use App\Models\Conversation;
 use App\Models\MenuItem;
 use App\Models\Message;
@@ -14,6 +16,8 @@ use App\Http\Resources\BookingSummaryResource;
 use App\Mail\BookingContinuationReminder;
 use App\Notifications\NewBookingNotification;
 use App\Services\BookingValidationService;
+use App\Services\BookingManagementService;
+use App\Services\BusinessRulesService;
 use App\Services\CalendarAvailabilityService;
 use App\Services\ConversionEventService;
 use App\Services\NotificationRecipientService;
@@ -28,6 +32,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Validation\Rule;
 
 /**
  * Ported from: server/controllers/bookingController.js
@@ -350,34 +355,44 @@ class BookingController extends Controller
             $disabledDates[] = $today->copy()->addDays($i)->toDateString();
         }
 
-        // Query aggregate booking stats grouped by date, for future bookable window
-        $bookingStats = \Illuminate\Support\Facades\DB::table('bookings')
+        $rules = BusinessRule::getActive();
+        $baseMaxEvents = $rules ? (int) $rules->maximum_capacity_per_day : BusinessRulesService::MAX_EVENTS_PER_DAY;
+        $baseMaxPax = BusinessRulesService::MAX_PAX_PER_DAY;
+
+        // Query aggregate booking stats once for the full future bookable window.
+        $bookingStats = DB::table('bookings')
             ->select(
-                \Illuminate\Support\Facades\DB::raw('DATE(event_date) as booking_date'),
-                \Illuminate\Support\Facades\DB::raw('COUNT(*) as event_count'),
-                \Illuminate\Support\Facades\DB::raw('SUM(pax) as total_pax')
+                DB::raw('DATE(event_date) as booking_date'),
+                DB::raw('COUNT(*) as event_count'),
+                DB::raw('COALESCE(SUM(pax), 0) as total_pax')
             )
             ->where('event_date', '>', $today->toDateString())
             ->where('event_date', '<=', $rangeEnd->toDateString())
             ->whereNotIn('status', ['Cancelled', 'cancelled'])
             ->groupBy('booking_date')
-            ->get();
+            ->get()
+            ->keyBy(fn ($stat) => Carbon::parse($stat->booking_date)->toDateString());
 
-        foreach ($bookingStats as $stat) {
-            $availability = $availabilityService->availabilityForDate($stat->booking_date);
-            if ($availability['isFull']) {
-                $disabledDates[] = $stat->booking_date;
-            }
-        }
-
-        $overriddenDates = \App\Models\CalendarAvailabilityOverride::query()
+        $overrides = CalendarAvailabilityOverride::query()
             ->where('date', '>', $today->toDateString())
             ->where('date', '<=', $rangeEnd->toDateString())
-            ->pluck('date');
+            ->get()
+            ->keyBy(fn (CalendarAvailabilityOverride $override) => $override->date->toDateString());
 
-        foreach ($overriddenDates as $overrideDate) {
-            $dateString = Carbon::parse($overrideDate)->toDateString();
-            if ($availabilityService->availabilityForDate($dateString)['isFull']) {
+        $candidateDates = $bookingStats->keys()
+            ->merge($overrides->keys())
+            ->unique();
+
+        foreach ($candidateDates as $dateString) {
+            $stat = $bookingStats->get($dateString);
+            $override = $overrides->get($dateString);
+            $currentEvents = (int) ($stat->event_count ?? 0);
+            $currentPax = (int) ($stat->total_pax ?? 0);
+            $maxEvents = $override?->max_events_override ?? $baseMaxEvents;
+            $maxPax = $override?->max_pax_override ?? $baseMaxPax;
+            $isLocked = (bool) ($override?->is_locked ?? false);
+
+            if ($isLocked || $currentEvents >= $maxEvents || $currentPax >= $maxPax) {
                 $disabledDates[] = $dateString;
             }
         }
@@ -785,8 +800,14 @@ class BookingController extends Controller
      * Cancel a booking (only if 7+ days before event).
      * Ported from: bookingController.cancelBooking()
      */
-    public function cancel(int $id)
+    public function cancel(Request $request, int $id)
     {
+        $reasonOptions = $this->cancellationReasonOptions();
+        $validated = $request->validate([
+            'cancellation_reason' => ['required', 'string', Rule::in(array_keys($reasonOptions))],
+            'cancellation_reason_details' => ['nullable', 'string', 'max:1000', 'required_if:cancellation_reason,other'],
+        ]);
+
         $userId = Auth::id();
 
         $booking = Booking::where('id', $id)->where('user_id', $userId)->first();
@@ -808,11 +829,67 @@ class BookingController extends Controller
             return response()->json(['error' => 'Cannot cancel within 7 days of the event date unless within 48 hours of booking.'], 400);
         }
 
-        $booking->update(['status' => 'Cancelled']);
+        $details = trim((string) ($validated['cancellation_reason_details'] ?? ''));
+        $reasonKey = $validated['cancellation_reason'];
+        $reasonLabel = $reasonOptions[$reasonKey];
+        $impact = app(BookingManagementService::class)->calculateCancellationImpact($booking);
+
+        DB::transaction(function () use ($booking, $impact, $reasonKey, $reasonLabel, $details) {
+            $updates = [
+                'status' => 'Cancelled',
+                'cancellation_reason' => $reasonKey,
+                'cancellation_reason_details' => $details !== '' ? $details : null,
+                'cancelled_at' => now(),
+            ];
+
+            if (($impact['refundable_amount'] ?? 0) > 0) {
+                $updates['live_status'] = 'Refund Processing';
+            }
+
+            $booking->update($updates);
+
+            PaymentEventService::record(
+                'booking_cancelled_by_customer',
+                'customer',
+                null,
+                [
+                    'booking_id' => $booking->id,
+                    'cancellation_reason' => $reasonKey,
+                    'cancellation_reason_label' => $reasonLabel,
+                    'cancellation_reason_details' => $details !== '' ? $details : null,
+                    'refund_preview' => $impact,
+                ],
+                bookingId: $booking->id
+            );
+        });
+
         app(OperationalBroadcastService::class)
             ->bookingChanged($booking->fresh(), 'cancelled', 'Booking cancelled.');
 
-        return response()->json(['message' => 'Booking cancelled successfully.']);
+        return response()->json([
+            'message' => 'Booking cancelled successfully. Accounting will review any eligible refund.',
+            'refund_preview' => $impact,
+            'cancellation_reason' => [
+                'value' => $reasonKey,
+                'label' => $reasonLabel,
+                'details' => $details !== '' ? $details : null,
+            ],
+        ]);
+    }
+
+    private function cancellationReasonOptions(): array
+    {
+        return [
+            'schedule_conflict' => 'Schedule conflict',
+            'event_postponed' => 'Event postponed',
+            'budget_or_payment_concern' => 'Budget or payment concern',
+            'venue_unavailable' => 'Venue unavailable',
+            'guest_count_changed' => 'Guest count changed',
+            'changed_provider' => 'Chose another provider',
+            'duplicate_or_mistake' => 'Duplicate or mistaken booking',
+            'emergency_or_personal_reason' => 'Emergency or personal reason',
+            'other' => 'Other',
+        ];
     }
 
     /**

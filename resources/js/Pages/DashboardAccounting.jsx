@@ -96,10 +96,13 @@ const DashboardAccounting = () => {
     useEffect(() => {
         if (activeTab === 'today') {
             fetchAccountingSummary();
-            fetchBookings({ silent: true });
-            fetchReconciliation({ silent: true });
-            fetchRefundQueue({ silent: true });
-            fetchLedger({ silent: true });
+            const backgroundTimer = window.setTimeout(() => {
+                fetchBookings({ silent: true });
+                fetchReconciliation({ silent: true });
+                fetchRefundQueue({ silent: true });
+                fetchLedger({ silent: true });
+            }, 150);
+            return () => window.clearTimeout(backgroundTimer);
         } else if (activeTab === 'payments') {
             fetchBookings();
             fetchReconciliation({ silent: true });
@@ -110,6 +113,8 @@ const DashboardAccounting = () => {
         } else if (activeTab === 'refunds') {
             fetchRefundQueue();
         }
+
+        return undefined;
     }, [activeTab, ledgerFilter, bookingPage, debouncedBookingSearchQuery, bookingSortOrder, bookingPaymentFilter, paymentSegment]);
 
     useEffect(() => {
@@ -195,12 +200,18 @@ const DashboardAccounting = () => {
     const fetchLedger = async ({ silent = false } = {}) => {
         if (!silent) setLoading(true);
         try {
-            // Session auth - no token needed
             const query = new URLSearchParams(ledgerFilter).toString();
-            const res = await fetch('/api/accounting/ledger?' + query, {
-                headers: { }
+            const cacheKey = smartCacheKey(`accounting:ledger:${query}`);
+            const cached = readSmartCache(cacheKey);
+            if (cached?.data && ledgerPayments.length === 0) {
+                setLedgerPayments(getListData(cached.data));
+                setLoading(false);
+            }
+            const result = await fetchSmartResource('/api/accounting/ledger?' + query, {
+                cacheKey,
+                ttl: 30000,
             });
-            const data = await res.json();
+            const data = result.raw || result.data;
             setLedgerPayments(getListData(data));
         } catch (error) {
             console.error("Error fetching ledger:", error);
@@ -212,10 +223,17 @@ const DashboardAccounting = () => {
     const fetchReconciliation = async ({ silent = false } = {}) => {
         if (!silent) setLoading(true);
         try {
-            const res = await fetch('/api/accounting/reconciliation?exceptions_only=1', {
-                headers: { }
+            const cacheKey = smartCacheKey('accounting:reconciliation:exceptions');
+            const cached = readSmartCache(cacheKey);
+            if (cached?.data && reconciliationItems.length === 0) {
+                setReconciliationItems(Array.isArray(cached.data) ? cached.data : []);
+                setLoading(false);
+            }
+            const result = await fetchSmartResource('/api/accounting/reconciliation?exceptions_only=1', {
+                cacheKey,
+                ttl: 30000,
             });
-            const data = await res.json();
+            const data = result.raw || result.data;
             setReconciliationItems(Array.isArray(data) ? data : []);
         } catch (error) {
             console.error("Error fetching reconciliation:", error);
@@ -336,11 +354,17 @@ const DashboardAccounting = () => {
     const fetchRefundQueue = async ({ silent = false } = {}) => {
         if (!silent) setLoading(true);
         try {
-            // Session auth - no token needed
-            const res = await fetch('/api/accounting/refunds/queue', {
-                headers: { }
+            const cacheKey = smartCacheKey('accounting:refunds:queue');
+            const cached = readSmartCache(cacheKey);
+            if (cached?.data && refundQueue.length === 0) {
+                setRefundQueue(Array.isArray(cached.data) ? cached.data : []);
+                setLoading(false);
+            }
+            const result = await fetchSmartResource('/api/accounting/refunds/queue', {
+                cacheKey,
+                ttl: 30000,
             });
-            const data = await res.json();
+            const data = result.raw || result.data;
             setRefundQueue(Array.isArray(data) ? data : []);
         } catch (error) {
             console.error("Error fetching refund queue:", error);

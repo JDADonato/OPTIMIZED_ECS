@@ -88,26 +88,20 @@ class BookingValidationService
             return 0;
         }
 
-        $total = 0;
+        $itemCounts = array_count_values(array_map('intval', $menuItemIds));
+        $items = \App\Models\MenuItem::whereIn('id', array_keys($itemCounts))->get()->keyBy('id');
 
-        // Group items by ID and sum quantities
-        $itemCounts = array_count_values($menuItemIds);
-
-        foreach ($itemCounts as $itemId => $quantity) {
-            $item = \App\Models\MenuItem::find($itemId);
-            
-            if (!$item) {
-                throw new \Exception("Menu item {$itemId} not found");
-            }
-
-            // Price per head includes base cost + any adjustments
-            $pricePerHead = $item->cost_per_head + ($item->price_adj ?? 0);
-            
-            // Total = (price per head × number of guests) × quantity
-            $total += ($pricePerHead * $pax) * $quantity;
+        if ($items->count() !== count($itemCounts)) {
+            $missingId = collect(array_keys($itemCounts))->first(fn ($id) => !isset($items[$id]));
+            throw new \Exception("Menu item {$missingId} not found");
         }
 
-        return $total;
+        return $items->reduce(function (float $total, $item) use ($itemCounts, $pax) {
+            $quantity = (int) ($itemCounts[(int) $item->id] ?? 1);
+            $pricePerHead = (float) $item->cost_per_head + (float) ($item->price_adj ?? 0);
+
+            return $total + (($pricePerHead * $pax) * $quantity);
+        }, 0.0);
     }
 
     /**
@@ -127,6 +121,10 @@ class BookingValidationService
     ): bool
     {
         $calculatedTotal = self::calculateTotalCost($menuItemIds, $pax);
+        if ($calculatedTotal <= 0) {
+            return $submittedTotal <= 0;
+        }
+
         $variance = abs($submittedTotal - $calculatedTotal) / $calculatedTotal;
 
         return $variance <= $allowedVariance;

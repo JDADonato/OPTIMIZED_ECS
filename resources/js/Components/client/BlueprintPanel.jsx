@@ -2,11 +2,11 @@ import { useMemo, useState, useEffect } from 'react';
 import { fetchMenuItemsFromAPI } from '../../utils/menuUtils';
 
 const CATEGORY_LABELS = {
-    starter: 'Starter',
-    main: 'Main',
+    starter: 'Starters',
+    main: 'Main Courses',
     side: 'Sides',
-    dessert: 'Dessert',
-    drink: 'Drinks'
+    dessert: 'Desserts',
+    drink: 'Refreshments'
 };
 
 const money = (value) => `₱${Number(value || 0).toLocaleString()}`;
@@ -204,24 +204,33 @@ const BlueprintPanel = ({ bookingData, collapsed = false, onToggle }) => {
         );
     };
 
-    const selectedMenuRows = Object.keys(CATEGORY_LABELS).flatMap(category => {
+    const selectedMenuGroups = Object.keys(CATEGORY_LABELS).map(category => {
         const dishIds = selectedDishes[category] || [];
         const includedLimit = package_allowances?.[category] ?? null;
-        return dishIds.map((id, index) => {
+        const items = dishIds.map((id, index) => {
             const dish = customItems[category]?.find(d => d.id === id);
             if (!dish) return null;
             const overrideId = `dish_${dish.id}`;
             const customCost = pricingOverrides[overrideId] !== undefined ? pricingOverrides[overrideId] : dish.costPerHead;
             const included = Boolean((package_base_price || package_flat_price) && includedLimit !== null && index < includedLimit);
             return {
-                id: `${category}-${id}`,
+                id: `${category}-${id}-${index}`,
                 category: CATEGORY_LABELS[category],
                 name: dish.name,
                 cost: included ? 0 : customCost * (pax || 0),
                 included,
             };
         }).filter(Boolean);
-    });
+        return {
+            id: category,
+            label: CATEGORY_LABELS[category],
+            includedLimit,
+            includedCount: items.filter(item => item.included).length,
+            extraCount: items.filter(item => !item.included).length,
+            subtotal: items.reduce((sum, item) => sum + Number(item.cost || 0), 0),
+            items,
+        };
+    }).filter(group => group.items.length > 0);
 
     if (collapsed) {
         return (
@@ -315,10 +324,10 @@ const BlueprintPanel = ({ bookingData, collapsed = false, onToggle }) => {
                     )}
 
                     <Section id="menu" title="Menu" meta={`${totalDishCount} selected`}>
-                        {selectedMenuRows.length === 0 ? (
+                        {selectedMenuGroups.length === 0 ? (
                             <p className="text-sm font-semibold text-slate-400">No dishes selected yet.</p>
                         ) : (
-                            <div className="space-y-2">
+                            <div className="booking-summary-menu-list">
                                 {(package_base_price || package_flat_price) && (
                                     <div className="booking-summary-package-row">
                                         <div>
@@ -328,12 +337,29 @@ const BlueprintPanel = ({ bookingData, collapsed = false, onToggle }) => {
                                         <b>{money(package_pricing_type === 'flat' ? package_flat_price : package_base_price * (pax || 0))}</b>
                                     </div>
                                 )}
-                                {selectedMenuRows.map(row => (
-                                    <div key={row.id} className="grid grid-cols-[1fr_auto] gap-3 text-sm">
-                                        <span className="min-w-0 truncate font-semibold text-slate-700">{row.name}</span>
-                                        <span className={`font-bold ${row.included ? 'text-slate-400' : 'text-slate-900'}`}>
-                                            {row.included ? 'Included' : money(row.cost)}
-                                        </span>
+                                {selectedMenuGroups.map(group => (
+                                    <div key={group.id} className="booking-summary-menu-group">
+                                        <div className="booking-summary-menu-group-header">
+                                            <div>
+                                                <span>{group.label}</span>
+                                                <strong>{group.items.length} selected</strong>
+                                            </div>
+                                            <em>
+                                                {group.extraCount > 0
+                                                    ? `+${money(group.subtotal)}`
+                                                    : 'Included'}
+                                            </em>
+                                        </div>
+                                        <div className="booking-summary-menu-items">
+                                            {group.items.map(row => (
+                                                <div key={row.id} className="booking-summary-menu-item">
+                                                    <span>{row.name}</span>
+                                                    <strong className={row.included ? 'included' : ''}>
+                                                        {row.included ? 'Included' : money(row.cost)}
+                                                    </strong>
+                                                </div>
+                                            ))}
+                                        </div>
                                     </div>
                                 ))}
                             </div>

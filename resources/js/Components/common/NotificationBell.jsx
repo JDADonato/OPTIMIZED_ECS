@@ -224,6 +224,12 @@ const NotificationBell = ({ variant = 'light', placement = 'inline' }) => {
 
     const getIcon = (type) => {
         switch (type) {
+            case 'booking_live_status':
+                return (
+                    <div className="w-7 h-7 rounded-lg bg-[#fff7e8] ring-1 ring-[#f0aa0b]/25 flex items-center justify-center flex-shrink-0">
+                        <svg className="w-3.5 h-3.5 text-[#9f6500]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6l4 2m6-2a10 10 0 11-20 0 10 10 0 0120 0z" /></svg>
+                    </div>
+                );
             case 'booking_confirmed':
                 return (
                     <div className="w-7 h-7 rounded-lg bg-emerald-50 ring-1 ring-emerald-100 flex items-center justify-center flex-shrink-0">

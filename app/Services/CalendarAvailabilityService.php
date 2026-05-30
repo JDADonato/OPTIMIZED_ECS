@@ -25,8 +25,11 @@ class CalendarAvailabilityService
             $query->where('id', '!=', $excludeBooking->id);
         }
 
-        $currentEvents = (clone $query)->count();
-        $currentPax = (int) ((clone $query)->sum('pax') ?? 0);
+        $stats = $query
+            ->selectRaw('COUNT(*) as event_count, COALESCE(SUM(pax), 0) as total_pax')
+            ->first();
+        $currentEvents = (int) ($stats->event_count ?? 0);
+        $currentPax = (int) ($stats->total_pax ?? 0);
         $maxEvents = $override?->max_events_override ?? $baseMaxEvents;
         $maxPax = $override?->max_pax_override ?? $baseMaxPax;
         $isLocked = (bool) ($override?->is_locked ?? false);

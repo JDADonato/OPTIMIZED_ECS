@@ -6,12 +6,13 @@ import ClientNavbar from '../../Components/common/ClientNavbar';
 import ConfirmModal from '../../Components/common/ConfirmModal';
 import SmartImage from '../../Components/common/SmartImage';
 import CustomerAnnouncements from '../../Components/content/CustomerAnnouncements';
-import { customerBookingStatus, customerPaymentStatus, isSettledPaymentStatus, paymentTypeLabel, statusToneClasses } from '../../utils/statusLabels';
+import { customerBookingStatus, customerPaymentStatus, isSettledPaymentStatus, liveStatusLabel, paymentTypeLabel, statusToneClasses } from '../../utils/statusLabels';
 import { fetchSmartResource, getUserScopedCacheKey, writeSmartCache } from '../../utils/smartResource';
 import useRealtimeStatus from '../../hooks/useRealtimeStatus';
 import useSmartRefresh from '../../hooks/useSmartRefresh';
 import { LiveSyncIndicator, SoftRefreshBoundary } from '../../Components/common/LiveFeedback';
 import { operationalChannelsForUser } from '../../utils/liveChannels';
+import csrfFetch from '../../utils/csrf';
 
 const ReceiptModal = lazy(() => import('../../Components/common/ReceiptModal'));
 
@@ -25,6 +26,24 @@ const menuCategories = [
     { id: 'drink', label: 'Refreshments' },
 ];
 const dashboardSections = ['details', 'menu', 'payments', 'history'];
+const liveStatusSteps = [
+    { status: 'Not Started', label: 'Not started', description: 'Approved and waiting for event-day movement.' },
+    { status: 'On the Way', label: 'On the way', description: 'The Eloquente team is traveling to your venue.' },
+    { status: 'Preparing', label: 'Preparing', description: 'Setup and service preparation are underway.' },
+    { status: 'Serving', label: 'Serving', description: 'Food service is active for your event.' },
+    { status: 'Completed', label: 'Completed', description: 'Event service has been completed.' },
+];
+const cancellationReasons = [
+    { value: 'schedule_conflict', label: 'Schedule conflict', description: 'Your planned date or time no longer works.' },
+    { value: 'event_postponed', label: 'Event postponed', description: 'You are moving the event to a later date.' },
+    { value: 'budget_or_payment_concern', label: 'Budget or payment concern', description: 'Costs, payment timing, or funds changed.' },
+    { value: 'venue_unavailable', label: 'Venue unavailable', description: 'The venue became unavailable or unsuitable.' },
+    { value: 'guest_count_changed', label: 'Guest count changed', description: 'The event size changed too much for this plan.' },
+    { value: 'changed_provider', label: 'Chose another provider', description: 'You decided to book a different supplier.' },
+    { value: 'duplicate_or_mistake', label: 'Duplicate or mistaken booking', description: 'The booking was created by mistake.' },
+    { value: 'emergency_or_personal_reason', label: 'Emergency or personal reason', description: 'A personal matter requires cancellation.' },
+    { value: 'other', label: 'Other (specify)', description: 'Tell us the reason in your own words.' },
+];
 const eventDisplayName = (booking) => booking?.event_display_name || booking?.event_name || booking?.event_type || booking?.package_name || (booking?.id ? `Booking #${booking.id}` : 'Eloquente event');
 const sharedSelectedBookingKey = 'ecs_selected_booking_id';
 const formatEventDate = (date, options = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }) => (
@@ -241,6 +260,68 @@ const buildJourneySteps = (booking, payments) => {
     }
 
     return steps;
+};
+
+const LiveStatusTracker = ({ booking }) => {
+    if (!booking || !['Confirmed', 'Completed'].includes(booking.status)) return null;
+
+    const currentStatus = booking.live_status || 'Not Started';
+    const currentIndex = Math.max(0, liveStatusSteps.findIndex(step => step.status === currentStatus));
+    const activeIndex = currentIndex === -1 ? 0 : currentIndex;
+    const progress = liveStatusSteps.length > 1 ? (activeIndex / (liveStatusSteps.length - 1)) * 100 : 0;
+    const statusInfo = liveStatusLabel(currentStatus);
+    const activeStep = liveStatusSteps[activeIndex] || liveStatusSteps[0];
+
+    return (
+        <section id="live-status-tracker" className="overflow-hidden rounded-3xl border border-[#720101]/10 bg-white shadow-sm">
+            <div className="border-b border-[#ead8cc] bg-[#fffaf3] px-5 py-5 sm:px-7">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                        <p className="text-xs font-black uppercase tracking-widest text-[#9f6500]">Live event tracker</p>
+                        <h3 className="mt-1 font-display text-xl font-bold text-[#1a1a1a]">Current service status</h3>
+                    </div>
+                    <span className={`inline-flex w-fit rounded-full px-3 py-1 text-[11px] font-black uppercase tracking-widest ${statusToneClasses[statusInfo.tone]?.light || statusToneClasses.neutral.light}`}>
+                        {statusInfo.label}
+                    </span>
+                </div>
+            </div>
+            <div className="p-5 sm:p-7">
+                <div className="mb-6 rounded-2xl border border-[#f0aa0b]/25 bg-[#fff7e8] p-4">
+                    <p className="text-sm font-black text-[#720101]">{activeStep.label}</p>
+                    <p className="mt-1 text-sm font-semibold leading-6 text-gray-600">{activeStep.description}</p>
+                </div>
+
+                <div className="relative pb-2">
+                    <div className="absolute left-0 right-0 top-5 h-1 rounded-full bg-gray-100" />
+                    <div
+                        className="absolute left-0 top-5 h-1 rounded-full bg-[#720101] transition-all duration-700"
+                        style={{ width: `${progress}%` }}
+                    />
+                    <div className="relative grid gap-2" style={{ gridTemplateColumns: `repeat(${liveStatusSteps.length}, minmax(0, 1fr))` }}>
+                        {liveStatusSteps.map((step, index) => {
+                            const isDone = index <= activeIndex;
+                            const isCurrent = index === activeIndex;
+
+                            return (
+                                <div key={step.status} className="flex min-w-0 flex-col items-center text-center">
+                                    <div className={`z-10 flex h-11 w-11 items-center justify-center rounded-full border-2 text-xs font-black transition-all ${isDone ? 'border-[#720101] bg-[#720101] text-white shadow-sm' : 'border-gray-100 bg-white text-gray-300'} ${isCurrent ? 'ring-4 ring-[#720101]/10' : ''}`}>
+                                        {isDone ? (
+                                            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                                            </svg>
+                                        ) : index + 1}
+                                    </div>
+                                    <p className={`mt-3 max-w-[7rem] text-[10px] font-black uppercase tracking-widest ${isDone ? 'text-[#720101]' : 'text-gray-400'}`}>
+                                        {step.label}
+                                    </p>
+                                </div>
+                            );
+                        })}
+                    </div>
+                </div>
+            </div>
+        </section>
+    );
 };
 
 const HistoryPanel = ({ bookings, onHide }) => (
@@ -609,6 +690,10 @@ const ClientDashboard = () => {
     // Modal states
     const [editCoreModalOpen, setEditCoreModalOpen] = useState(false);
     const [cancelModalOpen, setCancelModalOpen] = useState(false);
+    const [cancelReason, setCancelReason] = useState('');
+    const [cancelReasonDetails, setCancelReasonDetails] = useState('');
+    const [cancellingBooking, setCancellingBooking] = useState(false);
+    const [cancelResult, setCancelResult] = useState(null);
     const [receiptModal, setReceiptModal] = useState({ isOpen: false, payment: null, booking: null });
 
     const isSettledPayment = (payment) => isSettledPaymentStatus(payment.status);
@@ -875,6 +960,10 @@ const ClientDashboard = () => {
     const activeTotal = Number(activeBooking?.total_cost || 0);
     const activeBalance = Math.max(activeTotal - activePaid, 0);
     const activeProgress = activeTotal > 0 ? Math.min((activePaid / activeTotal) * 100, 100) : 0;
+    const activeCancellationImpact = activeBooking?.cancellationImpact || {};
+    const activeRefundableAmount = Number(activeCancellationImpact.refundable_amount || 0);
+    const activeNonRefundableAmount = Number(activeCancellationImpact.non_refundable_amount || 0);
+    const activeTotalPaidForRefund = Number(activeCancellationImpact.total_paid || 0);
     const activeJourneySteps = React.useMemo(() => activeBooking ? buildJourneySteps(activeBooking, activePayments) : [], [activeBooking, activePayments]);
     const actionableJourneySteps = React.useMemo(() => activeJourneySteps.filter((step) => !step.notRequired), [activeJourneySteps]);
     const completedJourneySteps = React.useMemo(() => actionableJourneySteps.filter((step) => step.done), [actionableJourneySteps]);
@@ -893,6 +982,19 @@ const ClientDashboard = () => {
         if (step.target) {
             setPendingScrollTarget(step.target);
         }
+    };
+
+    const openCancelModal = () => {
+        setCancelReason('');
+        setCancelReasonDetails('');
+        setCancelModalOpen(true);
+    };
+
+    const closeCancelModal = () => {
+        if (cancellingBooking) return;
+        setCancelModalOpen(false);
+        setCancelReason('');
+        setCancelReasonDetails('');
     };
 
     const clientNextActions = React.useMemo(() => {
@@ -1040,19 +1142,52 @@ const ClientDashboard = () => {
     }
 
     // Action handlers
-    const handleCancelBooking = async () => {
+    const handleCancelBooking = async (event) => {
+        event?.preventDefault();
+        if (!activeBooking || cancellingBooking) return;
+
+        if (!cancelReason) {
+            setToast({ message: 'Please choose a cancellation reason before continuing.', type: 'error' });
+            return;
+        }
+
+        if (cancelReason === 'other' && !cancelReasonDetails.trim()) {
+            setToast({ message: 'Please specify the cancellation reason.', type: 'error' });
+            return;
+        }
+
+        setCancellingBooking(true);
         try {
-            const res = await fetch(`/api/bookings/${activeBooking.id}/cancel`, { method: 'PUT' });
+            const res = await csrfFetch(`/api/bookings/${activeBooking.id}/cancel`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    cancellation_reason: cancelReason,
+                    cancellation_reason_details: cancelReasonDetails.trim(),
+                }),
+            });
             const result = await res.json().catch(() => ({}));
             if (res.ok) {
+                setCancelResult({
+                    bookingId: activeBooking.id,
+                    eventName: eventDisplayName(activeBooking),
+                    eventDate: activeBooking.event_date,
+                    message: result.message || 'Booking cancelled successfully.',
+                    refundPreview: result.refund_preview || activeBooking.cancellationImpact || {},
+                });
                 setToast({ message: 'Booking successfully cancelled.', type: 'success' });
                 setCancelModalOpen(false);
-                fetchData();
+                setCancelReason('');
+                setCancelReasonDetails('');
+                await fetchData({ silent: true, force: true });
             } else {
-                setToast({ message: result.error || 'Unable to cancel this booking.', type: 'error' });
+                const firstValidationError = result.errors ? Object.values(result.errors).flat()[0] : null;
+                setToast({ message: firstValidationError || result.error || 'Unable to cancel this booking.', type: 'error' });
             }
         } catch (e) {
-            setToast({ message: 'We could not open checkout. Please try again.', type: 'error' });
+            setToast({ message: 'Unable to cancel this booking right now. Please try again.', type: 'error' });
+        } finally {
+            setCancellingBooking(false);
         }
     };
 
@@ -1467,7 +1602,7 @@ const ClientDashboard = () => {
                                     Update Date / Pax
                                 </button>
                                 <button 
-                                    onClick={() => setCancelModalOpen(true)}
+                                    onClick={openCancelModal}
                                     disabled={activeBooking.status === 'Cancelled'}
                                     className="w-full bg-red-50 text-red-700 font-bold py-3 px-4 rounded-xl shadow-sm hover:bg-red-100 transition-colors disabled:opacity-50"
                                 >
@@ -1566,6 +1701,8 @@ const ClientDashboard = () => {
                                         </div>
                                         </div>
                                     </div>
+
+                                    <LiveStatusTracker booking={activeBooking} />
 
                                     {activeBooking.clarification_request && !activeBooking.clarification_response && (
                                         <div id="staff-request-panel" className="rounded-3xl border border-[#f0aa0b]/35 bg-[#fff7e8] p-6 shadow-sm sm:p-7">
@@ -2526,19 +2663,143 @@ const ClientDashboard = () => {
 
             {cancelModalOpen && activeBooking && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-                    <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setCancelModalOpen(false)}></div>
-                    <div className="relative w-full max-w-lg animate-fadeIn rounded-3xl bg-white p-7 shadow-2xl">
-                        <p className="text-xs font-black uppercase tracking-widest text-red-700">Cancel booking</p>
-                        <h3 className="mt-2 text-2xl font-display font-bold text-[#1a1a1a]">{eventDisplayName(activeBooking)}</h3>
-                        <p className="mt-2 text-sm font-semibold leading-6 text-gray-500">
-                            Booking #{activeBooking.id} on {formatEventDate(activeBooking.event_date, { month: 'long', day: 'numeric', year: 'numeric' })}
-                        </p>
-                        <div className="mt-5 rounded-2xl border border-red-100 bg-red-50 p-4">
-                            <p className="text-sm font-semibold leading-6 text-red-800">{activeBooking.cancellationImpact?.message || "This will cancel the selected booking and move it to your history."}</p>
+                    <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={closeCancelModal}></div>
+                    <form onSubmit={handleCancelBooking} className="relative max-h-[92vh] w-full max-w-4xl animate-fadeIn overflow-y-auto rounded-3xl bg-white shadow-2xl">
+                        <div className="border-b border-red-100 bg-[#fff9f2] px-6 py-5 sm:px-7">
+                            <p className="text-xs font-black uppercase tracking-widest text-red-700">Cancel booking request</p>
+                            <h3 className="mt-2 text-2xl font-display font-bold text-[#1a1a1a]">{eventDisplayName(activeBooking)}</h3>
+                            <p className="mt-2 text-sm font-semibold leading-6 text-gray-500">
+                                Booking #{activeBooking.id} on {formatEventDate(activeBooking.event_date, { month: 'long', day: 'numeric', year: 'numeric' })}
+                            </p>
                         </div>
-                        <div className="mt-7 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
-                            <button onClick={() => setCancelModalOpen(false)} className="rounded-xl border border-gray-200 bg-white px-5 py-3 text-sm font-bold text-gray-600 hover:bg-gray-50">Keep Booking</button>
-                            <button onClick={handleCancelBooking} className="rounded-xl bg-red-700 px-6 py-3 text-sm font-black text-white shadow-sm hover:bg-red-800">Cancel Booking</button>
+
+                        <div className="grid gap-6 px-6 py-6 sm:px-7 lg:grid-cols-[1.25fr_0.85fr]">
+                            <section>
+                                <div className="mb-4">
+                                    <p className="text-xs font-black uppercase tracking-widest text-gray-500">Reason for cancellation</p>
+                                    <p className="mt-1 text-sm font-semibold leading-6 text-gray-500">Choose the closest reason so the team can review your request and improve follow-up.</p>
+                                </div>
+
+                                <div className="grid gap-3 sm:grid-cols-2">
+                                    {cancellationReasons.map((reason) => (
+                                        <label
+                                            key={reason.value}
+                                            className={`cursor-pointer rounded-2xl border p-4 transition-all ${cancelReason === reason.value ? 'border-[#720101] bg-[#720101]/5 shadow-sm' : 'border-gray-200 bg-white hover:border-[#720101]/30 hover:bg-[#fff9f2]'}`}
+                                        >
+                                            <input
+                                                type="radio"
+                                                name="cancellation_reason"
+                                                value={reason.value}
+                                                checked={cancelReason === reason.value}
+                                                onChange={(event) => setCancelReason(event.target.value)}
+                                                className="sr-only"
+                                            />
+                                            <span className="flex items-start gap-3">
+                                                <span className={`mt-1 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border ${cancelReason === reason.value ? 'border-[#720101] bg-[#720101]' : 'border-gray-300'}`}>
+                                                    {cancelReason === reason.value && <span className="h-1.5 w-1.5 rounded-full bg-white" />}
+                                                </span>
+                                                <span>
+                                                    <span className="block text-sm font-black text-gray-900">{reason.label}</span>
+                                                    <span className="mt-1 block text-xs font-semibold leading-5 text-gray-500">{reason.description}</span>
+                                                </span>
+                                            </span>
+                                        </label>
+                                    ))}
+                                </div>
+
+                                <label className="mt-4 block">
+                                    <span className="text-xs font-black uppercase tracking-widest text-gray-500">
+                                        {cancelReason === 'other' ? 'Other reason details' : 'Additional note'}
+                                    </span>
+                                    <textarea
+                                        value={cancelReasonDetails}
+                                        onChange={(event) => setCancelReasonDetails(event.target.value)}
+                                        rows={4}
+                                        maxLength={1000}
+                                        placeholder={cancelReason === 'other' ? 'Please specify your reason for cancellation.' : 'Optional: add helpful context for the Eloquente team.'}
+                                        className="mt-2 w-full resize-none rounded-2xl border border-gray-200 bg-white px-4 py-3 text-sm font-semibold leading-6 text-gray-800 outline-none focus:border-[#720101] focus:ring-4 focus:ring-[#720101]/10"
+                                    />
+                                </label>
+                            </section>
+
+                            <aside className="space-y-4">
+                                <div className="rounded-2xl border border-[#f0aa0b]/30 bg-[#fff9e9] p-4">
+                                    <p className="text-xs font-black uppercase tracking-widest text-[#9c6500]">Refund process</p>
+                                    <p className="mt-2 text-sm font-bold leading-6 text-[#7b1e1e]">
+                                        Accounting reviews paid and verified payments after cancellation. The final refund is confirmed there before release.
+                                    </p>
+                                </div>
+
+                                <div className="grid gap-3">
+                                    <div className="rounded-2xl border border-gray-200 bg-white p-4">
+                                        <p className="text-xs font-black uppercase tracking-widest text-gray-400">Paid so far</p>
+                                        <p className="mt-1 text-xl font-display font-bold text-gray-900">{peso(activeTotalPaidForRefund)}</p>
+                                    </div>
+                                    <div className="rounded-2xl border border-red-100 bg-red-50 p-4">
+                                        <p className="text-xs font-black uppercase tracking-widest text-red-500">Estimated non-refundable</p>
+                                        <p className="mt-1 text-xl font-display font-bold text-red-800">{peso(activeNonRefundableAmount)}</p>
+                                    </div>
+                                    <div className="rounded-2xl border border-emerald-100 bg-emerald-50 p-4">
+                                        <p className="text-xs font-black uppercase tracking-widest text-emerald-600">Estimated refund</p>
+                                        <p className="mt-1 text-xl font-display font-bold text-emerald-800">{peso(activeRefundableAmount)}</p>
+                                    </div>
+                                </div>
+
+                                <div className="rounded-2xl border border-gray-200 bg-gray-50 p-4">
+                                    <p className="text-sm font-semibold leading-6 text-gray-600">
+                                        {activeCancellationImpact.message || 'If no payments are marked Paid or Verified yet, no refund is currently expected.'}
+                                    </p>
+                                    <p className="mt-3 text-xs font-bold leading-5 text-gray-500">
+                                        This is an estimate based on current payment records. Accounting will confirm the final amount and refund method.
+                                    </p>
+                                </div>
+                            </aside>
+                        </div>
+
+                        <div className="flex flex-col-reverse gap-3 border-t border-gray-100 bg-white px-6 py-5 sm:flex-row sm:justify-end sm:px-7">
+                            <button type="button" onClick={closeCancelModal} disabled={cancellingBooking} className="rounded-xl border border-gray-200 bg-white px-5 py-3 text-sm font-bold text-gray-600 hover:bg-gray-50 disabled:opacity-60">Keep Booking</button>
+                            <button type="submit" disabled={cancellingBooking || !cancelReason || (cancelReason === 'other' && !cancelReasonDetails.trim())} className="rounded-xl bg-red-700 px-6 py-3 text-sm font-black text-white shadow-sm hover:bg-red-800 disabled:cursor-not-allowed disabled:opacity-60">
+                                {cancellingBooking ? 'Submitting...' : 'Submit Cancellation'}
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            )}
+
+            {cancelResult && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+                    <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setCancelResult(null)}></div>
+                    <div className="relative w-full max-w-xl animate-fadeIn rounded-3xl bg-white p-7 shadow-2xl">
+                        <p className="text-xs font-black uppercase tracking-widest text-[#720101]">Cancellation submitted</p>
+                        <h3 className="mt-2 text-2xl font-display font-bold text-[#1a1a1a]">{cancelResult.eventName}</h3>
+                        <p className="mt-2 text-sm font-semibold leading-6 text-gray-500">
+                            Booking #{cancelResult.bookingId} has been moved to your history.
+                        </p>
+
+                        <div className="mt-5 rounded-2xl border border-[#f0aa0b]/30 bg-[#fff9e9] p-4">
+                            <p className="text-sm font-bold leading-6 text-[#7b1e1e]">{cancelResult.message}</p>
+                            <p className="mt-2 text-sm font-semibold leading-6 text-gray-600">
+                                Accounting will review your paid and verified payments, confirm the final refund amount, and process the refund through the appropriate payment method.
+                            </p>
+                        </div>
+
+                        <div className="mt-5 grid gap-3 sm:grid-cols-3">
+                            <div className="rounded-2xl border border-gray-200 bg-white p-4">
+                                <p className="text-xs font-black uppercase tracking-widest text-gray-400">Paid</p>
+                                <p className="mt-1 text-lg font-display font-bold text-gray-900">{peso(cancelResult.refundPreview?.total_paid)}</p>
+                            </div>
+                            <div className="rounded-2xl border border-red-100 bg-red-50 p-4">
+                                <p className="text-xs font-black uppercase tracking-widest text-red-500">Forfeited</p>
+                                <p className="mt-1 text-lg font-display font-bold text-red-800">{peso(cancelResult.refundPreview?.non_refundable_amount)}</p>
+                            </div>
+                            <div className="rounded-2xl border border-emerald-100 bg-emerald-50 p-4">
+                                <p className="text-xs font-black uppercase tracking-widest text-emerald-600">Refund</p>
+                                <p className="mt-1 text-lg font-display font-bold text-emerald-800">{peso(cancelResult.refundPreview?.refundable_amount)}</p>
+                            </div>
+                        </div>
+
+                        <div className="mt-7 flex justify-end">
+                            <button onClick={() => setCancelResult(null)} className="rounded-xl bg-[#720101] px-6 py-3 text-sm font-black text-white shadow-sm hover:bg-[#5a0101]">Got it</button>
                         </div>
                     </div>
                 </div>

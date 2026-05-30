@@ -734,11 +734,15 @@ class AdminController extends Controller
     public function getPricingOverrides()
     {
         try {
-            $overrides = PricingOverride::all();
-            $pricingMap = [];
-            foreach ($overrides as $item) {
-                $pricingMap[$item->id] = $item->new_price;
-            }
+            $pricingMap = Cache::remember('pricing.overrides.map', now()->addMinutes(5), function () {
+                $overrides = PricingOverride::all();
+                $map = [];
+                foreach ($overrides as $item) {
+                    $map[$item->id] = $item->new_price;
+                }
+
+                return $map;
+            });
             return response()->json(['overrides' => $pricingMap]);
         } catch (\Exception $e) {
             return response()->json(['overrides' => []]);
@@ -762,6 +766,7 @@ class AdminController extends Controller
                 'new_price' => $request->new_price,
             ]
         );
+        Cache::forget('pricing.overrides.map');
 
         return response()->json(['message' => 'Pricing updated successfully']);
     }
@@ -856,6 +861,11 @@ class AdminController extends Controller
         return response()->json($reports->analyticsForecasts($this->analyticsFilters($request)));
     }
 
+    public function getAnalyticsAdvanced(Request $request, AdminReportService $reports)
+    {
+        return response()->json($reports->analyticsAdvanced($this->analyticsFilters($request)));
+    }
+
     private function analyticsFilters(Request $request): array
     {
         return array_filter($request->only([
@@ -863,6 +873,7 @@ class AdminController extends Controller
             'date_to',
             'event_type',
             'package_id',
+            'package_category',
             'booking_status',
             'payment_status',
             'city',
@@ -907,13 +918,19 @@ class AdminController extends Controller
 
     public function getMenuItems()
     {
-        $query = MenuItem::query();
+        $includeInactive = in_array(Auth::user()?->role, ['Admin', 'Marketing'], true);
+        $version = $this->catalogVersion();
+        $cacheKey = 'catalog.menu_items.' . ($includeInactive ? 'staff' : 'public') . ".v{$version}";
 
-        if (!in_array(Auth::user()?->role, ['Admin', 'Marketing'], true)) {
-            $query->whereRaw('is_active is true');
-        }
+        $items = Cache::remember($cacheKey, now()->addMinutes(10), function () use ($includeInactive) {
+            $query = MenuItem::query();
 
-        $items = $query->orderBy('category')->orderBy('name')->get();
+            if (!$includeInactive) {
+                $query->whereRaw('is_active is true');
+            }
+
+            return $query->orderBy('category')->orderBy('name')->get();
+        });
         return response()->json($items);
     }
 
@@ -943,9 +960,8 @@ class AdminController extends Controller
             'is_best_seller' => $request->is_best_seller ?? false,
             'is_active'      => $request->input('is_active', true),
         ]);
+        $this->bumpCatalogVersion();
         Cache::put('admin.analytics.version', (int) Cache::get('admin.analytics.version', 1) + 1);
-        Cache::forget('menu_categories');
-        Cache::forget('menu_bestsellers');
         app(OperationalBroadcastService::class)
             ->adminChanged('catalog', 'menu_item', $item->id, 'created', 'Menu item created.');
 
@@ -974,9 +990,8 @@ class AdminController extends Controller
             'name', 'category', 'cost_per_head', 'price_adj',
             'image', 'description', 'is_best_seller', 'is_active',
         ]));
+        $this->bumpCatalogVersion();
         Cache::put('admin.analytics.version', (int) Cache::get('admin.analytics.version', 1) + 1);
-        Cache::forget('menu_categories');
-        Cache::forget('menu_bestsellers');
         app(OperationalBroadcastService::class)
             ->adminChanged('catalog', 'menu_item', $item->id, 'updated', 'Menu item updated.');
 
@@ -991,9 +1006,8 @@ class AdminController extends Controller
         }
 
         $item->update(['is_active' => false]);
+        $this->bumpCatalogVersion();
         Cache::put('admin.analytics.version', (int) Cache::get('admin.analytics.version', 1) + 1);
-        Cache::forget('menu_categories');
-        Cache::forget('menu_bestsellers');
         app(OperationalBroadcastService::class)
             ->adminChanged('catalog', 'menu_item', $item->id, 'archived', 'Menu item archived.');
 
@@ -1003,5 +1017,17 @@ class AdminController extends Controller
     public function archiveMenuItem(int $id)
     {
         return $this->deleteMenuItem($id);
+    }
+
+    private function catalogVersion(): int
+    {
+        return (int) Cache::get('catalog.version', 1);
+    }
+
+    private function bumpCatalogVersion(): void
+    {
+        Cache::put('catalog.version', $this->catalogVersion() + 1, now()->addDays(30));
+        Cache::forget('menu_categories');
+        Cache::forget('menu_bestsellers');
     }
 }

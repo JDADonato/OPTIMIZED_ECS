@@ -235,8 +235,11 @@ const DashboardMarketing = () => {
         if (activeTab === 'today') {
             fetchMarketingSummary();
             fetchBookings({ scope: 'page' });
-            fetchContactLeads({ silent: true });
-            fetchFeedbackSummary();
+            const backgroundTimer = window.setTimeout(() => {
+                fetchContactLeads({ silent: true });
+                fetchFeedbackSummary();
+            }, 150);
+            return () => window.clearTimeout(backgroundTimer);
         } else if (activeTab === 'public-content') {
             fetchMarketingSettings();
         } else if (activeTab === 'availability') {
@@ -250,6 +253,8 @@ const DashboardMarketing = () => {
         } else {
             setLoading(false);
         }
+
+        return undefined;
     }, [activeTab, availabilityMonth, bookingsScope]);
 
     useEffect(() => {
@@ -354,11 +359,16 @@ const DashboardMarketing = () => {
 
     const fetchMarketingSummary = async ({ silent = false } = {}) => {
         try {
-            const response = await fetch('/api/marketing/summary', {
-                headers: { Accept: 'application/json' },
+            const cacheKey = smartCacheKey('marketing:summary');
+            const cached = readSmartCache(cacheKey);
+            if (cached?.data && !marketingRemoteSummary) {
+                setMarketingRemoteSummary(cached.data);
+            }
+            const result = await fetchSmartResource('/api/marketing/summary', {
+                cacheKey,
+                ttl: 30000,
             });
-            if (!response.ok) throw new Error('Summary load failed');
-            setMarketingRemoteSummary(await response.json());
+            setMarketingRemoteSummary(result.raw || result.data);
         } catch (error) {
             console.error('Error fetching marketing summary:', error);
             if (!silent) toast.error('Could not load today summary.');
@@ -367,11 +377,12 @@ const DashboardMarketing = () => {
 
     const fetchFeedbackSummary = async () => {
         try {
-            const response = await fetch('/api/marketing/feedback-responses?follow_up_only=1&paginated=1&per_page=50', {
-                headers: { Accept: 'application/json' },
+            const url = '/api/marketing/feedback-responses?follow_up_only=1&paginated=1&per_page=50';
+            const result = await fetchSmartResource(url, {
+                cacheKey: smartCacheKey('marketing:feedback-summary'),
+                ttl: 30000,
             });
-            if (!response.ok) return;
-            const rows = await response.json();
+            const rows = result.raw || result.data;
             const list = Array.isArray(rows) ? rows : (rows.data || []);
             setFeedbackSummary({
                 followUps: list.length,
@@ -390,11 +401,12 @@ const DashboardMarketing = () => {
             Object.entries(leadFilters).forEach(([key, value]) => {
                 if (value !== '' && value !== null && value !== undefined) params.set(key, value);
             });
-            const response = await fetch(`/api/marketing/contact-inquiries?${params.toString()}`, {
-                headers: { Accept: 'application/json' },
+            const url = `/api/marketing/contact-inquiries?${params.toString()}`;
+            const result = await fetchSmartResource(url, {
+                cacheKey: smartCacheKey(`marketing:contact-leads:${params.toString()}`),
+                ttl: 15000,
             });
-            if (!response.ok) throw new Error('Lead load failed');
-            setLeadData(await response.json());
+            setLeadData(result.raw || result.data);
         } catch (error) {
             console.error(error);
             if (!silent) toast.error('Could not load guest inquiries.');
@@ -435,9 +447,12 @@ const DashboardMarketing = () => {
     const fetchAvailabilityOverrides = async ({ silent = false } = {}) => {
         if (!silent) setAvailabilityLoading(true);
         try {
-            const response = await fetch(`/api/calendar-availability?month=${availabilityMonth}`, { headers: { Accept: 'application/json' } });
-            if (!response.ok) throw new Error('Availability load failed');
-            const data = await response.json();
+            const url = `/api/calendar-availability?month=${availabilityMonth}`;
+            const result = await fetchSmartResource(url, {
+                cacheKey: smartCacheKey(`marketing:availability:${availabilityMonth}`),
+                ttl: 30000,
+            });
+            const data = result.raw || result.data;
             setAvailabilityOverrides(getListData(data));
         } catch (error) {
             console.error(error);
@@ -490,6 +505,7 @@ const DashboardMarketing = () => {
             });
             if (!response.ok) throw new Error('Save failed');
             toast.success('Availability updated.');
+            bustSmartCache(smartCacheKey(`marketing:availability:${availabilityMonth}`));
             fetchAvailabilityOverrides({ silent: true });
         } catch (error) {
             console.error(error);
@@ -506,6 +522,7 @@ const DashboardMarketing = () => {
             if (!response.ok) throw new Error('Clear failed');
             setAvailabilityForm({ is_locked: false, remaining_events: '', remaining_pax: '', note: '' });
             toast.success('Availability override cleared.');
+            bustSmartCache(smartCacheKey(`marketing:availability:${availabilityMonth}`));
             fetchAvailabilityOverrides({ silent: true });
         } catch (error) {
             console.error(error);
@@ -705,6 +722,7 @@ const DashboardMarketing = () => {
                 // Update local state to reflect change immediately without closing modal
                 if (data.booking) mergeUpdatedBooking(data.booking);
                 else setSelectedBooking({ ...selectedBooking, live_status: newLiveStatus });
+                toast.success(`Live status set to ${newLiveStatus}.`);
                 fetchBookings({ scope: activeTab === 'bookings' ? 'all' : 'page', force: true }); // Refresh background data
             } else {
                 if (data.booking) mergeUpdatedBooking(data.booking);
@@ -712,39 +730,53 @@ const DashboardMarketing = () => {
             }
         } catch (error) {
             console.error("Error updating live status:", error);
+            toast.error('Could not update live status. Please check your connection.');
         }
     };
 
     const fetchMarketingSettings = async () => {
         try {
-            const [menuRes, packageRes, eventRes] = await Promise.all([
-                fetch('/api/settings/menu-items'),
-                fetch('/api/packages?per_page=100'),
-                fetch('/api/settings/event-types'),
+            const [menuData, packageData, eventData] = await Promise.all([
+                fetchSmartResource('/api/settings/menu-items', {
+                    cacheKey: smartCacheKey('marketing:settings:menu-items'),
+                    ttl: 60000,
+                }),
+                fetchSmartResource('/api/packages?per_page=100', {
+                    cacheKey: smartCacheKey('marketing:settings:packages'),
+                    ttl: 60000,
+                }),
+                fetchSmartResource('/api/settings/event-types', {
+                    cacheKey: smartCacheKey('marketing:settings:event-types'),
+                    ttl: 60000,
+                }),
             ]);
-            if (menuRes.ok) setMenuItems(await menuRes.json());
-            if (packageRes.ok) {
-                const data = await packageRes.json();
-                setPackages(data.data || data);
-            }
-            if (eventRes.ok) {
-                const data = await eventRes.json();
-                const types = data.data || data;
-                setEventTypes(types);
-                setPackageForm(prev => {
-                    const defaultType = prev.type || types[0]?.slug || '';
-                    return {
-                        ...prev,
-                        type: defaultType,
-                        event_type_slugs: prev.event_type_slugs?.length ? prev.event_type_slugs : (defaultType ? [defaultType] : []),
-                    };
-                });
-            }
+            setMenuItems(menuData.raw || menuData.data || []);
+            const packagePayload = packageData.raw || packageData.data;
+            setPackages(packagePayload.data || packagePayload);
+            const eventPayload = eventData.raw || eventData.data;
+            const types = eventPayload.data || eventPayload;
+            setEventTypes(types);
+            setPackageForm(prev => {
+                const defaultType = prev.type || types[0]?.slug || '';
+                return {
+                    ...prev,
+                    type: defaultType,
+                    event_type_slugs: prev.event_type_slugs?.length ? prev.event_type_slugs : (defaultType ? [defaultType] : []),
+                };
+            });
         } catch (error) {
             console.error('Error fetching marketing settings:', error);
         } finally {
             setLoading(false);
         }
+    };
+
+    const bustMarketingSettingsCache = () => {
+        bustSmartCache(
+            smartCacheKey('marketing:settings:menu-items'),
+            smartCacheKey('marketing:settings:packages'),
+            smartCacheKey('marketing:settings:event-types')
+        );
     };
 
     const handleDishPricingUpdate = async (item, cost, adj) => {
@@ -758,6 +790,7 @@ const DashboardMarketing = () => {
             const data = await response.json().catch(() => ({}));
             if (!response.ok) throw new Error(data.error || data.message || 'Could not update dish pricing.');
             toast.success(data.message || 'Dish pricing updated.');
+            bustMarketingSettingsCache();
             fetchMarketingSettings();
         } catch (error) {
             console.error('Error updating dish pricing:', error);
@@ -782,6 +815,7 @@ const DashboardMarketing = () => {
             setEditingPackageId(null);
             setPackageForm(emptyPackageForm(eventTypes[0]?.slug || ''));
             setCatalogDrawer(null);
+            bustMarketingSettingsCache();
             fetchMarketingSettings();
         } catch (error) {
             console.error('Error creating package:', error);
@@ -842,6 +876,7 @@ const DashboardMarketing = () => {
             toast.success(data.message || (editingEventTypeId ? 'Event type updated.' : 'Event type created.'));
             resetEventTypeForm();
             setCatalogDrawer(null);
+            bustMarketingSettingsCache();
             fetchMarketingSettings();
         } catch (error) {
             console.error('Error saving event type:', error);
@@ -881,6 +916,7 @@ const DashboardMarketing = () => {
             if (!response.ok) throw new Error(data.error || data.message || 'Could not archive event type.');
             toast.success(data.message || 'Event type archived.');
             setDeleteEventTypeConfirm({ isOpen: false, eventType: null });
+            bustMarketingSettingsCache();
             fetchMarketingSettings();
         } catch (error) {
             console.error('Error deleting event type:', error);

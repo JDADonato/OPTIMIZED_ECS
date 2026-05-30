@@ -87,11 +87,21 @@ VITE_REVERB_ENABLED=false
 
 For shared Supabase testing, use port `6543` unless the team lead gives you a different connection mode.
 
-Run migrations and seeders:
+Run pending migrations against the configured database:
+
+```powershell
+.\php\php.exe artisan migrate
+```
+
+Use `migrate` when setting up a new laptop or device that connects to an existing shared Supabase database. It applies only missing database structure changes, such as new tables, columns, and indexes. It does not delete bookings, accounts, or analytics records.
+
+Only run migrations with seeders when the database is brand new or intentionally empty:
 
 ```powershell
 .\php\php.exe artisan migrate --seed
 ```
+
+`--seed` runs the baseline data setup for default accounts, event types, menu items, packages, and business rules. It is not required every time you set up another device against the same Supabase database.
 
 Build once to verify frontend dependencies:
 
@@ -104,7 +114,7 @@ npm.cmd run build
 Use one PowerShell window from the repo root:
 
 ```powershell
-.\refresh.ps1
+.\refresh.bat
 ```
 
 This starts:
@@ -126,6 +136,8 @@ You can also run the same refresh script through npm:
 npm.cmd run refresh
 ```
 
+If you run `.\refresh.ps1` directly and PowerShell says the file is not digitally signed, use `.\refresh.bat` or `npm.cmd run refresh`. Those wrappers run the project script with a per-command execution policy bypass and do not change your Windows security settings globally.
+
 Use `http://127.0.0.1:8080` consistently while testing. Avoid mixing `localhost`, `[::1]`, and `127.0.0.1`, because switching hosts can make browser session cookies and CSRF tokens look stale.
 
 If Vite asset requests fail with `ERR_CONNECTION_REFUSED`, the Vite dev server is not running. Start the app with `.\composer.bat run dev`, or build static assets with:
@@ -141,7 +153,7 @@ npm.cmd run build
 If the app gets stuck after code changes, use the one-command refresh:
 
 ```powershell
-.\refresh.ps1
+.\refresh.bat
 ```
 
 The script stops the usual local dev ports for this app, clears Laravel caches, and restarts Laravel, Vite, the queue listener, and Reverb in one terminal.

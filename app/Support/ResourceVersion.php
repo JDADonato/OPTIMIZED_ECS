@@ -12,10 +12,26 @@ class ResourceVersion
 {
     public static function fromQuery(Builder $query): array
     {
-        $clone = clone $query;
-        $count = (clone $clone)->count();
-        $latestUpdatedAt = (clone $clone)->max('updated_at');
-        $latestId = (clone $clone)->max('id');
+        $model = $query->getModel();
+        $base = (clone $query)
+            ->withoutEagerLoads()
+            ->toBase()
+            ->cloneWithout(['columns', 'orders', 'unionOrders', 'limit', 'offset'])
+            ->cloneWithoutBindings(['select', 'order', 'unionOrder']);
+
+        $grammar = $base->getGrammar();
+        $updatedAtColumn = $model->getUpdatedAtColumn()
+            ? $grammar->wrap($model->getQualifiedUpdatedAtColumn())
+            : 'NULL';
+        $keyColumn = $grammar->wrap($model->qualifyColumn($model->getKeyName()));
+
+        $aggregate = $base
+            ->selectRaw("COUNT(*) as aggregate_count, MAX({$updatedAtColumn}) as latest_updated_at, MAX({$keyColumn}) as latest_id")
+            ->first();
+
+        $count = (int) ($aggregate->aggregate_count ?? 0);
+        $latestUpdatedAt = $aggregate->latest_updated_at ?? null;
+        $latestId = $aggregate->latest_id ?? null;
 
         return self::make($count, $latestUpdatedAt, $latestId);
     }

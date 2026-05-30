@@ -35,6 +35,7 @@ class ClientJourneyTrackerTest extends TestCase
             ->assertJsonCount(1, 'bookings')
             ->assertJsonPath('bookings.0.id', $booking->id)
             ->assertJsonPath('bookings.0.event_name', 'Journey Test Event')
+            ->assertJsonPath('bookings.0.live_status', 'Not Started')
             ->assertJsonMissingPath('historyBookings')
             ->assertJsonMissingPath('tastings');
 
