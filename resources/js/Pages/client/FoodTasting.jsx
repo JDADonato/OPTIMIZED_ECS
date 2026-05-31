@@ -6,6 +6,7 @@ import csrfFetch from '../../utils/csrf';
 import { FieldError, FormErrorSummary } from '../../Components/common/FormFeedback';
 import { focusFirstInvalidField, firstErrorMessage } from '../../utils/validation';
 import StaffPreviewBanner from '../../Components/common/StaffPreviewBanner';
+import RevealOnScroll from '../../Components/common/RevealOnScroll';
 import { dashboardHrefForUser, isStaffUser } from '../../utils/dashboardLinks';
 
 const FoodTasting = () => {
@@ -83,7 +84,7 @@ const FoodTasting = () => {
             <StaffPreviewBanner user={user} label="customer-facing food tasting page" />
 
             <main className={`mx-auto grid max-w-7xl gap-8 px-5 pb-12 ${isStaffUser(user) ? 'pt-36' : 'pt-28'} sm:px-8 lg:grid-cols-[0.9fr_1.1fr]`}>
-                <section className="rounded-3xl bg-[#1a1a1a] p-8 text-white shadow-xl shadow-black/10 lg:sticky lg:top-24 lg:self-start">
+                <RevealOnScroll as="section" className="rounded-3xl bg-[#1a1a1a] p-8 text-white shadow-xl shadow-black/10 lg:sticky lg:top-24 lg:self-start">
                     <div className="mb-8 inline-flex h-14 w-14 items-center justify-center rounded-2xl bg-[#f0aa0b] text-[#1a1a1a]">
                         <Utensils className="h-7 w-7" />
                     </div>
@@ -104,9 +105,9 @@ const FoodTasting = () => {
                             </div>
                         ))}
                     </div>
-                </section>
+                </RevealOnScroll>
 
-                <section className="rounded-3xl border border-gray-100 bg-white p-6 shadow-sm sm:p-8">
+                <RevealOnScroll as="section" delay="rv-d1" className="rounded-3xl border border-gray-100 bg-white p-6 shadow-sm sm:p-8">
                     <div className="mb-6 flex items-start justify-between gap-5">
                         <div>
                             <p className="text-xs font-bold uppercase tracking-widest text-[#720101]">Request Session</p>
@@ -174,7 +175,7 @@ const FoodTasting = () => {
                             </button>
                         </div>
                     </form>
-                </section>
+                </RevealOnScroll>
             </main>
         </div>
     );

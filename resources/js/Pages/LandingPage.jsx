@@ -5,6 +5,7 @@ import ClientNavbar from '../Components/common/ClientNavbar';
 import Footer from '../Components/common/Footer';
 import SmartImage from '../Components/common/SmartImage';
 import StaffPreviewBanner from '../Components/common/StaffPreviewBanner';
+import RevealOnScroll from '../Components/common/RevealOnScroll';
 import { isStaffUser } from '../utils/dashboardLinks';
 
 /* ── SVG Icons ── */
@@ -87,15 +88,7 @@ const hasSelectedMenu = (selectedMenu) => {
         return Boolean(selectedMenu);
     }
 };
-const useRv = () => {
-    const r = useRef(null);
-    useEffect(() => {
-        const el = r.current; if (!el) return;
-        const io = new IntersectionObserver(([e]) => { if (e.isIntersecting) { el.classList.add('vis'); io.unobserve(el); } }, { threshold: 0.1 });
-        io.observe(el); return () => io.disconnect();
-    }, []); return r;
-};
-const Rv = ({ children, cls = '', d = '' }) => { const r = useRv(); return <div ref={r} className={`rv ${d} ${cls}`}>{children}</div>; };
+const Rv = ({ children, cls = '', d = '' }) => <RevealOnScroll className={cls} delay={d}>{children}</RevealOnScroll>;
 
 const Counter = ({ end, suffix = '' }) => {
     const [val, setVal] = useState(0);
@@ -645,6 +638,107 @@ const HomepageAnnouncements = ({ announcements }) => {
     );
 };
 
+const homeMarqueeItems = [
+    'Staff-reviewed availability',
+    'Menu planning with clear package pricing',
+    'Secure payment tracking',
+    'Food tasting support',
+    'Event handoff timeline',
+    'Dashboard updates from booking to event day',
+];
+
+const HomeMarquee = () => {
+    return (
+        <section className="home-marquee border-y border-white/10 bg-[#15110f] text-white" aria-label="Planning and service assurances">
+            <div className="home-marquee__viewport" tabIndex={0}>
+                <div className="home-marquee__track">
+                    {[0, 1].map((group) => (
+                        <div key={group} className="home-marquee__group" aria-hidden={group === 1}>
+                            {homeMarqueeItems.map((item) => (
+                                <span key={`${group}-${item}`} className="home-marquee__item">
+                                    <span className="home-marquee__dot" aria-hidden="true" />
+                                    <span className="home-marquee__text">{item}</span>
+                                </span>
+                            ))}
+                        </div>
+                    ))}
+                </div>
+            </div>
+            <style>{`
+                .home-marquee {
+                    min-height: 3.15rem;
+                }
+                .home-marquee__viewport {
+                    display: flex;
+                    align-items: center;
+                    min-height: 3.15rem;
+                    overflow: hidden;
+                    outline: none;
+                }
+                .home-marquee__track {
+                    display: flex;
+                    width: max-content;
+                    animation: homeMarqueeScroll 24s linear infinite;
+                    will-change: transform;
+                }
+                .home-marquee__viewport:hover .home-marquee__track,
+                .home-marquee__viewport:focus-visible .home-marquee__track {
+                    animation-play-state: paused;
+                }
+                .home-marquee__group {
+                    display: flex;
+                    flex: 0 0 auto;
+                    align-items: center;
+                }
+                .home-marquee__item {
+                    display: inline-flex;
+                    align-items: center;
+                    gap: .72rem;
+                    padding: .78rem 1.55rem;
+                    white-space: nowrap;
+                    border-right: 1px solid rgba(255, 255, 255, .1);
+                }
+                .home-marquee__text {
+                    color: rgba(255, 255, 255, .86);
+                    font-size: .88rem;
+                    font-weight: 800;
+                    letter-spacing: .02em;
+                }
+                .home-marquee__dot {
+                    width: .36rem;
+                    height: .36rem;
+                    border-radius: 999px;
+                    background: #f0aa0b;
+                    box-shadow: 0 0 0 .18rem rgba(240, 170, 11, .12);
+                }
+                @keyframes homeMarqueeScroll {
+                    from { transform: translateX(0); }
+                    to { transform: translateX(-50%); }
+                }
+                @media (max-width: 640px) {
+                    .home-marquee,
+                    .home-marquee__viewport {
+                        min-height: 2.8rem;
+                    }
+                    .home-marquee__item {
+                        gap: .5rem;
+                        padding: .58rem 1rem;
+                    }
+                    .home-marquee__text {
+                        font-size: .78rem;
+                    }
+                }
+                @media (prefers-reduced-motion: reduce) {
+                    .home-marquee__track {
+                        animation: none;
+                        transform: none;
+                    }
+                }
+            `}</style>
+        </section>
+    );
+};
+
 const LandingPage = () => {
     const { user, logout } = useAuth();
     const cachedJourneyData = useMemo(() => readJourneyTrackerCache(), []);
@@ -749,6 +843,8 @@ const LandingPage = () => {
                     @keyframes slowZoom { from{transform:scale(1.05)} to{transform:scale(1.12)} }
                 `}</style>
             </section>
+
+            <HomeMarquee />
 
             <FloatingJourneyTracker bookings={journeyData.bookings} payments={journeyData.payments} loading={journeyLoading} />
 

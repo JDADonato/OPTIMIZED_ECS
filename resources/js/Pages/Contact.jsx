@@ -5,6 +5,7 @@ import { useToast } from '../context/ToastContext';
 import ClientNavbar from '../Components/common/ClientNavbar';
 import Footer from '../Components/common/Footer';
 import StaffPreviewBanner from '../Components/common/StaffPreviewBanner';
+import RevealOnScroll from '../Components/common/RevealOnScroll';
 import csrfFetch from '../utils/csrf';
 import { FieldError, FormErrorSummary } from '../Components/common/FormFeedback';
 import { focusFirstInvalidField } from '../utils/validation';
@@ -107,28 +108,28 @@ const Contact = () => {
             <main className={isStaffUser(user) ? 'pt-[104px]' : 'pt-[68px]'}>
                 <section className="bg-[#1a1a1a] text-white">
                     <div className="mx-auto max-w-7xl px-5 py-12 sm:px-8">
-                        <div className="max-w-4xl">
+                        <RevealOnScroll className="max-w-4xl">
                             <p className="text-xs font-black uppercase tracking-[0.22em] text-[#f0aa0b]">Contact</p>
                             <h1 className="mt-4 font-display text-4xl font-bold sm:text-5xl">Start with the details. We will help shape the event.</h1>
                             <p className="mt-5 max-w-xl text-sm font-medium leading-7 text-white/60">Questions, tasting requests, event planning details, and support all start here.</p>
-                        </div>
+                        </RevealOnScroll>
                         <div className="mt-8 grid gap-3 sm:grid-cols-3">
                             {[
                                 ['Office', 'Metro Manila, Philippines'],
                                 ['Planning desk', 'Public inquiries are sent to Marketing'],
                                 ['Active bookings', 'Use dashboard chat for faster context'],
-                            ].map(([label, value]) => (
-                                <div key={label} className="rounded-2xl border border-white/10 bg-white/10 px-4 py-3.5 backdrop-blur-sm">
+                            ].map(([label, value], index) => (
+                                <RevealOnScroll key={label} delay={`rv-d${index + 1}`} className="rounded-2xl border border-white/10 bg-white/10 px-4 py-3.5 backdrop-blur-sm">
                                     <p className="text-xs font-black uppercase tracking-widest text-[#f0aa0b]">{label}</p>
                                     <p className="mt-1.5 text-sm font-bold leading-6 text-white">{value}</p>
-                                </div>
+                                </RevealOnScroll>
                             ))}
                         </div>
                     </div>
                 </section>
 
                 <section className="mx-auto grid max-w-7xl gap-8 px-5 py-16 sm:px-8 lg:grid-cols-[0.7fr_1.3fr]">
-                    <aside className="rounded-3xl bg-white p-6 shadow-sm">
+                    <RevealOnScroll as="aside" className="rounded-3xl bg-white p-6 shadow-sm">
                         <h2 className="font-display text-2xl font-bold text-[#1a1a1a]">Office Hours</h2>
                         <div className="mt-5 space-y-3 text-sm font-semibold text-gray-600">
                             <p>Monday to Friday: 9:00 AM - 6:00 PM</p>
@@ -144,9 +145,9 @@ const Contact = () => {
                                 </Link>
                             )}
                         </div>
-                    </aside>
+                    </RevealOnScroll>
 
-                    <div className="rounded-3xl bg-white p-6 shadow-sm sm:p-8">
+                    <RevealOnScroll delay="rv-d1" className="rounded-3xl bg-white p-6 shadow-sm sm:p-8">
                         {sentInquiryId ? (
                             <div className="rounded-2xl border border-emerald-100 bg-emerald-50 p-6">
                                 <p className="text-xs font-black uppercase tracking-widest text-emerald-700">Inquiry received</p>
@@ -233,7 +234,7 @@ const Contact = () => {
                                 </form>
                             </>
                         )}
-                    </div>
+                    </RevealOnScroll>
                 </section>
             </main>
             <Footer />

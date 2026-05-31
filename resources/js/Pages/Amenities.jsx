@@ -3,6 +3,7 @@ import { Head, Link } from '@inertiajs/react';
 import { useAuth } from '../context/AuthContext';
 import ClientNavbar from '../Components/common/ClientNavbar';
 import Footer from '../Components/common/Footer';
+import RevealOnScroll from '../Components/common/RevealOnScroll';
 
 const standardSetup = [
     'Complete sets of elegant dinnerware, flatware, and glassware.',
@@ -53,7 +54,7 @@ const Amenities = () => {
                     />
                     <div className="absolute inset-0 bg-gradient-to-r from-[#15110f] via-[#15110f]/90 to-[#15110f]/68" />
                     <div className="relative mx-auto grid min-h-[560px] max-w-7xl items-end gap-10 px-5 py-16 sm:px-8 lg:grid-cols-[1fr_0.72fr]">
-                        <div>
+                        <RevealOnScroll>
                             <p className="text-xs font-black uppercase tracking-[0.24em] text-[#f0aa0b]">Amenities & Expectations</p>
                             <h1 className="mt-5 max-w-4xl font-display text-4xl font-bold leading-tight sm:text-6xl">
                                 The Eloquente Experience
@@ -69,9 +70,9 @@ const Amenities = () => {
                                     Ask About Setup
                                 </Link>
                             </div>
-                        </div>
+                        </RevealOnScroll>
 
-                        <div className="rounded-2xl border border-white/10 bg-[#fffaf3] p-5 text-[#1a1a1a] shadow-xl">
+                        <RevealOnScroll delay="rv-d1" className="rounded-2xl border border-white/10 bg-[#fffaf3] p-5 text-[#1a1a1a] shadow-xl">
                             <p className="text-xs font-black uppercase tracking-[0.22em] text-[#720101]">Prepared with every plan</p>
                             <div className="mt-5 grid gap-5 sm:grid-cols-3 lg:grid-cols-1">
                                 {[
@@ -85,12 +86,12 @@ const Amenities = () => {
                                     </div>
                                 ))}
                             </div>
-                        </div>
+                        </RevealOnScroll>
                     </div>
                 </section>
 
                 <section className="mx-auto grid max-w-7xl gap-10 px-5 py-20 sm:px-8 lg:grid-cols-[0.72fr_1.28fr]">
-                    <div>
+                    <RevealOnScroll>
                         <p className="text-xs font-black uppercase tracking-[0.22em] text-[#720101]">Standard Setup</p>
                         <h2 className="mt-4 font-display text-3xl font-bold text-[#1a1a1a] sm:text-4xl">
                             Event essentials that make the room feel complete.
@@ -98,9 +99,9 @@ const Amenities = () => {
                         <p className="mt-5 text-sm font-medium leading-7 text-gray-600">
                             From dressed tables to service pieces, these are the details your guests see and use throughout the celebration.
                         </p>
-                    </div>
+                    </RevealOnScroll>
 
-                    <div className="overflow-hidden rounded-3xl bg-white shadow-sm">
+                    <RevealOnScroll delay="rv-d1" className="overflow-hidden rounded-3xl bg-white shadow-sm">
                         <div className="border-b border-gray-100 bg-[#fffaf3] px-6 py-5 sm:px-8">
                             <p className="text-xs font-black uppercase tracking-[0.22em] text-[#720101]">Included setup checklist</p>
                             <h3 className="mt-2 font-display text-2xl font-bold text-[#1a1a1a]">Prepared before service begins</h3>
@@ -115,17 +116,19 @@ const Amenities = () => {
                                 </div>
                             ))}
                         </div>
-                    </div>
+                    </RevealOnScroll>
                 </section>
 
                 <section className="bg-white py-20">
                     <div className="mx-auto grid max-w-7xl gap-10 px-5 sm:px-8 lg:grid-cols-2">
-                        <img
-                            src="https://images.unsplash.com/photo-1520854221256-17451cc331bf?auto=format&fit=crop&q=85&w=1200"
-                            alt="Wedding reception with floral ceremony details"
-                            className="h-[460px] w-full rounded-2xl object-cover shadow-xl"
-                        />
-                        <div className="self-center">
+                        <RevealOnScroll className="rv-left">
+                            <img
+                                src="https://images.unsplash.com/photo-1520854221256-17451cc331bf?auto=format&fit=crop&q=85&w=1200"
+                                alt="Wedding reception with floral ceremony details"
+                                className="h-[460px] w-full rounded-2xl object-cover shadow-xl"
+                            />
+                        </RevealOnScroll>
+                        <RevealOnScroll delay="rv-d1" className="self-center rv-right">
                             <p className="text-xs font-black uppercase tracking-[0.22em] text-[#f0aa0b]">Weddings & Debuts</p>
                             <h2 className="mt-4 font-display text-3xl font-bold text-[#1a1a1a] sm:text-4xl">
                                 Premium enhancements for focal moments.
@@ -141,12 +144,12 @@ const Amenities = () => {
                                     </div>
                                 ))}
                             </div>
-                        </div>
+                        </RevealOnScroll>
                     </div>
                 </section>
 
                 <section className="mx-auto grid max-w-7xl gap-8 px-5 py-20 sm:px-8 lg:grid-cols-[0.9fr_1.1fr]">
-                    <div className="self-center">
+                    <RevealOnScroll className="self-center">
                         <p className="text-xs font-black uppercase tracking-[0.22em] text-[#720101]">Special Occasions</p>
                         <h2 className="mt-4 font-display text-3xl font-bold text-[#1a1a1a] sm:text-4xl">
                             Added value for debuts and large celebrations.
@@ -154,20 +157,20 @@ const Amenities = () => {
                         <p className="mt-5 text-sm font-medium leading-7 text-gray-600">
                             Some celebrations come with occasion-specific details. Availability and final choices are confirmed during booking review.
                         </p>
-                    </div>
+                    </RevealOnScroll>
 
                     <div className="grid gap-5">
-                        {occasionInclusions.map((item) => (
-                            <div key={item.title} className="rounded-2xl border border-[#720101]/10 bg-white p-6 shadow-sm">
+                        {occasionInclusions.map((item, index) => (
+                            <RevealOnScroll key={item.title} delay={`rv-d${index + 1}`} className="rounded-2xl border border-[#720101]/10 bg-white p-6 shadow-sm">
                                 <h3 className="font-display text-2xl font-bold text-[#1a1a1a]">{item.title}</h3>
                                 <p className="mt-3 text-sm font-medium leading-7 text-gray-600">{item.text}</p>
-                            </div>
+                            </RevealOnScroll>
                         ))}
                     </div>
                 </section>
 
                 <section className="bg-[#15110f] py-16 text-white">
-                    <div className="mx-auto flex max-w-7xl flex-col gap-6 px-5 sm:px-8 lg:flex-row lg:items-center lg:justify-between">
+                    <RevealOnScroll className="mx-auto flex max-w-7xl flex-col gap-6 px-5 sm:px-8 lg:flex-row lg:items-center lg:justify-between">
                         <div>
                             <p className="text-xs font-black uppercase tracking-[0.22em] text-[#f0aa0b]">Ready to plan the room?</p>
                             <h2 className="mt-3 max-w-2xl font-display text-3xl font-bold">
@@ -182,7 +185,7 @@ const Amenities = () => {
                                 View Menu
                             </Link>
                         </div>
-                    </div>
+                    </RevealOnScroll>
                 </section>
             </main>
 

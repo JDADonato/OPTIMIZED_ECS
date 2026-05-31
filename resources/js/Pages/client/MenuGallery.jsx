@@ -9,6 +9,7 @@ import ClientNavbar from '../../Components/common/ClientNavbar';
 import ConfirmModal from '../../Components/common/ConfirmModal';
 import SmartImage from '../../Components/common/SmartImage';
 import StaffPreviewBanner from '../../Components/common/StaffPreviewBanner';
+import RevealOnScroll from '../../Components/common/RevealOnScroll';
 import { dashboardHrefForUser, isStaffUser } from '../../utils/dashboardLinks';
 
 const CATEGORY_LIMITS = { starter: 3, main: 4, side: 4, dessert: 4, drink: 3 };
@@ -396,7 +397,7 @@ const MenuGallery = () => {
             </nav>
 
             {/* Header */}
-            <div className="bg-red-900 py-16 px-4 text-center">
+            <RevealOnScroll className="bg-red-900 py-16 px-4 text-center">
                 <h1 className="text-4xl md:text-5xl font-bold text-white mb-4">
                     Our Curated Menu
                 </h1>
@@ -406,11 +407,11 @@ const MenuGallery = () => {
                 <p className="text-yellow-400 mt-3 text-sm font-medium">
                     Price range: ₱{minPrice} – ₱{maxPrice} per head
                 </p>
-            </div>
+            </RevealOnScroll>
 
             {/* Create Custom Package CTA Banner */}
             {!isSelectionMode && (
-                <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 -mt-8 relative z-10">
+                <RevealOnScroll delay="rv-d1" className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 -mt-8 relative z-10">
                     <div className="bg-white rounded-2xl shadow-xl border border-gray-100 overflow-hidden">
                         <div className="flex flex-col md:flex-row items-center gap-6 p-6 md:p-8">
                             <div className="w-14 h-14 bg-red-50 rounded-2xl flex items-center justify-center flex-shrink-0">
@@ -435,7 +436,7 @@ const MenuGallery = () => {
                             </button>
                         </div>
                     </div>
-                </div>
+                </RevealOnScroll>
             )}
 
             {/* Selection Mode: Sticky Category Tracker */}
@@ -506,15 +507,15 @@ const MenuGallery = () => {
             <div ref={menuStartRef} className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
                 {/* Best Sellers Section - Always visible */}
                 {bestSellers.length > 0 && (
-                    <div className="mb-20">
+                    <RevealOnScroll className="mb-20">
                         <div className="flex items-center mb-8">
                             <span className="w-1 h-8 bg-yellow-500 mr-4"></span>
                             <h2 className="text-2xl font-bold font-display text-gray-900">Best Sellers</h2>
                         </div>
 
                         <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-                            {bestSellers.slice(0, 4).map(dish => (
-                                <div key={dish.id} className="group relative rounded-xl overflow-hidden shadow-lg aspect-w-1 aspect-h-1">
+                            {bestSellers.slice(0, 4).map((dish, index) => (
+                                <RevealOnScroll key={dish.id} delay={`rv-d${index + 1}`} className="group relative rounded-xl overflow-hidden shadow-lg aspect-w-1 aspect-h-1">
                                     <SmartImage
                                         src={dish.image}
                                         alt={dish.name}
@@ -528,14 +529,14 @@ const MenuGallery = () => {
                                         <h3 className="text-white font-bold text-lg leading-tight">{dish.name}</h3>
                                         <p className="text-yellow-300 text-sm font-semibold mt-1">₱{dish.costPerHead}/head</p>
                                     </div>
-                                </div>
+                                </RevealOnScroll>
                             ))}
                         </div>
-                    </div>
+                    </RevealOnScroll>
                 )}
 
                 {/* Category Navigation */}
-                <div className="flex overflow-x-auto pb-4 mb-6 border-b border-gray-100 space-x-2 md:justify-center custom-scrollbar">
+                <RevealOnScroll className="flex overflow-x-auto pb-4 mb-6 border-b border-gray-100 space-x-2 md:justify-center custom-scrollbar">
                     {categories.map(cat => (
                         <button
                             key={cat.id}
@@ -548,10 +549,10 @@ const MenuGallery = () => {
                             {cat.label}
                         </button>
                     ))}
-                </div>
+                </RevealOnScroll>
 
                 {/* Filters & Sort Bar */}
-                <div className="flex flex-col gap-4 mb-8 bg-gray-50 rounded-xl p-4 border border-gray-100">
+                <RevealOnScroll delay="rv-d1" className="flex flex-col gap-4 mb-8 bg-gray-50 rounded-xl p-4 border border-gray-100">
                     {/* Search Bar */}
                     <div className="relative">
                         <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
@@ -612,24 +613,25 @@ const MenuGallery = () => {
                             </select>
                         </div>
                     </div>
-                </div>
+                </RevealOnScroll>
 
                 {/* Results count */}
-                <p className="text-sm text-gray-400 mb-6">
+                <RevealOnScroll as="p" delay="rv-d2" className="text-sm text-gray-400 mb-6">
                     Showing {Math.min((currentPage - 1) * ITEMS_PER_PAGE + 1, displayedDishes.length)}–{Math.min(currentPage * ITEMS_PER_PAGE, displayedDishes.length)} of {displayedDishes.length} {displayedDishes.length === 1 ? 'dish' : 'dishes'}
                     {searchQuery && ` matching "${searchQuery}"`}
                     {priceFilter !== 'all' && ` in ${priceRanges.find(r => r.id === priceFilter)?.label}`}
                     {sortOrder !== 'default' && ` · Sorted by ${sortOptions.find(s => s.id === sortOrder)?.label.toLowerCase()}`}
-                </p>
+                </RevealOnScroll>
 
                 {/* Main Grid */}
                 {paginatedDishes.length > 0 ? (
                     <>
                         <div key={`page-${currentPage}-${activeCategory}-${priceFilter}`} className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
                             {paginatedDishes.map((dish, idx) => (
-                                <div
+                                <RevealOnScroll
                                     key={dish.id}
-                                    className="animate-fadeInUp bg-white border border-gray-100 rounded-2xl overflow-hidden hover:shadow-2xl hover:-translate-y-1 transition-all duration-300 flex flex-col group"
+                                    delay={`rv-d${(idx % 4) + 1}`}
+                                    className="bg-white border border-gray-100 rounded-2xl overflow-hidden hover:shadow-2xl hover:-translate-y-1 transition-all duration-300 flex flex-col group"
                                     style={{ animationDelay: `${idx * 60}ms` }}
                                 >
                                     <div
@@ -697,7 +699,7 @@ const MenuGallery = () => {
                                             })()}
                                         </div>
                                     </div>
-                                </div>
+                                </RevealOnScroll>
                             ))}
                         </div>
 

@@ -14,6 +14,7 @@ import BlueprintPanel from '../../Components/client/BlueprintPanel';
 import Modal from '../../Components/common/Modal';
 import ClientNavbar from '../../Components/common/ClientNavbar';
 import StaffPreviewBanner from '../../Components/common/StaffPreviewBanner';
+import RevealOnScroll from '../../Components/common/RevealOnScroll';
 import { getCustomerSafeValidationMessage } from '../../utils/dashboardUtils';
 import csrfFetch from '../../utils/csrf';
 import { dashboardHrefForUser, isStaffUser } from '../../utils/dashboardLinks';
@@ -482,7 +483,7 @@ const BookingWizard = () => {
 
             <div className={`flex min-h-[calc(100vh-68px)] ${isStaffUser(user) ? 'pt-[104px]' : 'pt-[68px]'}`}>
                 <main className="min-w-0 flex-1">
-                    <div className="border-b border-[#720101]/10 bg-white">
+                    <RevealOnScroll className="border-b border-[#720101]/10 bg-white">
                         <div className="mx-auto max-w-7xl px-4 py-4 sm:px-6 lg:px-8">
                             <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
                                 <div className="min-w-0">
@@ -531,13 +532,13 @@ const BookingWizard = () => {
                                 })}
                             </div>
                         </div>
-                    </div>
+                    </RevealOnScroll>
 
-                    <section className="mx-auto max-w-7xl px-4 py-5 sm:px-6 lg:px-8">
+                    <RevealOnScroll as="section" delay="rv-d1" className="mx-auto max-w-7xl px-4 py-5 sm:px-6 lg:px-8">
                         <div key={currentStep} className="animate-fadeIn">
                             {renderStep()}
                         </div>
-                    </section>
+                    </RevealOnScroll>
                 </main>
 
                 <BlueprintPanel

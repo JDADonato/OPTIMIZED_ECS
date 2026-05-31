@@ -3,8 +3,8 @@ import React, { useEffect, useState } from 'react';
 const STATE_LABELS = {
     idle: 'Idle',
     loading: 'Loading',
-    live: 'Live',
-    syncing: 'Syncing',
+    live: '',
+    syncing: 'Loading',
     saved: 'Saved',
     reconnecting: 'Reconnecting',
     offline: 'Offline',
@@ -37,19 +37,24 @@ export const LiveSyncIndicator = ({
     lastSyncedAt = null,
     error = null,
     onRetry = null,
+    labelOverrides = {},
     compact = false,
     quiet = false,
     visibility = 'always',
     className = '',
 }) => {
     const resolvedState = refreshing && !['offline', 'stale', 'error', 'reconnecting'].includes(state) ? 'syncing' : state;
+    if (['idle', 'live', 'saved'].includes(resolvedState)) {
+        return null;
+    }
+
     const exceptionOnly = quiet || visibility === 'exceptions';
-    const visibleExceptionStates = ['loading', 'offline', 'stale', 'error', 'reconnecting'];
+    const visibleExceptionStates = ['loading', 'syncing', 'offline', 'stale', 'error', 'reconnecting'];
     if (exceptionOnly && !visibleExceptionStates.includes(resolvedState)) {
         return null;
     }
 
-    const label = STATE_LABELS[resolvedState] || STATE_LABELS.idle;
+    const label = labelOverrides[resolvedState] || STATE_LABELS[resolvedState] || STATE_LABELS.idle;
     const tone = STATE_TONES[resolvedState] || 'neutral';
     const syncedAt = timeLabel(lastSyncedAt);
 

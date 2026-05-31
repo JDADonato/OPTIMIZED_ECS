@@ -3,12 +3,15 @@ import useSmartRefresh from '../../hooks/useSmartRefresh';
 import useRealtimeStatus from '../../hooks/useRealtimeStatus';
 import ConfirmModal from './ConfirmModal';
 import { LiveSyncIndicator, SoftRefreshBoundary } from './LiveFeedback';
+import { MoreVertical, SendHorizontal } from 'lucide-react';
 import { customerBookingStatus } from '../../utils/statusLabels';
 import csrfFetch from '../../utils/csrf';
 import { operationalChannelsForUser } from '../../utils/liveChannels';
 import { getChatModerationFeedback, getChatModerationIssue } from '../../utils/chatModeration';
 
 const CHAT_CACHE_TTL_MS = 60000;
+const MESSAGE_CACHE_LIMIT = 20;
+const MESSAGE_CACHE_TTL_MS = 120000;
 const BOOKING_CACHE_TTL_MS = 180000;
 const createClientTempId = () => `tmp-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 const localTimeLabel = (date = new Date()) => date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
@@ -17,6 +20,112 @@ const sortMessagesOldestFirst = (items = []) => [...items].sort((a, b) => {
     const right = Number(b.id) || new Date(b.created_at || 0).getTime();
     return left - right;
 });
+const messageDate = (message) => {
+    const value = message?.created_at ? new Date(message.created_at) : null;
+    return value && !Number.isNaN(value.getTime()) ? value : null;
+};
+const sameLocalDay = (left, right) => (
+    left && right
+    && left.getFullYear() === right.getFullYear()
+    && left.getMonth() === right.getMonth()
+    && left.getDate() === right.getDate()
+);
+const localDateKey = (date, fallback = 'unknown') => {
+    if (!date) return fallback;
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+
+    return `${year}-${month}-${day}`;
+};
+const formatChatDateLabel = (date) => {
+    if (!date) return 'Conversation';
+    const today = new Date();
+    const yesterday = new Date();
+    yesterday.setDate(today.getDate() - 1);
+
+    if (sameLocalDay(date, today)) return 'Today';
+    if (sameLocalDay(date, yesterday)) return 'Yesterday';
+
+    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: date.getFullYear() === today.getFullYear() ? undefined : 'numeric' });
+};
+const minutesBetweenMessages = (left, right) => {
+    const leftDate = messageDate(left);
+    const rightDate = messageDate(right);
+    if (!leftDate || !rightDate) return Number.POSITIVE_INFINITY;
+
+    return Math.abs(rightDate.getTime() - leftDate.getTime()) / 60000;
+};
+const shouldStartNewMessageGroup = (message, previous) => {
+    if (!previous) return true;
+    if (Boolean(message?.is_mine) !== Boolean(previous?.is_mine)) return true;
+    if (String(message?.sender_id || '') !== String(previous?.sender_id || '')) return true;
+    if (!sameLocalDay(messageDate(message), messageDate(previous))) return true;
+
+    return minutesBetweenMessages(message, previous) > 6;
+};
+const buildMessageSections = (items = []) => {
+    const sections = [];
+
+    sortMessagesOldestFirst(items).forEach((message) => {
+        const currentDate = messageDate(message);
+        let section = sections[sections.length - 1];
+
+        if (!section || !sameLocalDay(currentDate, section.date)) {
+            section = {
+                id: `${localDateKey(currentDate, 'unknown')}-${sections.length}`,
+                date: currentDate,
+                label: formatChatDateLabel(currentDate),
+                groups: [],
+            };
+            sections.push(section);
+        }
+
+        const previousGroup = section.groups[section.groups.length - 1];
+        const previousMessage = previousGroup?.messages?.[previousGroup.messages.length - 1];
+
+        if (!previousGroup || shouldStartNewMessageGroup(message, previousMessage)) {
+            section.groups.push({
+                id: `${section.id}-${message.sender_id || 'system'}-${message.client_temp_id || message.id || section.groups.length}`,
+                isMine: Boolean(message.is_mine),
+                senderId: message.sender_id,
+                senderName: message.sender_name || 'Support',
+                senderRole: message.sender_role || 'Staff',
+                messages: [message],
+            });
+            return;
+        }
+
+        previousGroup.messages.push(message);
+    });
+
+    return sections;
+};
+const formatRelativeMessageAge = (message, now = Date.now()) => {
+    if (message?.optimistic_status === 'sending') return 'sending';
+    if (message?.optimistic_status === 'failed') return 'failed';
+
+    const sentAt = messageDate(message);
+    if (!sentAt) return message?.time || '';
+
+    const seconds = Math.max(0, Math.floor((now - sentAt.getTime()) / 1000));
+    if (seconds < 10) return 'just now';
+    if (seconds < 60) return `${seconds}s ago`;
+
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60) return `${minutes}m ago`;
+
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `${hours}h ago`;
+
+    const days = Math.floor(hours / 24);
+    if (days < 7) return `${days}d ago`;
+
+    const weeks = Math.floor(days / 7);
+    if (weeks < 5) return `${weeks}w ago`;
+
+    return sentAt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+};
 
 const ChatBubble = ({ user, openOnMount = false }) => {
     const hasRealtime = typeof window !== 'undefined' && Boolean(window.Echo);
@@ -42,11 +151,15 @@ const ChatBubble = ({ user, openOnMount = false }) => {
     const [editingText, setEditingText] = useState('');
     const [openActionMessageId, setOpenActionMessageId] = useState(null);
     const [deleteConfirmModal, setDeleteConfirmModal] = useState({ isOpen: false, message: null, busy: false });
+    const [relativeNow, setRelativeNow] = useState(Date.now());
     const messagesEndRef = useRef(null);
     const shouldScrollToBottomRef = useRef(false);
     const echoChannelRef = useRef(null);
     const conversationRef = useRef(null);
     const messagesRef = useRef([]);
+    const messageCacheRef = useRef(new Map());
+    const messageFetchRequestRef = useRef(0);
+    const conversationVersionRef = useRef('');
     const lastConversationLoadedAtRef = useRef(0);
     const lastMessagesLoadedAtRef = useRef(0);
     const messagesLoadedForRef = useRef(null);
@@ -57,6 +170,17 @@ const ChatBubble = ({ user, openOnMount = false }) => {
     // Keep ref in sync
     useEffect(() => { conversationRef.current = conversation; }, [conversation]);
     useEffect(() => { messagesRef.current = messages; }, [messages]);
+    useEffect(() => {
+        const timer = window.setInterval(() => setRelativeNow(Date.now()), 10000);
+        return () => window.clearInterval(timer);
+    }, []);
+
+    const messageSections = useMemo(() => buildMessageSections(messages), [messages]);
+    const latestMessageKey = useMemo(() => {
+        const sortedMessages = sortMessagesOldestFirst(messages);
+        const latestMessage = sortedMessages[sortedMessages.length - 1];
+        return latestMessage ? String(latestMessage.client_temp_id || latestMessage.id) : '';
+    }, [messages]);
 
     // ─── Fetch Data ───
 
@@ -76,12 +200,25 @@ const ChatBubble = ({ user, openOnMount = false }) => {
         }
 
         try {
-            const res = await fetch('/api/chat/conversations?limit=1');
+            const params = new URLSearchParams({ limit: '1' });
+            if (force && cachedConversation && conversationVersionRef.current) {
+                params.set('since_version', conversationVersionRef.current);
+            }
+
+            const res = await fetch(`/api/chat/conversations?${params.toString()}`);
             if (res.ok) {
                 const d = await res.json();
+                if (d.meta?.resource_version) {
+                    conversationVersionRef.current = d.meta.resource_version;
+                }
+                if (d.meta?.changed === false) {
+                    lastConversationLoadedAtRef.current = Date.now();
+                    return cachedConversation;
+                }
                 const convList = d.conversations || [];
                 lastConversationLoadedAtRef.current = Date.now();
                 if (convList.length > 0) {
+                    conversationRef.current = convList[0];
                     setConversation(convList[0]); // Client has one active conversation
                     return convList[0];
                 }
@@ -122,6 +259,66 @@ const ChatBubble = ({ user, openOnMount = false }) => {
         return sortMessagesOldestFirst([...list, incoming]);
     }, []);
 
+    const getConversationCacheMarker = useCallback((conv, latestMessage = null) => {
+        if (!conv) return '';
+        const latestId = latestMessage?.id ?? conv.last_message_id ?? '';
+        const latestCreatedAt = latestMessage?.created_at ?? conv.last_message_created_at ?? '';
+        if (latestId) return String(latestId);
+
+        return [
+            latestCreatedAt,
+            latestMessage?.message ?? conv.last_message ?? '',
+            conv.updated_at ?? '',
+        ].join('|');
+    }, []);
+
+    const getMessagesCacheMarker = useCallback((nextMessages = []) => {
+        const sortedMessages = sortMessagesOldestFirst(nextMessages);
+        const latestMessage = sortedMessages[sortedMessages.length - 1];
+        if (!latestMessage) return '';
+        if (latestMessage.id && !String(latestMessage.id).startsWith('tmp-')) return String(latestMessage.id);
+
+        return [
+            latestMessage.created_at || '',
+            latestMessage.client_temp_id || '',
+            latestMessage.message || '',
+        ].join('|');
+    }, []);
+
+    const rememberMessages = useCallback((conversationId, nextMessages, hasMore, marker = '') => {
+        if (!conversationId) return;
+
+        const key = String(conversationId);
+        messageCacheRef.current.delete(key);
+        messageCacheRef.current.set(key, {
+            messages: sortMessagesOldestFirst(nextMessages),
+            hasOlderMessages: Boolean(hasMore),
+            marker: marker || getMessagesCacheMarker(nextMessages),
+            cachedAt: Date.now(),
+        });
+
+        while (messageCacheRef.current.size > MESSAGE_CACHE_LIMIT) {
+            const oldestKey = messageCacheRef.current.keys().next().value;
+            messageCacheRef.current.delete(oldestKey);
+        }
+    }, [getMessagesCacheMarker]);
+
+    const cacheIsUsable = useCallback((cached, marker = '', force = false) => {
+        if (!cached || force) return false;
+        const isFresh = Date.now() - Number(cached.cachedAt || 0) < MESSAGE_CACHE_TTL_MS;
+
+        return isFresh && (!marker || cached.marker === marker);
+    }, []);
+
+    const applyCachedMessages = useCallback((conversationId, cached) => {
+        if (!conversationId || !cached) return;
+        shouldScrollToBottomRef.current = true;
+        setMessages(cached.messages || []);
+        setHasOlderMessages(Boolean(cached.hasOlderMessages));
+        messagesLoadedForRef.current = conversationId;
+        lastMessagesLoadedAtRef.current = Date.now();
+    }, []);
+
     const optimisticMessageFor = useCallback((conversationId, message, clientTempId) => {
         const createdAt = new Date();
 
@@ -141,29 +338,56 @@ const ChatBubble = ({ user, openOnMount = false }) => {
         };
     }, [user?.full_name, user?.id, user?.role, user?.username]);
 
-    const fetchMessages = useCallback(async (convId, { force = false } = {}) => {
-        const isSameConversation = messagesLoadedForRef.current === convId;
-        const isFresh = Date.now() - lastMessagesLoadedAtRef.current < CHAT_CACHE_TTL_MS;
+    const fetchMessages = useCallback(async (conversationArg, { force = false } = {}) => {
+        const convId = typeof conversationArg === 'object' ? conversationArg?.id : conversationArg;
+        if (!convId) return [];
 
-        if (!force && isSameConversation && messagesRef.current.length > 0 && isFresh) {
+        const cacheKey = String(convId);
+        const marker = typeof conversationArg === 'object'
+            ? getConversationCacheMarker(conversationArg)
+            : getConversationCacheMarker(conversationRef.current);
+        const cached = messageCacheRef.current.get(cacheKey);
+
+        if (cached) {
+            applyCachedMessages(convId, cached);
+            if (cacheIsUsable(cached, marker, force)) {
+                return cached.messages;
+            }
+        }
+
+        const isSameConversation = messagesLoadedForRef.current === convId;
+        const isFresh = Date.now() - lastMessagesLoadedAtRef.current < MESSAGE_CACHE_TTL_MS;
+
+        if (!force && !cached && isSameConversation && messagesRef.current.length > 0 && isFresh) {
             return messagesRef.current;
         }
+
+        const requestId = messageFetchRequestRef.current + 1;
+        messageFetchRequestRef.current = requestId;
 
         try {
             const res = await fetch(`/api/chat/conversations/${convId}/messages?limit=30`);
             if (res.ok) {
                 const d = normalizeMessagesResponse(await res.json());
+                const hasMore = Boolean(d.pagination?.has_more);
+                const nextMarker = getMessagesCacheMarker(d.data) || marker;
+                rememberMessages(convId, d.data, hasMore, nextMarker);
+
+                if (messageFetchRequestRef.current !== requestId || String(conversationRef.current?.id || convId) !== cacheKey) {
+                    return d.data;
+                }
+
                 shouldScrollToBottomRef.current = true;
                 setMessages(d.data);
-                setHasOlderMessages(Boolean(d.pagination?.has_more));
+                setHasOlderMessages(hasMore);
                 messagesLoadedForRef.current = convId;
                 lastMessagesLoadedAtRef.current = Date.now();
                 fetchUnreadCount();
                 return d.data;
             }
         } catch (e) { /* silent */ }
-        return [];
-    }, [fetchUnreadCount]);
+        return cached?.messages || [];
+    }, [applyCachedMessages, cacheIsUsable, fetchUnreadCount, getConversationCacheMarker, getMessagesCacheMarker, rememberMessages]);
 
     const loadOlderMessages = useCallback(async () => {
         if (!conversation?.id || !messages.length || loadingOlderMessages) return;
@@ -173,12 +397,17 @@ const ChatBubble = ({ user, openOnMount = false }) => {
             const res = await fetch(`/api/chat/conversations/${conversation.id}/messages?limit=30&before_id=${messages[0].id}`);
             if (res.ok) {
                 const d = normalizeMessagesResponse(await res.json());
-                setMessages(prev => sortMessagesOldestFirst([...d.data, ...prev]));
-                setHasOlderMessages(Boolean(d.pagination?.has_more));
+                const hasMore = Boolean(d.pagination?.has_more);
+                setMessages(prev => {
+                    const next = sortMessagesOldestFirst([...d.data, ...prev]);
+                    rememberMessages(conversation.id, next, hasMore, getMessagesCacheMarker(next));
+                    return next;
+                });
+                setHasOlderMessages(hasMore);
             }
         } catch (e) { /* silent */ }
         finally { setLoadingOlderMessages(false); }
-    }, [conversation?.id, messages, loadingOlderMessages]);
+    }, [conversation?.id, getMessagesCacheMarker, loadingOlderMessages, messages, rememberMessages]);
 
     const fetchBookings = useCallback(async ({ force = false } = {}) => {
         if (!force && bookings.length > 0 && Date.now() - lastBookingsLoadedAtRef.current < BOOKING_CACHE_TTL_MS) {
@@ -200,6 +429,34 @@ const ChatBubble = ({ user, openOnMount = false }) => {
         return [];
     }, [bookings]);
 
+    const refreshMessagesIfChanged = useCallback(async (conv) => {
+        if (!conv?.id) return [];
+        const marker = getConversationCacheMarker(conv);
+        const cached = messageCacheRef.current.get(String(conv.id));
+
+        if (cached && (!marker || cached.marker === marker)) {
+            if (messagesLoadedForRef.current !== conv.id || messagesRef.current.length === 0) {
+                applyCachedMessages(conv.id, cached);
+            }
+            return cached.messages;
+        }
+
+        return fetchMessages(conv, { force: true });
+    }, [applyCachedMessages, fetchMessages, getConversationCacheMarker]);
+
+    const refreshOpenConversation = useCallback(async () => {
+        const conv = await fetchConversation({ force: true });
+        if (conv?.id) {
+            await refreshMessagesIfChanged(conv);
+        }
+        return conv;
+    }, [fetchConversation, refreshMessagesIfChanged]);
+
+    useEffect(() => {
+        if (!conversation?.id || messagesLoadedForRef.current !== conversation.id) return;
+        rememberMessages(conversation.id, messages, hasOlderMessages, getMessagesCacheMarker(messages));
+    }, [conversation?.id, getMessagesCacheMarker, hasOlderMessages, messages, rememberMessages]);
+
     // ─── Unread Count Poll (global, even when closed) ───
 
     useEffect(() => {
@@ -216,10 +473,7 @@ const ChatBubble = ({ user, openOnMount = false }) => {
             try {
                 await fetchUnreadCount();
                 if (isOpen) {
-                    const conv = await fetchConversation({ force: true });
-                    if (conv?.id) {
-                        await fetchMessages(conv.id, { force: true });
-                    }
+                    await refreshOpenConversation();
                     await fetchBookings({ force: true });
                 }
             } finally {
@@ -254,7 +508,10 @@ const ChatBubble = ({ user, openOnMount = false }) => {
                     setMessages(prev => {
                         if (prev.find(m => m.id === e.messageData.id)) return prev;
                         shouldScrollToBottomRef.current = true;
-                        return sortMessagesOldestFirst([...prev, { ...e.messageData, is_mine: false }]);
+                        const next = sortMessagesOldestFirst([...prev, { ...e.messageData, is_mine: false }]);
+                        const cached = messageCacheRef.current.get(String(e.conversationId));
+                        rememberMessages(e.conversationId, next, cached?.hasOlderMessages ?? false, getMessagesCacheMarker(next));
+                        return next;
                     });
 
                     setStaffTyping(false);
@@ -263,7 +520,11 @@ const ChatBubble = ({ user, openOnMount = false }) => {
             })
             .listen('.conversation.claimed', (e) => {
                 // Update the local conversation to reflect the claim
-                setConversation(prev => prev ? { ...prev, staff_id: e.conversationData.staff_id, staff_name: e.conversationData.staff_name } : prev);
+                setConversation(prev => {
+                    const next = prev ? { ...prev, staff_id: e.conversationData.staff_id, staff_name: e.conversationData.staff_name } : prev;
+                    conversationRef.current = next;
+                    return next;
+                });
             });
 
         echoChannelRef.current = channelName;
@@ -271,7 +532,7 @@ const ChatBubble = ({ user, openOnMount = false }) => {
         return () => {
             // Don't leave on re-render, only on unmount
         };
-    }, [conversation?.id, fetchUnreadCount]);
+    }, [conversation?.id, fetchUnreadCount, getMessagesCacheMarker, rememberMessages, user?.id]);
 
     // Cleanup on unmount
     useEffect(() => {
@@ -297,23 +558,26 @@ const ChatBubble = ({ user, openOnMount = false }) => {
         setShowBookingPicker(false);
 
         const cachedConversation = conversationRef.current;
-        const hasCachedMessages = messagesRef.current.length > 0;
-        const messagesAreFresh = Date.now() - lastMessagesLoadedAtRef.current < CHAT_CACHE_TTL_MS;
+        const cachedMessages = cachedConversation?.id
+            ? messageCacheRef.current.get(String(cachedConversation.id))
+            : null;
+        const hasCachedMessages = Boolean(cachedMessages) || messagesRef.current.length > 0;
 
         fetchBookings();
 
         if (cachedConversation && hasCachedMessages) {
-            setLoadingConv(false);
-            if (!messagesAreFresh) {
-                fetchMessages(cachedConversation.id, { force: true });
+            if (cachedMessages) {
+                applyCachedMessages(cachedConversation.id, cachedMessages);
             }
+            setLoadingConv(false);
+            refreshOpenConversation();
             return;
         }
 
         setLoadingConv(true);
         const conv = await fetchConversation({ force: !cachedConversation });
         if (conv) {
-            await fetchMessages(conv.id, { force: true });
+            await refreshMessagesIfChanged(conv);
         }
         setLoadingConv(false);
     };
@@ -381,6 +645,8 @@ const ChatBubble = ({ user, openOnMount = false }) => {
                     throw new Error(payload.error || 'Message could not be sent.');
                 }
                 shouldScrollToBottomRef.current = true;
+                messagesLoadedForRef.current = conversation.id;
+                lastMessagesLoadedAtRef.current = Date.now();
                 setMessages(prev => mergeMessageIntoList(prev, { ...payload, optimistic_status: 'sent' }));
                 setModerationNotice(null);
             } else {
@@ -412,7 +678,10 @@ const ChatBubble = ({ user, openOnMount = false }) => {
                     }
                     throw new Error(payload.error || 'Message could not be sent.');
                 }
+                conversationRef.current = payload.conversation;
                 setConversation(payload.conversation);
+                messagesLoadedForRef.current = payload.conversation.id;
+                lastMessagesLoadedAtRef.current = Date.now();
                 shouldScrollToBottomRef.current = true;
                 setMessages(prev => mergeMessageIntoList(prev, { ...payload.message, optimistic_status: 'sent' }));
                 setTopicWarning('');
@@ -456,6 +725,8 @@ const ChatBubble = ({ user, openOnMount = false }) => {
                     throw new Error(payload.error || 'Message could not be sent.');
                 }
                 shouldScrollToBottomRef.current = true;
+                messagesLoadedForRef.current = conversation.id;
+                lastMessagesLoadedAtRef.current = Date.now();
                 setMessages(prev => mergeMessageIntoList(prev, { ...payload, optimistic_status: 'sent' }));
             } else {
                 const res = await csrfFetch('/api/chat/conversations', {
@@ -477,7 +748,10 @@ const ChatBubble = ({ user, openOnMount = false }) => {
                     }
                     throw new Error(payload.error || 'Message could not be sent.');
                 }
+                conversationRef.current = payload.conversation;
                 setConversation(payload.conversation);
+                messagesLoadedForRef.current = payload.conversation.id;
+                lastMessagesLoadedAtRef.current = Date.now();
                 shouldScrollToBottomRef.current = true;
                 setMessages(prev => mergeMessageIntoList(prev, { ...payload.message, optimistic_status: 'sent' }));
             }
@@ -526,6 +800,8 @@ const ChatBubble = ({ user, openOnMount = false }) => {
                 if (res.ok) {
                     const msg = await res.json();
                     shouldScrollToBottomRef.current = true;
+                    messagesLoadedForRef.current = conversation.id;
+                    lastMessagesLoadedAtRef.current = Date.now();
                     setMessages(prev => mergeMessageIntoList(prev, { ...msg, optimistic_status: 'sent' }));
                 } else {
                     throw new Error('Booking details could not be sent.');
@@ -538,7 +814,10 @@ const ChatBubble = ({ user, openOnMount = false }) => {
                 });
                 if (res.ok) {
                     const d = await res.json();
+                    conversationRef.current = d.conversation;
                     setConversation(d.conversation);
+                    messagesLoadedForRef.current = d.conversation.id;
+                    lastMessagesLoadedAtRef.current = Date.now();
                     shouldScrollToBottomRef.current = true;
                     setMessages(prev => mergeMessageIntoList(prev, { ...d.message, optimistic_status: 'sent' }));
                 } else {
@@ -670,6 +949,88 @@ const ChatBubble = ({ user, openOnMount = false }) => {
         }
     };
 
+    const messageStatusText = (msg) => {
+        const date = messageDate(msg);
+        const parts = [msg?.time || (date ? localTimeLabel(date) : '')].filter(Boolean);
+        if (msg.edited_at && !msg.deleted_at) parts.push('edited');
+        if (msg.optimistic_status === 'sending') parts.push('sending');
+        if (msg.optimistic_status === 'failed') parts.push('failed');
+        return parts.join(' / ');
+    };
+
+    const renderCustomerMessageBubble = (msg, group, index = 0) => {
+        const messageKey = String(msg.client_temp_id || msg.id);
+        const actionKey = String(msg.id || msg.client_temp_id || messageKey);
+        const actionMenuOpen = openActionMessageId === actionKey;
+        const canUseActions = (canEditMessage(msg) || canDeleteMessage(msg)) && editingMessageId !== msg.id;
+        const exactMetaText = messageStatusText(msg);
+        const groupSize = group?.messages?.length || 1;
+        const positionClass = groupSize <= 1
+            ? 'is-single'
+            : index === 0
+                ? 'is-first'
+                : index === groupSize - 1
+                    ? 'is-last'
+                    : 'is-middle';
+
+        return (
+            <div key={messageKey} className={`customer-chat-message ${msg.is_mine ? 'is-mine' : 'is-theirs'} ${positionClass} ${msg.optimistic_status === 'failed' ? 'is-failed' : ''}`}>
+                <div className="customer-chat-message-unit">
+                    <div className="customer-chat-message-row">
+                        <div className="customer-chat-message-bubble">
+                            {editingMessageId === msg.id ? (
+                                <div className="customer-chat-message-edit">
+                                    <textarea value={editingText} onChange={(event) => setEditingText(event.target.value)} rows={3} />
+                                    <div>
+                                        <button type="button" onClick={cancelEditMessage}>Cancel</button>
+                                        <button type="button" onClick={() => saveEditedMessage(msg)}>Save</button>
+                                    </div>
+                                </div>
+                            ) : isBookingCard(msg.message) ? renderBookingCard(msg.message, msg.is_mine) : (
+                                <p className="customer-chat-message-text">{msg.message}</p>
+                            )}
+                        </div>
+                        {canUseActions && (
+                            <div className={`customer-chat-message-actions ${actionMenuOpen ? 'is-open' : ''}`}>
+                                <button
+                                    type="button"
+                                    onClick={(event) => {
+                                        event.stopPropagation();
+                                        setOpenActionMessageId(actionMenuOpen ? null : actionKey);
+                                    }}
+                                    aria-label="Message actions"
+                                    aria-expanded={actionMenuOpen}
+                                >
+                                    <MoreVertical aria-hidden="true" />
+                                </button>
+                                {actionMenuOpen && (
+                                    <div className="customer-chat-message-menu">
+                                        {canEditMessage(msg) && (
+                                            <button type="button" onClick={() => startEditMessage(msg)}>Edit message</button>
+                                        )}
+                                        {canDeleteMessage(msg) && (
+                                            <button type="button" className="is-danger" onClick={() => deleteMessage(msg)}>Delete message</button>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+                        )}
+                        {exactMetaText && <span className="customer-chat-message-hover-time">{exactMetaText}</span>}
+                    </div>
+                    {messageKey === latestMessageKey && (
+                        <p className="customer-chat-message-meta">{formatRelativeMessageAge(msg, relativeNow)}</p>
+                    )}
+                    {msg.optimistic_status === 'failed' && (
+                        <div className="customer-chat-message-retry">
+                            <button type="button" onClick={() => retryFailedMessage(msg)}>Retry</button>
+                            <button type="button" onClick={() => removeFailedMessage(msg)}>Remove</button>
+                        </div>
+                    )}
+                </div>
+            </div>
+        );
+    };
+
     if (!user) return null;
 
     return (
@@ -716,6 +1077,13 @@ const ChatBubble = ({ user, openOnMount = false }) => {
                                     <LiveSyncIndicator
                                         state={backgroundSyncing ? 'syncing' : realtimeSyncState}
                                         compact
+                                        visibility="exceptions"
+                                        className="is-subtle"
+                                        labelOverrides={{
+                                            loading: 'Opening',
+                                            stale: 'Saved chat',
+                                            error: 'Update delayed',
+                                        }}
                                         onRetry={() => {
                                             fetchUnreadCount();
                                             if (conversation?.id) fetchMessages(conversation.id, { force: true });
@@ -739,7 +1107,7 @@ const ChatBubble = ({ user, openOnMount = false }) => {
                                 </div>
                             </div>
                         ) : (
-                            <SoftRefreshBoundary className="h-full" refreshing={backgroundSyncing} stale={realtimeSyncState === 'stale' || realtimeSyncState === 'reconnecting'} staleMessage="Viewing saved chat. New messages will appear when the connection catches up.">
+                            <SoftRefreshBoundary className="h-full" refreshing={backgroundSyncing} stale={realtimeSyncState === 'stale' || realtimeSyncState === 'reconnecting'} staleMessage="Viewing saved chat. New messages will appear when the connection catches up." showRefreshBar={false}>
                             <div className="flex flex-col h-full">
                                 <div className="flex-1 overflow-y-auto p-4 space-y-3" style={{ maxHeight: 'calc(560px - 142px)' }}>
                                     {/* Status Indicator */}
@@ -789,74 +1157,28 @@ const ChatBubble = ({ user, openOnMount = false }) => {
                                         </div>
                                     )}
 
-                                    {messages.map(msg => (
-                                        <div key={msg.client_temp_id || msg.id} className={`flex ${msg.is_mine ? 'justify-end' : 'justify-start'}`}>
-                                            <div className="group flex max-w-[92%] items-start gap-2">
-                                                {(canEditMessage(msg) || canDeleteMessage(msg)) && editingMessageId !== msg.id && (
-                                                    <div className={`relative mt-2 flex h-7 w-7 flex-shrink-0 transition-opacity ${openActionMessageId === msg.id ? 'opacity-100' : 'pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100'}`}>
-                                                        <button
-                                                            type="button"
-                                                            onClick={(event) => {
-                                                                event.stopPropagation();
-                                                                setOpenActionMessageId(openActionMessageId === msg.id ? null : msg.id);
-                                                            }}
-                                                            className="flex h-7 w-7 items-center justify-center rounded-full border border-slate-200 bg-white text-xs font-black leading-none text-slate-600 shadow-md shadow-slate-950/10 transition hover:border-[#720101]/30 hover:text-[#720101]"
-                                                            aria-label="Message actions"
-                                                            aria-expanded={openActionMessageId === msg.id}
-                                                        >
-                                                            ...
-                                                        </button>
-                                                        {openActionMessageId === msg.id && (
-                                                            <div className="absolute right-0 top-9 z-40 min-w-[8.5rem] overflow-hidden rounded-xl border border-slate-200 bg-white py-1 text-left shadow-xl shadow-slate-950/15">
-                                                                {canEditMessage(msg) && (
-                                                                    <button type="button" onClick={() => startEditMessage(msg)} className="block w-full px-3 py-2 text-left text-xs font-black text-slate-700 transition hover:bg-slate-50">
-                                                                        Edit message
-                                                                    </button>
-                                                                )}
-                                                                {canDeleteMessage(msg) && (
-                                                                    <button type="button" onClick={() => deleteMessage(msg)} className="block w-full px-3 py-2 text-left text-xs font-black text-red-700 transition hover:bg-red-50">
-                                                                        Delete message
-                                                                    </button>
-                                                                )}
+                                    <div className="customer-chat-message-sections">
+                                        {messageSections.map((section) => (
+                                            <section key={section.id} className="customer-chat-message-section">
+                                                <div className="customer-chat-date-separator">
+                                                    <span>{section.label}</span>
+                                                </div>
+                                                {section.groups.map((group) => (
+                                                    <div key={group.id} className={`customer-chat-message-group ${group.isMine ? 'is-mine' : 'is-theirs'}`}>
+                                                        {!group.isMine && (
+                                                            <div className="customer-chat-message-group-label">
+                                                                <span>{group.senderName}</span>
+                                                                <em>{group.senderRole}</em>
                                                             </div>
                                                         )}
-                                                    </div>
-                                                )}
-                                                <div className={`relative max-w-full rounded-2xl border px-3.5 py-2.5 ${msg.is_mine ? 'rounded-br-md border-[#720101] bg-[#720101] text-white' : 'rounded-bl-md border-[#ead8cc] bg-white text-slate-800'}`}>
-                                                {!msg.is_mine && msg.sender_name && (
-                                                    <p className="text-[10px] font-bold text-[#720101] mb-0.5">{msg.sender_name}</p>
-                                                )}
-                                                {editingMessageId === msg.id ? (
-                                                    <div className="space-y-2">
-                                                        <textarea value={editingText} onChange={(event) => setEditingText(event.target.value)} rows={3} className="w-64 rounded-xl border border-white/40 bg-white px-3 py-2 text-sm font-semibold text-slate-900 outline-none" />
-                                                        <div className="flex justify-end gap-2">
-                                                            <button type="button" onClick={cancelEditMessage} className="text-[11px] font-black text-white/70">Cancel</button>
-                                                            <button type="button" onClick={() => saveEditedMessage(msg)} className="rounded-full bg-white px-3 py-1 text-[11px] font-black text-[#720101]">Save</button>
+                                                        <div className="customer-chat-message-stack">
+                                                            {group.messages.map((msg, index) => renderCustomerMessageBubble(msg, group, index))}
                                                         </div>
                                                     </div>
-                                                ) : isBookingCard(msg.message) ? renderBookingCard(msg.message, msg.is_mine) : (
-                                                    <p className="text-sm leading-relaxed break-words whitespace-pre-wrap">{msg.message}</p>
-                                                )}
-                                                <div className="mt-1 flex items-center justify-end gap-2">
-                                                    {msg.edited_at && !msg.deleted_at && <span className={`text-[10px] font-semibold ${msg.is_mine ? 'text-white/50' : 'text-slate-400'}`}>edited</span>}
-                                                    <p className={`text-[10px] font-semibold ${msg.is_mine ? 'text-white/60' : 'text-slate-400'}`}>
-                                                        {msg.time}{msg.optimistic_status === 'sending' ? ' / Sending...' : ''}{msg.optimistic_status === 'failed' ? ' / Failed' : ''}
-                                                    </p>
-                                                </div>
-                                                {msg.optimistic_status === 'failed' && (
-                                                    <div className="mt-2 flex justify-end gap-2">
-                                                        <button type="button" onClick={() => retryFailedMessage(msg)} className="rounded-full bg-white px-3 py-1 text-[11px] font-black text-[#720101]">
-                                                            Retry
-                                                        </button>
-                                                        <button type="button" onClick={() => removeFailedMessage(msg)} className="text-[11px] font-black text-white/70">
-                                                            Remove
-                                                        </button>
-                                                    </div>
-                                                )}
-                                                </div>
-                                            </div>
-                                        </div>
-                                    ))}
+                                                ))}
+                                            </section>
+                                        ))}
+                                    </div>
 
                                     {/* Typing indicator */}
                                     {staffTyping && (
@@ -929,9 +1251,13 @@ const ChatBubble = ({ user, openOnMount = false }) => {
                                 placeholder="Type a message..."
                                 className="flex-1 rounded-full border border-[#ead8cc] bg-[#fffaf3] px-3 py-2.5 text-sm font-semibold outline-none transition-all placeholder:text-slate-500 focus:border-[#720101]/40 focus:bg-white focus:ring-2 focus:ring-[#720101]/10"
                                 maxLength={2000} autoFocus />
-                            <button type="submit" disabled={!newMessage.trim() || sending}
-                                className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-[#720101] text-white transition-colors hover:bg-[#5a0101] disabled:border disabled:border-slate-400 disabled:bg-slate-200 disabled:text-slate-700">
-                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" /></svg>
+                            <button
+                                type="submit"
+                                disabled={!newMessage.trim() || sending}
+                                className="customer-chat-send-button"
+                                aria-label="Send message"
+                            >
+                                <SendHorizontal aria-hidden="true" />
                             </button>
                         </div>
                     </form>
