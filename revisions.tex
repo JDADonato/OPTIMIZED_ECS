@@ -1,0 +1,191 @@
+\documentclass[11pt]{article}
+
+\usepackage[letterpaper,margin=0.75in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{array}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{pdflscape}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{ragged2e}
+
+\definecolor{maroon}{HTML}{720101}
+\definecolor{darkgray}{HTML}{444444}
+\definecolor{critical}{HTML}{8B0000}
+\definecolor{high}{HTML}{B45309}
+\definecolor{medium}{HTML}{B7791F}
+\definecolor{low}{HTML}{4A5568}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=maroon,
+    urlcolor=maroon,
+    citecolor=maroon
+}
+
+\newcolumntype{L}[1]{>{\RaggedRight\arraybackslash}p{#1}}
+\newcommand{\severitycritical}{\textcolor{critical}{\textbf{Critical}}}
+\newcommand{\severityhigh}{\textcolor{high}{\textbf{High}}}
+\newcommand{\severitymedium}{\textcolor{medium}{\textbf{Medium}}}
+\newcommand{\severitylow}{\textcolor{low}{\textbf{Low}}}
+
+\setlist[itemize]{leftmargin=1.2em,itemsep=0.2em,topsep=0.3em}
+\setlength{\parskip}{0.45em}
+\setlength{\parindent}{0pt}
+\renewcommand{\arraystretch}{1.18}
+
+\begin{document}
+
+\begin{center}
+    {\Large\bfseries Paper-System Alignment Revisions}\\[0.35em]
+    {\large Eloquente Catering System}\\[0.5em]
+    {\color{darkgray}Audit of Chapters 1--3 Against the Current Implemented System}
+\end{center}
+
+\vspace{0.75em}
+
+\section*{Reference Note}
+
+\begin{itemize}
+    \item Paper reviewed: \path{C:/Users/John Darev/Downloads/LATEST_REVISIONS_4FRONT_CHAPS 1-3.pdf}.
+    \item PDF references below use the extracted PDF page markers, not necessarily the printed thesis page labels.
+    \item Current system evidence was checked against the local repository after the latest \texttt{main} updates, especially \texttt{README.md}, \texttt{routes/web.php}, Laravel controllers/services, migrations, and React/Inertia pages.
+\end{itemize}
+
+\section*{Current System Baseline}
+
+The implemented Eloquente Catering System is a Laravel 12, PHP 8.2+, React 19, Inertia.js, Tailwind CSS, and Vite application using Supabase PostgreSQL for persistence. It includes customer-facing public pages, a 7-step booking wizard, customer dashboard, staff dashboards for Marketing, Accounting, and Admin, PayMongo Checkout/webhooks, Laravel Reverb/Echo realtime messaging, queued work, Dompdf/Blade PDF exports, audit logs, feedback workflows, food tasting management, report templates/runs, and operational lifecycle tools.
+
+\subsection*{Key Current Evidence}
+
+\begin{itemize}
+    \item \texttt{README.md}: describes Laravel 12, React/Inertia/Vite, Supabase PostgreSQL, PayMongo, Reverb, Dompdf, queue listener, role dashboards, and current feature set.
+    \item \texttt{routes/web.php}: defines public pages, customer dashboard, checkout, chat, food tasting, marketing, accounting, admin, analytics, report, and document endpoints.
+    \item \texttt{resources/js/Pages/client/BookingWizard.jsx}: implements the 7-step booking wizard.
+    \item \texttt{resources/js/Pages/client/ClientDashboard.jsx}: implements approval state, secure checkout, receipts, food tasting, feedback, and dashboard workflows.
+    \item \texttt{resources/js/Components/client/MenuBuilder.jsx}: implements curated packages, manual menu selection, and the budget-guided Smart Budget Menu behavior.
+    \item \texttt{app/Services/PaymentCalculationService.php}: calculates configurable standard/rush payment schedules.
+    \item \texttt{app/Services/AdminReportService.php}: implements paper-required analytics: Sales Frequency Distribution, Simple Linear Regression (OLS) revenue forecasting, Simple Moving Average pax demand projection, Peak Season Cross-Tabulation Heatmap, caching, and report data.
+    \item \texttt{app/Http/Controllers/ChatController.php}, \texttt{app/Events/MessageSent.php}, and \texttt{resources/js/utils/chatMessageStore.js}: implement the current Reverb-backed conversation system.
+\end{itemize}
+
+\begin{landscape}
+\section*{Revision Table}
+
+\footnotesize
+\setlength{\tabcolsep}{4pt}
+
+\begin{longtable}{L{0.72in} L{1.05in} L{2.05in} L{2.55in} L{2.55in}}
+\caption{Paper revisions required to align Chapters 1--3 with the implemented system.}\\
+\toprule
+\textbf{Severity} & \textbf{PDF Reference} & \textbf{Paper Claim / Context} & \textbf{Current System State} & \textbf{Required Revision} \\
+\midrule
+\endfirsthead
+
+\toprule
+\textbf{Severity} & \textbf{PDF Reference} & \textbf{Paper Claim / Context} & \textbf{Current System State} & \textbf{Required Revision} \\
+\midrule
+\endhead
+
+\midrule
+\multicolumn{5}{r}{\emph{Continued on next page}}\\
+\endfoot
+
+\bottomrule
+\endlastfoot
+
+\severitycritical & p.16, Abstract & The abstract still contains template instructions instead of an actual project abstract. & The system is already implemented and has enough real scope to summarize accurately. & Replace the placeholder with a complete ECS abstract covering the real implemented modules, stack, analytics, payment, realtime chat, and staff/customer workflows. \\
+
+\severityhigh & pp.72--75, technical feasibility/software requirements & The paper says Laravel 11, XAMPP, ``SupaBase'', and an older local stack. & \texttt{README.md}, \texttt{composer.json}, and \texttt{package.json} show Laravel 12, PHP 8.2+, React 19, Inertia, Vite 7, Supabase PostgreSQL, Laravel Reverb, PayMongo, and Dompdf. & Update all stack/version sections to the current implementation. Replace ``SupaBase'' with ``Supabase''. Remove XAMPP as the main development assumption unless it is only historical context. \\
+
+\severityhigh & pp.72--75, physical/software architecture & The paper frames local execution around XAMPP/Apache and generic hosting. & The current local setup uses Laravel serve, Vite, queue listener, Reverb, optional ngrok for PayMongo webhooks, and portable runtime scripts documented in \texttt{README.md}. & Revise architecture and deployment diagrams/text to include Laravel app server, Vite assets, queue worker, Reverb WebSocket server, Supabase PostgreSQL, PayMongo webhooks, and document generation. \\
+
+\severityhigh & p.18, problem statement/background & The paper says customers get real-time availability and instant confirmation. & Current booking creation submits an event plan for Marketing review. The dashboard shows ``Awaiting Approval'' before payment/approval. & Change ``instant confirmation'' to ``guided booking request with availability checking and staff review/approval.'' \\
+
+\severityhigh & pp.58--60, pp.118--133, customer booking flow/screens & The paper describes a date-first or 8-step booking flow with payment and food tasting after checkout. & \texttt{BookingWizard.jsx} uses 7 steps: Vision/Event Type, Date, Guests, Packages, Menu, Details, Tasting. Payment is not part of the booking wizard. & Rewrite Chapter 3 booking flow, FDD, BPMN, screenshots, and use case descriptions to match the 7-step wizard and post-submission dashboard payment flow. \\
+
+\severityhigh & p.91, BPMN customer lane & The customer validates information and makes the first 10\% payment before Marketing processing. & Current flow creates a booking first, creates payment terms, then lets the client proceed to PayMongo checkout from the dashboard after review/approval rules allow it. & Move payment after booking submission/review in all BPMN/activity diagrams. Marketing review and dashboard checkout should appear before payment completion. \\
+
+\severityhigh & pp.20, 27, 31--32, 91, 134--144, payment lifecycle & The paper says the first 10\% reservation is paid automatically through the gateway, while 70\% and 20\% are manually tracked/proof-based. & Current system uses PayMongo Checkout for secure payments from the customer dashboard. Client-side manual payment confirmation is retired; staff can handle exceptions/verification in Accounting. & Replace the old split with the current PayMongo Checkout, webhook/success confirmation, staff exception handling, and receipt flow. Do not claim customer proof upload for the major tranches unless reintroduced. \\
+
+\severityhigh & pp.31--32, accounting scope & The paper says the 10/70/20 payment structure is hardcoded. & \texttt{PaymentCalculationService.php}, \texttt{BusinessRule.php}, and \texttt{SettingsController.php} show configurable reservation/down/final percentages and rush-event recalculation. Defaults remain 10/70/20 where applicable. & Reword as ``configurable payment rules defaulting to 10/70/20'' and document rush schedules such as combined down payment or 100\% final for near-event bookings. \\
+
+\severityhigh & pp.31, 58--60, p.102, pp.140--142, Smart Budget Maximizer & The paper describes a DSS that mathematically maximizes the customer's budget and auto-generates an optimized menu. & \texttt{MenuBuilder.jsx} has a budget-guided Smart Budget Menu that first secures the cheapest dish in each category, then adds higher-cost remaining dishes while staying within budget. It also supports curated packages and manual menu building. & Keep the Smart Budget feature, but describe the actual deterministic two-pass fit-within-budget behavior. Avoid overclaiming advanced optimization beyond the implemented algorithm. \\
+
+\severitymedium & pp.58--60, menu/package flow & The paper presents Budget Maximizer, Curated Packages, and Blank Canvas as the main path structure. & The implemented menu builder supports curated packages, budget-guided menu, and manual dish selection, but it is tied to the current 7-step wizard and package/category configuration. & Update the flow wording and screenshots to match the implemented package stage, menu stage, pricing summary, category limits, and package allowances. \\
+
+\severityhigh & pp.27, 31--32, pp.145--146, Admin analytics & The approved title and Chapter 3 require Frequency Distribution, Simple Linear Regression, Moving Averages, and peak-season decision support. & \texttt{AdminReportService.php} and \texttt{DashboardAdmin.jsx} now expose Sales Frequency Distribution, Revenue Forecast Using Simple Linear Regression (OLS), Pax Demand Projection Using Simple Moving Average (SMA), and a Peak Season Cross-Tabulation Heatmap with method metadata and honest insufficient-data states. & Preserve these analytics as required system features. Revise only the math explanation/terminology where needed: identify OLS as the Simple Linear Regression method, SMA as the moving-average method, include frequency/percentage/revenue contribution, and describe the heatmap as event type by month cross-tabulation. \\
+
+\severityhigh & p.132, database schema & The paper names \texttt{payment\_schedules}, \texttt{chat\_messages}, and \texttt{event\_feedback}. & Current migrations use \texttt{payments}, \texttt{payment\_events}, \texttt{refund\_cases}, \texttt{conversations}, \texttt{messages}, \texttt{conversation\_participants}, \texttt{feedback\_requests}, and \texttt{feedback\_responses}. & Replace outdated entity names and update the ERD/schema discussion to current table names and relationships. \\
+
+\severityhigh & pp.31, 132, chat/communication & The paper describes generic chat storage and announcements. & Current chat uses \texttt{/api/chat}, conversations, participants, private \texttt{conversation.\{id\}} channels, Reverb broadcasts, staff queue, claim/reopen/transfer/collaborators/internal notes, \texttt{client\_temp\_id}, and local cache/delta sync. & Rewrite the communication module section to describe the current Reverb-backed conversation system and remove the obsolete \texttt{chat\_messages} terminology. \\
+
+\severitymedium & pp.60--61, pp.151--154, customer dashboard & The paper focuses on booking status, food tasting tracker, and payment schedule. & \texttt{ClientDashboard.jsx} includes booking review state, event detail edits, secure checkout, receipts, food tasting management, chat, feedback, cancellation/history controls, and post-event handling. & Expand the dashboard section to include current customer workflows and dashboard states, especially ``Awaiting Approval'' and secure checkout after review. \\
+
+\severitymedium & pp.61--62, Marketing/Logistics module & The paper describes booking verification, conflict management, CMS announcements, and logistics. & Current Marketing routes include assisted bookings, contact inquiries, booking assignment/claim/transfer, review tasks, live status, calendar availability overrides, preparation board, food tastings, feedback responses, public content, and messages. & Update the Marketing/Operations section to include assisted booking, event handoff, preparation tasks, availability controls, tasting/feedback queues, and staff messaging. \\
+
+\severitymedium & p.63, pp.143--144, Accounting module & The paper centers on payment verification, financial ledger, and tranche tracking. & Current Accounting includes pending payments, payment updates, payment terms, ledger, reconciliation, reminders, refund queue/actions, PayMongo/provider references, receipts, voiding, overdue balances, and exceptions. & Expand Accounting descriptions and diagrams to include refunds, reconciliation, overdue/exception handling, provider IDs, payment voiding, and configurable terms. \\
+
+\severitymedium & p.64, pp.155--163, Admin module & The paper describes admin analytics, reports, role accounts, and broad monitoring. & Current Admin includes cross-role workspace access, account lifecycle controls, pricing/catalog/payment rules, audit logs, analytics endpoints, report templates/runs/export, advanced analytics, and staff settings. & Update Admin section to show report templates/runs, audit trail, account lifecycle, role-workspace access, catalog/payment settings, and expanded analytics endpoints. \\
+
+\severitymedium & pp.31, 60, 91, 134--144, documents/outputs & The paper claims digital contracts, kitchen prep lists, financial ledgers, and CSV/Excel exports. & Current document exports are payment receipt PDF, event preparation PDF, calendar PDF, and admin report PDF/CSV. No current evidence of Excel export or customer contract PDF routes. & Replace unsupported contract/Excel claims with the implemented PDF/CSV exports, or mark contracts/Excel as future work if still planned. \\
+
+\severitymedium & p.31, exclusions; pp.41--42, DSS/inventory discussion & The paper excludes complete granular inventory and supply-chain tracking. & Current schema has \texttt{inventory\_items} and \texttt{dish\_ingredients}, but the app is not a full inventory/procurement/supply-chain system. & Clarify that the system has partial ingredient/catalog inventory structures while full supply-chain/procurement tracking remains out of scope. \\
+
+\severitymedium & pp.60, 133, 151--152, Food Tasting & The paper describes food tasting as a booking-flow step with conflict checks and dashboard tracking. & Current system has public and authenticated food tasting forms, customer dashboard tasting updates/cancellation, staff tasting queues, status lifecycle, assigned staff, notes, and availability checks. & Update Food Tasting section to include public request flow, authenticated customer flow, staff queue/status lifecycle, and dashboard edit/cancel behavior. \\
+
+\severitymedium & p.31, capacity/business policy & The paper references a 10-event daily cap and 3,500 pax limit. & Current code keeps 3,500 pax/day but defaults to 7 events/day and supports availability overrides via Marketing. & Revise capacity policy to ``3,500 pax/day and configurable event/day capacity, currently defaulting to 7 events/day, with staff overrides.'' \\
+
+\severitymedium & p.40 and pp.58--59, payment gateway wording & The paper references local gateways such as GCash/Maya and general proof matching. & Current payment integration is PayMongo Checkout/webhooks. Payment method labels may reflect Card/GCash/Maya through PayMongo, but not direct separate gateway integrations. & State ``PayMongo Checkout, with supported PayMongo payment methods'' instead of implying separate direct GCash/Maya gateway integrations. \\
+
+\severitymedium & p.40, authentication/security terms & The paper defines/mentions JWT and RBAC. & Current app uses Laravel session authentication, CSRF-protected routes, role middleware/authorization, OTP/password controls, Supabase/Postgres RLS policies, and staff audit logs. & Remove or qualify JWT references. Use session authentication, CSRF protection, RBAC/role middleware, RLS, OTP/password controls, and audit logging as the implemented security model. \\
+
+\severitymedium & pp.60--64, role labels and scope & The paper alternates between customer/client and older role wording. & Current application role names are Admin, Marketing, Accounting, and Client in code, while user-facing copy may say customer. & Standardize academic text: use ``Client'' when referring to system role names and ``customer'' only as user-facing/business terminology. \\
+
+\severitymedium & pp.58--60 and public-facing scope & The paper centers on the booking portal but underrepresents implemented public pages. & \texttt{routes/web.php} includes \texttt{/}, \texttt{/about}, \texttt{/amenities}, \texttt{/contact}, \texttt{/book}, \texttt{/menu}, and \texttt{/food-tasting}, plus contact inquiry and catalog APIs. & Add or revise scope text to include the public website, menu gallery, contact inquiries, food tasting page, and public catalog/availability APIs. \\
+
+\severitymedium & p.132, feedback data model & The paper says post-event data is stored through \texttt{event\_feedback}. & Current system uses \texttt{feedback\_requests} and \texttt{feedback\_responses}, with staff follow-up fields and dashboard/staff workflows. & Rename this part of the data model and workflow to feedback requests/responses, including staff assignment/follow-up if discussed. \\
+
+\severitymedium & pp.151--160, report/export screens & The paper describes management reports and ledger exports in broad terms, including Excel. & Current reports use report templates/runs and export as PDF or CSV through \texttt{ReportController.php}; ledger views are operational screens. & Update report/export descriptions to current PDF/CSV report runs and avoid Excel unless a real Excel export is added. \\
+
+\severitylow & p.16, formatting & The abstract instructions mention font, spacing, and maximum word count inside the paper body. & This is editing guidance, not thesis content. & Remove all template/editorial instructions from the final paper. \\
+
+\severitylow & List of Figures and Figure 60 area & Figure 60 is labeled ``Eloquqnte'' instead of ``Eloquente''. & Brand spelling is ``Eloquente'' throughout the app. & Correct the Figure 60 title/caption spelling. \\
+
+\severitylow & List of Figures, Figure 18/Figure 19 & The list repeats or mislabels ``Admin's Reports'' for more than one figure. & Current Admin has multiple distinct surfaces: reports, analytics, accounts, settings, audit, and workspaces. & Correct duplicate captions so each figure names the actual screen shown. \\
+
+\severitylow & Throughout & ``SupaBase'' capitalization appears in multiple places. & The official product name is Supabase. & Replace all ``SupaBase'' instances with ``Supabase''. \\
+
+\severitylow & p.132 and nearby schema text & Terms like \texttt{event \_feedback} appear with odd spacing. & Current table names use snake\_case without spaces. & Clean up malformed schema/table terms and use current table names. \\
+
+\severitylow & Around related-systems discussion & The text appears to contain a ``carting system'' typo where ``catering system'' is intended. & The project is a catering management system. & Search the full manuscript for ``carting'' and correct it to ``catering'' where applicable. \\
+
+\end{longtable}
+\end{landscape}
+
+\section*{Cleanup Checklist}
+
+\begin{itemize}
+    \item Replace placeholder abstract with a real 250--300 word abstract.
+    \item Update title/subtitle language only if the final paper overstates unimplemented capabilities.
+    \item Use ``Supabase PostgreSQL'' consistently.
+    \item Use ``PayMongo Checkout'' consistently for online payment.
+    \item Use ``Laravel Reverb'' consistently for realtime chat and operational refresh hints.
+    \item Use ``Client'' for the authenticated customer role when describing system roles.
+    \item Replace obsolete tables: \texttt{payment\_schedules}, \texttt{chat\_messages}, and \texttt{event\_feedback}.
+    \item Replace old booking/payment diagrams with the current booking-review-dashboard-checkout flow.
+    \item Update all figures/captions that show old screens or old step order.
+    \item Remove unsupported claims for Excel export and customer contract PDF unless those features are implemented later.
+    \item Make payment policy wording configurable/rush-aware, not hardcoded.
+    \item Keep the approved analytics as required features: Sales Frequency Distribution, Simple Linear Regression (OLS) revenue forecasting, Simple Moving Average pax demand projection, and Peak Season Cross-Tabulation Heatmap, with filters, method metadata, and honest insufficient-data states.
+\end{itemize}
+
+\section*{Suggested Replacement System Summary}
+
+Eloquente Catering System is a Laravel 12 and React/Inertia catering management platform backed by Supabase PostgreSQL. It supports public customer discovery pages, menu browsing, guided booking, food tasting requests, customer dashboards, PayMongo Checkout payments, receipts, realtime Reverb chat, feedback workflows, and operational staff dashboards. Marketing manages booking intake, assisted bookings, customer coordination, availability, handoff, food tasting, feedback, public content, and messages. Accounting manages payment verification, overdue balances, exceptions, refunds, reconciliation, receipts, ledger history, and configurable payment terms. Admin manages accounts, catalog/pricing, payment rules, audit logs, analytics, report templates/runs, and cross-role workspace access. The system includes decision-support features such as a budget-guided menu builder, Sales Frequency Distribution, Simple Linear Regression (OLS) revenue forecasting, Simple Moving Average pax demand projection, and Peak Season Cross-Tabulation Heatmap, while full native mobile operation and complete supply-chain/procurement tracking remain outside the implemented scope.
+
+\end{document}

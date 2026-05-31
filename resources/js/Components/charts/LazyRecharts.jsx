@@ -1,92 +1,88 @@
-import React, { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+import {
+    BarChart,
+    Bar,
+    Cell,
+    XAxis,
+    YAxis,
+    CartesianGrid,
+    Tooltip,
+    Legend,
+    LabelList,
+    LineChart,
+    Line,
+    ReferenceLine,
+} from 'recharts';
 
-const loadRechartsComponent = (name) => lazy(() => (
-    import('recharts').then((module) => ({ default: module[name] }))
-));
-
-const chartFallback = (
-    <div className="staff-skeleton staff-skeleton-panel flex h-full min-h-[220px] items-center justify-center rounded-xl border border-slate-100 bg-slate-50" aria-label="Loading chart">
-        <div className="staff-skeleton-panel-lines w-full max-w-sm">
-            <span />
-            <span />
-            <span />
-        </div>
-    </div>
-);
-
-export const BarChart = loadRechartsComponent('BarChart');
-export const Bar = loadRechartsComponent('Bar');
-export const XAxis = loadRechartsComponent('XAxis');
-export const YAxis = loadRechartsComponent('YAxis');
-export const CartesianGrid = loadRechartsComponent('CartesianGrid');
-export const Tooltip = loadRechartsComponent('Tooltip');
-export const Legend = loadRechartsComponent('Legend');
-export const LineChart = loadRechartsComponent('LineChart');
-export const Line = loadRechartsComponent('Line');
-
-const hasRenderableSize = (node) => {
-    if (!node) return false;
-    const { width, height } = node.getBoundingClientRect();
-    return width > 1 && height > 1;
+export {
+    BarChart,
+    Bar,
+    Cell,
+    XAxis,
+    YAxis,
+    CartesianGrid,
+    Tooltip,
+    Legend,
+    LabelList,
+    LineChart,
+    Line,
+    ReferenceLine,
 };
 
-const readRenderableSize = (node) => {
-    if (!node) return { width: 0, height: 0 };
-    const { width, height } = node.getBoundingClientRect();
-    return {
-        width: Math.max(0, Math.floor(width)),
-        height: Math.max(0, Math.floor(height)),
-    };
+class ChartErrorBoundary extends React.Component {
+    constructor(props) {
+        super(props);
+        this.state = { hasError: false };
+    }
+
+    static getDerivedStateFromError() {
+        return { hasError: true };
+    }
+
+    componentDidUpdate(previousProps) {
+        if (previousProps.resetKey !== this.props.resetKey && this.state.hasError) {
+            this.setState({ hasError: false });
+        }
+    }
+
+    componentDidCatch(error) {
+        console.warn('Chart rendering failed. Showing a fallback panel instead.', error);
+    }
+
+    render() {
+        if (this.state.hasError) {
+            return (
+                <div className="admin-chart-empty h-full min-h-[220px]">
+                    Chart could not render in this panel. Try switching tabs or refreshing the page.
+                </div>
+            );
+        }
+
+        return this.props.children;
+    }
+}
+
+const measureElement = (element, fallbackHeight) => {
+    if (!element || typeof element.getBoundingClientRect !== 'function') {
+        return null;
+    }
+
+    const rect = element.getBoundingClientRect();
+    const width = Math.floor(rect.width);
+    const measuredHeight = Math.floor(rect.height);
+    const height = measuredHeight > 0 ? measuredHeight : fallbackHeight;
+
+    if (width <= 1 || height <= 1) {
+        return null;
+    }
+
+    return { width, height };
 };
 
 export const ResponsiveContainer = ({ children, className = '', style = {}, minHeight = 220, width = '100%', height = '100%' }) => {
+    const wrapperRef = useRef(null);
     const frameRef = useRef(null);
-    const [moduleReady, setModuleReady] = useState(false);
-    const [size, setSize] = useState({ width: 0, height: 0 });
-
-    useEffect(() => {
-        if (moduleReady || typeof window === 'undefined') return undefined;
-
-        const markReady = () => setModuleReady(true);
-        if ('requestIdleCallback' in window) {
-            const idleId = window.requestIdleCallback(markReady, { timeout: 2000 });
-            return () => window.cancelIdleCallback(idleId);
-        }
-
-        const timer = window.setTimeout(markReady, 750);
-        return () => window.clearTimeout(timer);
-    }, [moduleReady]);
-
-    useEffect(() => {
-        if (typeof window === 'undefined') return undefined;
-
-        const node = frameRef.current;
-        if (!node) return undefined;
-
-        const updateSize = () => {
-            const nextSize = readRenderableSize(node);
-            setSize((previous) => (
-                previous.width === nextSize.width && previous.height === nextSize.height ? previous : nextSize
-            ));
-        };
-
-        updateSize();
-
-        if ('ResizeObserver' in window) {
-            const observer = new window.ResizeObserver(updateSize);
-            observer.observe(node);
-            return () => observer.disconnect();
-        }
-
-        let animationFrame = window.requestAnimationFrame(function watchSize() {
-            updateSize();
-            animationFrame = window.requestAnimationFrame(watchSize);
-        });
-
-        return () => window.cancelAnimationFrame(animationFrame);
-    }, []);
-
-    const canRenderChart = moduleReady && hasRenderableSize(frameRef.current) && size.width > 1 && size.height > 1;
+    const [size, setSize] = useState(null);
     const wrapperStyle = {
         width,
         height,
@@ -94,17 +90,62 @@ export const ResponsiveContainer = ({ children, className = '', style = {}, minH
         minHeight,
         ...style,
     };
-    const renderedChart = React.isValidElement(children)
+
+    useEffect(() => {
+        const element = wrapperRef.current;
+        if (!element) return undefined;
+
+        const updateSize = () => {
+            if (frameRef.current) {
+                window.cancelAnimationFrame(frameRef.current);
+            }
+
+            frameRef.current = window.requestAnimationFrame(() => {
+                frameRef.current = null;
+                const nextSize = measureElement(element, minHeight);
+                setSize((previous) => {
+                    if (!nextSize) {
+                        return previous === null ? previous : null;
+                    }
+
+                    if (previous && previous.width === nextSize.width && previous.height === nextSize.height) {
+                        return previous;
+                    }
+
+                    return nextSize;
+                });
+            });
+        };
+
+        updateSize();
+
+        const resizeObserver = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(updateSize) : null;
+        resizeObserver?.observe(element);
+        window.addEventListener('resize', updateSize);
+
+        return () => {
+            resizeObserver?.disconnect();
+            window.removeEventListener('resize', updateSize);
+            if (frameRef.current) {
+                window.cancelAnimationFrame(frameRef.current);
+                frameRef.current = null;
+            }
+        };
+    }, [minHeight]);
+
+    const measuredChart = size && React.isValidElement(children)
         ? React.cloneElement(children, { width: size.width, height: size.height })
-        : children;
+        : null;
 
     return (
-        <div ref={frameRef} className={`h-full w-full min-w-0 ${className}`.trim()} style={wrapperStyle}>
-            {canRenderChart ? (
-                <Suspense fallback={chartFallback}>
-                    {renderedChart}
-                </Suspense>
-            ) : chartFallback}
+        <div ref={wrapperRef} className={`h-full w-full min-w-0 ${className}`.trim()} style={wrapperStyle}>
+            {measuredChart ? (
+                <ChartErrorBoundary resetKey={`${size.width}x${size.height}`}>
+                    {measuredChart}
+                </ChartErrorBoundary>
+            ) : (
+                <div aria-hidden="true" className="h-full w-full min-w-0" style={{ minHeight }} />
+            )}
         </div>
     );
 };

@@ -2,12 +2,13 @@ import React, { Suspense, lazy, useState, useEffect, useMemo, useRef, useCallbac
 import { useAuth } from '../context/AuthContext';
 import { router } from '@inertiajs/react';
 import logoImg from '../../images/ECS_LOGO.png';
-import { BarChart, Bar as RechartsBar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, LineChart, Line as RechartsLine } from '../Components/charts/LazyRecharts';
+import { BarChart, Bar as RechartsBar, Cell, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, LineChart, Line as RechartsLine, LabelList, ReferenceLine } from '../Components/charts/LazyRecharts';
 import { CalendarDays, CheckCircle2, ChevronDown, ClipboardList, CreditCard, Filter, Loader2, Maximize2, Package, RefreshCw, Search, Users, X } from 'lucide-react';
 import useCachedJson from '../hooks/useCachedJson';
 import useSmartRefresh from '../hooks/useSmartRefresh';
 import ConfirmModal from '../Components/common/ConfirmModal';
 import SmartImage from '../Components/common/SmartImage';
+import RevealOnScroll from '../Components/common/RevealOnScroll';
 import StaffSkeleton, { StaffWorkspaceSkeleton } from '../Components/staff/StaffSkeleton';
 import StaffWorkspaceLayout from '../Layouts/StaffWorkspaceLayout';
 import { AdminCommandStrip, AdminPageSurface, AdminResponsiveTable } from '../Components/admin/AdminSurface';
@@ -57,10 +58,126 @@ const StaffMessaging = lazy(() => import('../Components/common/StaffMessaging'))
 const FoodTastingQueue = lazy(() => import('../Components/operations/FoodTastingQueue'));
 
 const paymentLabel = paymentTypeLabel;
-const Bar = (props) => <RechartsBar animationDuration={650} {...props} />;
-const Line = (props) => <RechartsLine animationDuration={650} {...props} />;
+const Bar = ({ animationDuration = 520, isAnimationActive = false, ...props }) => (
+    <RechartsBar animationDuration={animationDuration} isAnimationActive={isAnimationActive} {...props} />
+);
+const Line = ({ animationDuration = 520, isAnimationActive = false, ...props }) => (
+    <RechartsLine animationDuration={animationDuration} isAnimationActive={isAnimationActive} {...props} />
+);
+const analyticsPayloadSignature = (payload) => {
+    try {
+        return JSON.stringify(payload, (key, value) => (key === 'generated_at' ? undefined : value));
+    } catch {
+        return null;
+    }
+};
 const isPlaceholderEmail = (email) => typeof email === 'string' && email.trim().toLowerCase().endsWith('@eloquente.invalid');
 const displayEmail = (email, fallback = 'No email') => (email && !isPlaceholderEmail(email) ? email : fallback);
+
+const ADMIN_CHART_THEME = {
+    maroon: '#720101',
+    maroonDark: '#5f0101',
+    gold: '#f0aa0b',
+    amber: '#b7791f',
+    teal: '#0f766e',
+    slate: '#334155',
+    muted: '#64748b',
+    axis: '#475569',
+    grid: '#ebe3d8',
+    panel: '#fffaf3',
+    neutral: '#94a3b8',
+    success: '#0f766e',
+    warning: '#b7791f',
+    danger: '#991b1b',
+    blue: '#2563eb',
+};
+
+const ADMIN_CHART_PALETTE = [
+    ADMIN_CHART_THEME.maroon,
+    ADMIN_CHART_THEME.gold,
+    ADMIN_CHART_THEME.teal,
+    ADMIN_CHART_THEME.slate,
+    ADMIN_CHART_THEME.amber,
+    ADMIN_CHART_THEME.blue,
+];
+
+const ADMIN_CHART_AXIS_TICK = {
+    fill: ADMIN_CHART_THEME.axis,
+    fontSize: 11,
+    fontWeight: 800,
+};
+
+const ADMIN_CHART_CATEGORY_TICK = {
+    fill: ADMIN_CHART_THEME.slate,
+    fontSize: 10,
+    fontWeight: 850,
+};
+
+const chartColorByIndex = (index = 0) => ADMIN_CHART_PALETTE[Math.abs(Number(index) || 0) % ADMIN_CHART_PALETTE.length];
+
+const chartStatusColor = (label = '', index = 0) => {
+    const normalized = String(label || '').toLowerCase();
+    if (/(paid|settled|verified|completed|collected|success)/.test(normalized)) return ADMIN_CHART_THEME.success;
+    if (/(overdue|failed|cancel|rejected|void|risk|unpaid)/.test(normalized)) return ADMIN_CHART_THEME.danger;
+    if (/(pending|review|partial|processing|draft|started)/.test(normalized)) return ADMIN_CHART_THEME.warning;
+    if (/(refund|refunded|returned)/.test(normalized)) return ADMIN_CHART_THEME.slate;
+    if (/(forecast|projection|trend|share)/.test(normalized)) return ADMIN_CHART_THEME.gold;
+    return chartColorByIndex(index);
+};
+
+const shortCurrency = (value) => {
+    const amount = Number(value || 0);
+    if (Math.abs(amount) >= 1000000) return `PHP ${(amount / 1000000).toFixed(amount >= 10000000 ? 0 : 1)}M`;
+    if (Math.abs(amount) >= 1000) return `PHP ${Math.round(amount / 1000)}k`;
+    return `PHP ${Math.round(amount).toLocaleString()}`;
+};
+
+const shortNumber = (value) => Number(value || 0).toLocaleString();
+
+const AdminChartTooltip = ({ active, payload, label, valueFormatter = shortNumber, labelFormatter = null }) => {
+    if (!active || !payload?.length) return null;
+    return (
+        <div className="admin-chart-tooltip">
+            <strong>{labelFormatter ? labelFormatter(label) : label}</strong>
+            <div>
+                {payload.filter(item => item.value !== null && item.value !== undefined).map((item, index) => (
+                    <span key={`${item.dataKey || item.name}-${index}`}>
+                        <i style={{ backgroundColor: item.color || item.fill || chartColorByIndex(index) }} />
+                        <em>{item.name || item.dataKey}</em>
+                        <b>{valueFormatter(item.value, item.name, item)}</b>
+                    </span>
+                ))}
+            </div>
+        </div>
+    );
+};
+
+const ExecutiveGrid = (props) => (
+    <CartesianGrid strokeDasharray="4 8" stroke={ADMIN_CHART_THEME.grid} strokeWidth={1} vertical={false} {...props} />
+);
+
+const ExecutiveTooltip = ({ valueFormatter = shortNumber, labelFormatter = null, cursor = true }) => (
+    <RechartsTooltip
+        cursor={cursor ? { fill: '#fff7e8', stroke: ADMIN_CHART_THEME.grid, strokeWidth: 1 } : false}
+        content={<AdminChartTooltip valueFormatter={valueFormatter} labelFormatter={labelFormatter} />}
+    />
+);
+
+const ExecutiveXAxis = ({ tick = ADMIN_CHART_AXIS_TICK, ...props }) => (
+    <XAxis axisLine={{ stroke: ADMIN_CHART_THEME.grid }} tickLine={false} tick={tick} minTickGap={10} {...props} />
+);
+
+const ExecutiveYAxis = ({ tick = ADMIN_CHART_AXIS_TICK, ...props }) => (
+    <YAxis axisLine={false} tickLine={false} tick={tick} {...props} />
+);
+
+const ExecutiveBarCells = ({ data = [], colorFor = (_, index) => chartColorByIndex(index) }) => (
+    <>
+        {data.map((entry, index) => (
+            <Cell key={`cell-${index}-${entry.id || entry.package_id || entry.menu_item_id || entry.label || entry.month || entry.name || 'item'}`} fill={colorFor(entry, index)} />
+        ))}
+    </>
+);
 
 const PACKAGE_CATEGORY_OPTIONS = [
     { value: 'premium', label: 'Weddings & Debuts' },
@@ -81,6 +198,11 @@ const FORECAST_PERIOD_OPTIONS = [
 const SMA_WINDOW_OPTIONS = [2, 3, 4, 5, 6];
 const FORECAST_HORIZON_OPTIONS = [3, 4, 6, 8, 12];
 const ANALYTICS_YEARS = [2024, 2025, 2026];
+const HEATMAP_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'].map((label, index) => ({
+    key: String(index + 1).padStart(2, '0'),
+    label,
+    monthNumber: index + 1,
+}));
 const SNAPSHOT_WINDOW_OPTIONS = [
     { value: 'all', label: 'All time' },
     { value: '3m', label: 'Last 3 months' },
@@ -584,9 +706,15 @@ const DashboardAdmin = () => {
     const [analytics, setAnalytics] = useState(null);
     const [analyticsLoading, setAnalyticsLoading] = useState(false);
     const [expandedAnalyticsPanel, setExpandedAnalyticsPanel] = useState(null);
+    const [activeAnalyticsView, setActiveAnalyticsView] = useState('overview');
     const [bookingAnalysisOpen, setBookingAnalysisOpen] = useState(false);
     const [analyticsSlowLoading, setAnalyticsSlowLoading] = useState(false);
-    const [analyticsChartsAnimated, setAnalyticsChartsAnimated] = useState(true);
+    const [analyticsChartsAnimated, setAnalyticsChartsAnimated] = useState(false);
+    const analyticsAnimationTimerRef = useRef(null);
+    const analyticsPayloadKeyRef = useRef(null);
+    const analyticsSummaryPayloadKeyRef = useRef(null);
+    const analyticsPayloadSignatureRef = useRef(null);
+    const analyticsSummaryPayloadSignatureRef = useRef(null);
     const [analyticsFilters, setAnalyticsFilters] = useState(DEFAULT_ANALYTICS_FILTERS);
     const [activeAnalyticsFilterPanel, setActiveAnalyticsFilterPanel] = useState(null);
     const [packageViewFilters, setPackageViewFilters] = useState({
@@ -661,6 +789,26 @@ const DashboardAdmin = () => {
     const [availabilityEventVisibleLimit, setAvailabilityEventVisibleLimit] = useState(AVAILABILITY_EVENT_PAGE_SIZE);
     const [availabilityForm, setAvailabilityForm] = useState({ is_locked: false, remaining_events: '', remaining_pax: '', note: '' });
 
+    const pulseAnalyticsChartAnimation = useCallback(() => {
+        if (typeof window === 'undefined') return;
+
+        if (analyticsAnimationTimerRef.current) {
+            window.clearTimeout(analyticsAnimationTimerRef.current);
+        }
+
+        setAnalyticsChartsAnimated(true);
+        analyticsAnimationTimerRef.current = window.setTimeout(() => {
+            setAnalyticsChartsAnimated(false);
+            analyticsAnimationTimerRef.current = null;
+        }, 650);
+    }, []);
+
+    useEffect(() => () => {
+        if (analyticsAnimationTimerRef.current && typeof window !== 'undefined') {
+            window.clearTimeout(analyticsAnimationTimerRef.current);
+        }
+    }, []);
+
     const analyticsSummary = analytics?.summary || {};
     const revenueTrendData = analytics?.revenueTrends || [];
     const revenueHealth = analytics?.revenueHealth || {};
@@ -672,7 +820,11 @@ const DashboardAdmin = () => {
     const menuPerformanceData = analytics?.menuPerformance || [];
     const operationalAlerts = analytics?.operationalAlerts || analytics?.alerts || [];
     const topSellerData = analytics?.topSellers || [];
-    const peakSeasonData = Array.isArray(peakSeasonHeatmap) ? peakSeasonHeatmap : (analytics?.peakSeasons || []);
+    const peakSeasonCrossTab = peakSeasonHeatmap?.rows ? peakSeasonHeatmap : (analytics?.peakSeasonCrossTab || {});
+    const peakSeasonMonths = peakSeasonCrossTab.months?.length ? peakSeasonCrossTab.months : HEATMAP_MONTHS;
+    const peakSeasonRows = peakSeasonCrossTab.rows || [];
+    const peakSeasonMonthlyTotals = peakSeasonCrossTab.monthlyTotals || analytics?.peakSeasons || [];
+    const peakSeasonSummary = peakSeasonCrossTab.summary || {};
     const salesFrequencyDistribution = analytics?.salesFrequencyDistribution || {};
     const salesFrequencyData = salesFrequencyDistribution.rows || [];
     const topSalesFrequency = salesFrequencyData[0] || null;
@@ -684,6 +836,11 @@ const DashboardAdmin = () => {
     const paxDemandProjection = analytics?.demandMovingAverage || analytics?.paxDemandProjection || {};
     const paxDemandData = paxDemandProjection.rows || [];
     const paxDemandSummary = paxDemandProjection.summary || {};
+    const revenueTrendAverage = revenueTrendData.length
+        ? revenueTrendData.reduce((sum, row) => sum + Number(row.revenue || 0), 0) / revenueTrendData.length
+        : 0;
+    const revenueForecastBoundaryLabel = revenueForecastData.find(row => row.isForecast)?.label || null;
+    const paxForecastBoundaryLabel = paxDemandData.find(row => row.isForecast)?.label || null;
     const businessSnapshot = analytics?.businessSnapshot || {};
     const businessSnapshotCards = businessSnapshot.cards || [];
     const conversionFunnel = analytics?.conversionFunnel || analyticsSummary.conversionFunnel || {};
@@ -746,10 +903,11 @@ const DashboardAdmin = () => {
 
         return Array.from(optionMap, ([value, label]) => ({ value, label })).sort((a, b) => a.label.localeCompare(b.label));
     }, [bookings, eventTypes]);
-    const peakSeasonTotalEvents = peakSeasonData.reduce((total, item) => total + Number(item.events || item.count || 0), 0);
-    const peakSeasonBusiestMonth = peakSeasonData.reduce((best, item) => (
+    const peakSeasonTotalEvents = Number(peakSeasonSummary.totalEvents ?? peakSeasonMonthlyTotals.reduce((total, item) => total + Number(item.events || item.count || 0), 0));
+    const peakSeasonBusiestMonth = peakSeasonSummary.busiestMonth || peakSeasonMonthlyTotals.reduce((best, item) => (
         Number(item.events || item.count || 0) > Number(best?.events || best?.count || 0) ? item : best
-    ), null);
+    ), null)?.month || 'None';
+    const peakSeasonBusiestEventType = peakSeasonSummary.busiestEventType || 'None';
     const maxPackageRevenue = Math.max(...visiblePackagePerformanceData.map(pkg => Number(pkg.revenue || 0)), 1);
     const visibleReportWidgetIds = reportBuilder.widgets;
     const reportCanvasOffset = 0;
@@ -1133,7 +1291,9 @@ const DashboardAdmin = () => {
         return Number(value || 0).toLocaleString();
     };
 
-    const refreshCurrentTab = ({ silent = false } = {}) => {
+    const refreshCurrentTab = ({ silent = false, force = false } = {}) => {
+        const shouldBustCache = force || !silent;
+
         if (activeWorkspace === 'customer') {
             bustAdminCache(ADMIN_CUSTOMERS_URL, adminCustomersUrl('active'), adminCustomersUrl('deactivated'), adminCustomersUrl('all'), ADMIN_BOOKINGS_URL);
             fetchCustomers({ silent });
@@ -1148,17 +1308,17 @@ const DashboardAdmin = () => {
             fetchCustomMenuItems();
             fetchPackages();
         } else if (activeTab === 'today') {
-            bustAdminCache('/api/admin/analytics/summary');
-            fetchAnalyticsSummary({ silent });
+            if (shouldBustCache) bustAdminCache('/api/admin/analytics/summary');
+            fetchAnalyticsSummary({ silent, force });
         } else if (activeTab === 'analytics' || activeTab === 'reports') {
-            bustAdminCache('/api/admin/analytics');
-            fetchAnalytics({ silent });
+            if (shouldBustCache) bustAdminCache('/api/admin/analytics');
+            fetchAnalytics({ silent, force });
             fetchReportBuilder({ silent });
             fetchReportPreview({ silent });
         } else if (activeTab === 'bookings-intake' || activeTab === 'marketing-today') {
             bustAdminCache(ADMIN_BOOKINGS_URL);
             fetchBookings({ silent });
-            fetchAnalyticsSummary({ silent });
+            fetchAnalyticsSummary({ silent, force });
         } else if (activeTab === 'finance' || activeTab === 'accounting-today') {
             bustAdminCache('/api/admin/refunds/queue');
             fetchBookings({ silent });
@@ -2785,14 +2945,17 @@ const DashboardAdmin = () => {
 
     const currentScrollY = () => (typeof window === 'undefined' ? null : window.scrollY);
 
-    const fetchAnalyticsSummary = async ({ silent = false, filters = analyticsFilters } = {}) => {
+    const fetchAnalyticsSummary = async ({ silent = false, filters = analyticsFilters, force = false } = {}) => {
         if (!silent) setAnalyticsLoading(true);
         try {
             const params = new URLSearchParams(Object.entries(filters).filter(([, value]) => value !== ''));
             const query = params.toString() ? `?${params.toString()}` : '';
-            const cacheKey = smartCacheKey(`/api/admin/analytics/summary${query}`);
+            const requestKey = `/api/admin/analytics/summary${query}`;
+            const cacheKey = smartCacheKey(requestKey);
             const cached = readSmartCache(cacheKey);
-            if (cached?.data && !analytics?.summary) {
+            if (!force && cached?.data && !analytics?.summary) {
+                analyticsSummaryPayloadKeyRef.current = requestKey;
+                analyticsSummaryPayloadSignatureRef.current = analyticsPayloadSignature(cached.data);
                 setAnalytics((current) => ({
                     ...(current || {}),
                     summary: cached.data.summary || {},
@@ -2803,12 +2966,43 @@ const DashboardAdmin = () => {
                 }));
                 setAnalyticsLoading(false);
             }
-            const result = await fetchSmartResource(`/api/admin/analytics/summary${query}`, {
+            const result = await fetchSmartResource(requestKey, {
                 cacheKey,
                 ttl: 30000,
+                force,
             });
             const summary = result.raw || result.data;
+            const nextSummarySignature = analyticsPayloadSignature(summary);
+            const isSameSummaryPayload = analyticsSummaryPayloadKeyRef.current === requestKey
+                && nextSummarySignature !== null
+                && analyticsSummaryPayloadSignatureRef.current === nextSummarySignature;
 
+            if (result.changed === false || isSameSummaryPayload) {
+                if (!isSameSummaryPayload) {
+                    analyticsSummaryPayloadKeyRef.current = requestKey;
+                    analyticsSummaryPayloadSignatureRef.current = nextSummarySignature;
+                }
+
+                setAnalytics((current) => {
+                    if (isSameSummaryPayload && current?.summary) return current;
+
+                    return {
+                        ...(current || {}),
+                        summary: summary.summary || {},
+                        businessSnapshot: summary.businessSnapshot || {},
+                        conversionFunnel: summary.conversionFunnel || current?.conversionFunnel || {},
+                        salesFrequencyDistribution: summary.salesFrequencyDistribution || current?.salesFrequencyDistribution || {},
+                        revenueRegression: summary.revenueRegression || current?.revenueRegression || {},
+                        demandMovingAverage: summary.demandMovingAverage || current?.demandMovingAverage || {},
+                        insights: summary.insights || current?.insights || {},
+                    };
+                });
+                return;
+            }
+
+            pulseAnalyticsChartAnimation();
+            analyticsSummaryPayloadKeyRef.current = requestKey;
+            analyticsSummaryPayloadSignatureRef.current = nextSummarySignature;
             setAnalytics((current) => ({
                 ...(current || {}),
                 summary: summary.summary || {},
@@ -2846,7 +3040,7 @@ const DashboardAdmin = () => {
                 ttl: 60000,
             });
             const data = result.raw || result.data;
-            setPeakSeasonHeatmap(data.operationsLoad || []);
+            setPeakSeasonHeatmap(data.peakSeasonCrossTab || { rows: [], months: HEATMAP_MONTHS, monthlyTotals: data.operationsLoad || [] });
         } catch (error) {
             console.error(error);
             if (!silent) showToast('Could not load the peak season heatmap filter.', 'error');
@@ -2855,18 +3049,37 @@ const DashboardAdmin = () => {
         }
     };
 
-    const fetchAnalytics = async ({ silent = false, filters = analyticsFilters, preserveScrollY = null } = {}) => {
+    const fetchAnalytics = async ({ silent = false, filters = analyticsFilters, preserveScrollY = null, force = false } = {}) => {
         if (!silent) setAnalyticsLoading(true);
         try {
             const params = new URLSearchParams(Object.entries(filters).filter(([, value]) => value !== ''));
             const query = params.toString() ? `?${params.toString()}` : '';
-            const result = await fetchSmartResource(`/api/admin/analytics${query}`, {
-                cacheKey: smartCacheKey(`/api/admin/analytics${query}`),
+            const requestKey = `/api/admin/analytics${query}`;
+            const result = await fetchSmartResource(requestKey, {
+                cacheKey: smartCacheKey(requestKey),
                 ttl: 60000,
+                force,
             });
             const data = result.raw || result.data;
+            const nextAnalytics = data?.data || data || {};
+            const nextAnalyticsSignature = analyticsPayloadSignature(nextAnalytics);
+            const isSameAnalyticsPayload = analyticsPayloadKeyRef.current === requestKey
+                && nextAnalyticsSignature !== null
+                && analyticsPayloadSignatureRef.current === nextAnalyticsSignature;
 
-            setAnalytics(data?.data || data || {});
+            if (result.changed === false || isSameAnalyticsPayload) {
+                if (!isSameAnalyticsPayload) {
+                    analyticsPayloadKeyRef.current = requestKey;
+                    analyticsPayloadSignatureRef.current = nextAnalyticsSignature;
+                }
+                setAnalytics((current) => (isSameAnalyticsPayload && current ? current : nextAnalytics));
+                return;
+            }
+
+            pulseAnalyticsChartAnimation();
+            analyticsPayloadKeyRef.current = requestKey;
+            analyticsPayloadSignatureRef.current = nextAnalyticsSignature;
+            setAnalytics(nextAnalytics);
         } catch (error) {
             console.error(error);
             if (!silent) showToast('We could not load the latest analytics. Showing saved data if available.', 'error');
@@ -3138,7 +3351,6 @@ const DashboardAdmin = () => {
 
     const toggleAnalyticsFilterPanel = (panel) => {
         const scrollY = currentScrollY();
-        setAnalyticsChartsAnimated(false);
         setActiveAnalyticsFilterPanel(current => current === panel ? null : panel);
         restoreAnalyticsScroll(scrollY);
     };
@@ -3166,23 +3378,19 @@ const DashboardAdmin = () => {
     const updateAnalyticsFilters = (patch) => {
         const scrollY = currentScrollY();
         const nextFilters = { ...analyticsFilters, ...patch };
-        setAnalyticsChartsAnimated(true);
         setAnalyticsFilters(nextFilters);
         fetchAnalytics({ filters: nextFilters, silent: true, preserveScrollY: scrollY });
     };
 
     const updatePaymentRiskFilters = (patch) => {
-        setAnalyticsChartsAnimated(true);
         setPaymentRiskFilters(current => ({ ...current, ...patch }));
     };
 
     const updatePackageViewFilters = (patch) => {
-        setAnalyticsChartsAnimated(true);
         setPackageViewFilters(current => ({ ...current, ...patch }));
     };
 
     const updateMenuViewFilters = (patch) => {
-        setAnalyticsChartsAnimated(true);
         setMenuViewFilters(current => ({ ...current, ...patch }));
     };
 
@@ -3235,7 +3443,7 @@ const DashboardAdmin = () => {
                         Payment status
                         <select value={paymentRiskFilters.status} onChange={(event) => updatePaymentRiskFilters({ status: event.target.value })} className={analyticsFilterInputClass}>
                             <option value="all">All statuses</option>
-                            {paymentStatusBreakdown.map(row => <option key={row.label} value={String(row.label || '').toLowerCase()}>{row.label}</option>)}
+                            {paymentStatusBreakdown.map((row, index) => <option key={`${row.label || 'status'}-${index}`} value={String(row.label || '').toLowerCase()}>{row.label}</option>)}
                         </select>
                     </label>
                     <label className={analyticsFilterLabelClass}>
@@ -3427,12 +3635,13 @@ const DashboardAdmin = () => {
         </div>
     );
 
-    const insightToneClass = (severity = 'good') => ({
-        critical: 'border-red-100 bg-red-50 text-red-800',
-        warning: 'border-amber-100 bg-amber-50 text-amber-900',
-        watch: 'border-[#f0aa0b]/20 bg-[#fff7e8] text-[#720101]',
-        good: 'border-emerald-100 bg-emerald-50 text-emerald-800',
-    }[severity] || 'border-slate-100 bg-slate-50 text-slate-700');
+    const insightSeverityLabel = (severity = 'watch') => ({
+        critical: 'Needs action',
+        warning: 'Watch',
+        watch: 'Monitor',
+        good: 'Stable',
+        neutral: 'Context',
+    }[severity] || 'Context');
 
     const LoadingFeedback = ({ label = 'Loading your dashboard data...', compact = false }) => (
         <div className={`admin-loading-note ${compact ? 'is-compact' : ''}`} role="status" aria-live="polite">
@@ -3466,19 +3675,62 @@ const DashboardAdmin = () => {
         return trimmed.endsWith('.') ? trimmed : `${trimmed}.`;
     };
 
+    const insightBriefWeights = (signalText, actionText) => {
+        const clampWeight = (value) => Math.min(1.45, Math.max(0.85, value));
+        const signalLength = Math.max(String(signalText || '').trim().replace(/\s+/g, ' ').length, 1);
+        const actionLength = Math.max(String(actionText || '').trim().replace(/\s+/g, ' ').length, 1);
+        const averageLength = (signalLength + actionLength) / 2;
+
+        return {
+            signalWeight: `${clampWeight(signalLength / averageLength).toFixed(2)}fr`,
+            actionWeight: `${clampWeight(actionLength / averageLength).toFixed(2)}fr`,
+        };
+    };
+
     const InsightLine = ({ insight, compact = true }) => {
         const normalized = normalizeInsight(insight);
         if (!normalized) return null;
+        const severity = ['critical', 'warning', 'watch', 'good'].includes(normalized.severity) ? normalized.severity : 'neutral';
+        const severityLabel = insightSeverityLabel(severity);
+        const hasAction = Boolean(normalized.recommended_action);
+        const briefWeights = hasAction ? insightBriefWeights(normalized.meaning, normalized.recommended_action) : null;
+
+        if (compact) {
+            return (
+                <div className={`admin-insight-line is-${severity} is-compact`}>
+                    <span className="admin-insight-severity">{severityLabel}</span>
+                    <strong>{normalized.headline}</strong>
+                </div>
+            );
+        }
 
         return (
-            <div className={`admin-insight-line ${insightToneClass(normalized.severity)} ${compact ? 'is-compact' : ''}`}>
-                <strong>{normalized.headline}</strong>
-                {!compact && (
-                    <>
+            <div className={`admin-insight-line is-${severity} is-detailed`}>
+                <div className="admin-insight-line-head">
+                    <span className="admin-insight-severity">{severityLabel}</span>
+                    <div className="admin-insight-finding">
+                        <span className="admin-insight-kicker">Finding</span>
+                        <strong>{normalized.headline}</strong>
+                    </div>
+                </div>
+                <div
+                    className={`admin-insight-line-grid ${hasAction ? 'has-action' : ''}`}
+                    style={hasAction ? {
+                        '--signal-weight': briefWeights.signalWeight,
+                        '--action-weight': briefWeights.actionWeight,
+                    } : undefined}
+                >
+                    <div className="admin-insight-block">
+                        <span className="admin-insight-label">Signal</span>
                         <p>{normalized.meaning}</p>
-                        {normalized.recommended_action && <span>{normalized.recommended_action}</span>}
-                    </>
-                )}
+                    </div>
+                    {hasAction && (
+                        <div className="admin-insight-block is-action">
+                            <span className="admin-insight-label">Next move</span>
+                            <p>{normalized.recommended_action}</p>
+                        </div>
+                    )}
+                </div>
             </div>
         );
     };
@@ -3513,6 +3765,63 @@ const DashboardAdmin = () => {
         </div>
     );
 
+    const heatmapCellClass = (intensity) => ({
+        none: 'is-none',
+        low: 'is-low',
+        moderate: 'is-moderate',
+        high: 'is-high',
+        peak: 'is-peak',
+    }[intensity] || 'is-none');
+
+    const PeakSeasonCrossTab = ({ compact = false }) => (
+        <div className={`admin-cross-tab-wrap ${peakSeasonLoading ? 'is-loading' : ''}`}>
+            <table className={`admin-cross-tab ${compact ? 'is-compact' : ''}`}>
+                <thead>
+                    <tr>
+                        <th scope="col">Event type</th>
+                        {peakSeasonMonths.map((month) => (
+                            <th key={month.key || month.label} scope="col">{month.label}</th>
+                        ))}
+                        <th scope="col">Total</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {peakSeasonRows.length ? peakSeasonRows.map((row) => (
+                        <tr key={row.eventType || row.label}>
+                            <th scope="row">{row.label || row.eventType}</th>
+                            {peakSeasonMonths.map((month, index) => {
+                                const cell = row.months?.[index] || {};
+                                return (
+                                    <td key={`${row.eventType || row.label}-${month.key || month.label}`}>
+                                        <span
+                                            className={`admin-cross-tab-cell ${heatmapCellClass(cell.intensity)}`}
+                                            title={`${row.label || row.eventType} / ${month.label}: ${cell.events || 0} events, ${cell.pax || 0} pax`}
+                                        >
+                                            <strong>{cell.events || 0}</strong>
+                                            {!compact && <em>{cell.pax || 0} pax</em>}
+                                        </span>
+                                    </td>
+                                );
+                            })}
+                            <td>
+                                <span className="admin-cross-tab-total">
+                                    <strong>{row.totalEvents || 0}</strong>
+                                    {!compact && <em>{row.totalPax || 0} pax</em>}
+                                </span>
+                            </td>
+                        </tr>
+                    )) : (
+                        <tr>
+                            <td colSpan={(peakSeasonMonths.length || 12) + 2}>
+                                <div className="admin-chart-empty">No booking history matches this heatmap filter.</div>
+                            </td>
+                        </tr>
+                    )}
+                </tbody>
+            </table>
+        </div>
+    );
+
     const dominantBookingCategory = topSalesFrequency?.label || 'Current booking mix';
     const dominantBookingPercentage = Number(topSalesFrequency?.percentage || 0);
     const bookingRevenueForecast = Number(revenueForecastSummary.nextForecast || 0);
@@ -3531,7 +3840,7 @@ const DashboardAdmin = () => {
         'Revenue trajectory is ready'
     ) || chartInsight(
         'Revenue trajectory is ready',
-        `The next projected revenue point is ${formatCurrency(bookingRevenueForecast)} based on the current regression model.`,
+        `The next projected revenue point is ${formatCurrency(bookingRevenueForecast)} based on Simple Linear Regression.`,
         'Review approvals and discounts against the expected revenue trajectory.',
         'watch'
     );
@@ -3539,8 +3848,8 @@ const DashboardAdmin = () => {
         paxDemandProjection.interpretation || paxDemandProjection.insight,
         'Guest demand baseline is ready'
     ) || chartInsight(
-        'Guest demand baseline is ready',
-        `The smoothed moving average projects ${bookingGuestBaseline.toLocaleString()} guests for the next planning period.`,
+        'Pax demand projection is ready',
+        `The Simple Moving Average projects ${bookingGuestBaseline.toLocaleString()} guests for the next planning period.`,
         'Check staffing, ingredients, and supplier commitments against this baseline.',
         'watch'
     );
@@ -3553,13 +3862,13 @@ const DashboardAdmin = () => {
         ['Dominant category', dominantBookingCategory],
         ['Verified volume', `${dominantBookingPercentage.toFixed(1)}%`],
         ['Revenue forecast', formatCurrency(bookingRevenueForecast)],
-        ['Revenue model', `${revenueForecastSummary.method || 'OLS linear regression'} / ${revenueForecastSummary.direction || 'upward'}`],
+        ['Revenue model', `${revenueForecastSummary.method || 'Simple Linear Regression (OLS)'} / ${revenueForecastSummary.direction || 'upward'}`],
         ['Guest baseline', bookingGuestBaseline.toLocaleString()],
-        ['Guest model', `${paxDemandSummary.method || 'SMA'} projected guests`],
+        ['Guest model', `${paxDemandSummary.method || 'Simple Moving Average'} projected guests`],
     ];
 
-    const AnalyticsPanel = ({ id, filterKey = null, kicker, title, description, insight, fallbackInsight = null, guide = null, actions, children, loading = false, className = '', chartHeight = 'h-64' }) => (
-        <section className={`admin-panel admin-analytics-panel ${className}`}>
+    const AnalyticsPanel = ({ id, filterKey = null, kicker, title, description, insight, fallbackInsight = null, guide = null, actions, children, loading = false, className = '', chartHeight = 'h-64', revealDelay = '' }) => (
+        <RevealOnScroll as="section" delay={revealDelay} className={`admin-panel admin-analytics-panel ${className}`}>
             <div className="admin-analytics-panel-head">
                 <div>
                     {kicker && <p className="admin-kicker">{kicker}</p>}
@@ -3581,7 +3890,7 @@ const DashboardAdmin = () => {
                 {guide && <ChartGuide {...guide} />}
                 <InsightLine insight={insight || fallbackInsight} compact={false} />
             </div>
-        </section>
+        </RevealOnScroll>
     );
 
     const renderExpandedAnalyticsContent = (panelId) => {
@@ -3589,11 +3898,14 @@ const DashboardAdmin = () => {
             return revenueTrendData.length ? (
                 <ResponsiveContainer width="100%" height="100%">
                     <BarChart data={revenueTrendData}>
-                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E5E7EB" />
-                        <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#6B7280' }} />
-                        <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#6B7280' }} tickFormatter={(value) => `PHP ${Math.round(value / 1000)}k`} />
-                        <RechartsTooltip formatter={(value) => formatCurrency(value)} />
-                        <Bar dataKey="revenue" fill="#720101" radius={[6, 6, 0, 0]} name="Revenue" />
+                        <ExecutiveGrid />
+                        <ExecutiveXAxis dataKey="label" />
+                        <ExecutiveYAxis tickFormatter={shortCurrency} />
+                        <ExecutiveTooltip valueFormatter={(value) => formatCurrency(value)} />
+                        {revenueTrendAverage > 0 && <ReferenceLine y={revenueTrendAverage} stroke={ADMIN_CHART_THEME.gold} strokeDasharray="5 5" label={{ value: 'Avg', fill: ADMIN_CHART_THEME.amber, fontSize: 11, fontWeight: 900 }} />}
+                        <Bar dataKey="revenue" fill={ADMIN_CHART_THEME.maroon} radius={[7, 7, 0, 0]} name="Revenue">
+                            <LabelList dataKey="revenue" position="top" formatter={shortCurrency} fill={ADMIN_CHART_THEME.slate} fontSize={10} fontWeight={900} />
+                        </Bar>
                     </BarChart>
                 </ResponsiveContainer>
             ) : null;
@@ -3603,11 +3915,14 @@ const DashboardAdmin = () => {
             return visiblePaymentStatusBreakdown.length ? (
                 <ResponsiveContainer width="100%" height="100%">
                     <BarChart data={visiblePaymentStatusBreakdown}>
-                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E5E7EB" />
-                        <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#6B7280' }} />
-                        <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#6B7280' }} tickFormatter={(value) => `PHP ${Math.round(value / 1000)}k`} />
-                        <RechartsTooltip formatter={(value) => formatCurrency(value)} />
-                        <Bar dataKey="total" fill="#720101" radius={[6, 6, 0, 0]} name="Amount" />
+                        <ExecutiveGrid />
+                        <ExecutiveXAxis dataKey="label" />
+                        <ExecutiveYAxis tickFormatter={shortCurrency} />
+                        <ExecutiveTooltip valueFormatter={(value) => formatCurrency(value)} />
+                        <Bar dataKey="total" radius={[7, 7, 0, 0]} name="Amount">
+                            <ExecutiveBarCells data={visiblePaymentStatusBreakdown} colorFor={(row, index) => chartStatusColor(row.label, index)} />
+                            <LabelList dataKey="total" position="top" formatter={shortCurrency} fill={ADMIN_CHART_THEME.slate} fontSize={10} fontWeight={900} />
+                        </Bar>
                     </BarChart>
                 </ResponsiveContainer>
             ) : null;
@@ -3616,12 +3931,15 @@ const DashboardAdmin = () => {
         if (panelId === 'booking-pipeline') {
             return bookingPipelineData.length ? (
                 <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={bookingPipelineData}>
-                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E5E7EB" />
-                        <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#6B7280' }} />
-                        <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#6B7280' }} />
-                        <RechartsTooltip />
-                        <Bar dataKey="count" fill="#720101" radius={[6, 6, 0, 0]} name="Bookings" />
+                    <BarChart data={bookingPipelineData} layout="vertical" margin={{ left: 20, right: 28 }}>
+                        <ExecutiveGrid />
+                        <ExecutiveXAxis type="number" />
+                        <ExecutiveYAxis type="category" dataKey="label" width={140} tick={ADMIN_CHART_CATEGORY_TICK} />
+                        <ExecutiveTooltip />
+                        <Bar dataKey="count" radius={[0, 7, 7, 0]} name="Bookings">
+                            <ExecutiveBarCells data={bookingPipelineData} colorFor={(row, index) => chartStatusColor(row.label, index)} />
+                            <LabelList dataKey="count" position="right" fill={ADMIN_CHART_THEME.slate} fontSize={11} fontWeight={950} />
+                        </Bar>
                     </BarChart>
                 </ResponsiveContainer>
             ) : null;
@@ -3631,12 +3949,17 @@ const DashboardAdmin = () => {
             return salesFrequencyData.length ? (
                 <ResponsiveContainer width="100%" height="100%">
                     <BarChart data={salesFrequencyData}>
-                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E5E7EB" />
-                        <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#6B7280' }} />
-                        <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#6B7280' }} />
-                        <RechartsTooltip formatter={(value, name) => name === 'percentage' ? `${value}%` : value} />
-                        <Bar dataKey="frequency" fill="#720101" radius={[6, 6, 0, 0]} name="Bookings" />
-                        <Bar dataKey="percentage" fill="#f0aa0b" radius={[6, 6, 0, 0]} name="Share" />
+                        <ExecutiveGrid />
+                        <ExecutiveXAxis dataKey="label" tick={ADMIN_CHART_CATEGORY_TICK} />
+                        <ExecutiveYAxis />
+                        <ExecutiveTooltip valueFormatter={(value, name) => name === 'Share' ? `${value}%` : shortNumber(value)} />
+                        <Bar dataKey="frequency" radius={[7, 7, 0, 0]} name="Bookings">
+                            <ExecutiveBarCells data={salesFrequencyData} colorFor={(_, index) => chartColorByIndex(index)} />
+                            <LabelList dataKey="frequency" position="top" fill={ADMIN_CHART_THEME.slate} fontSize={10} fontWeight={900} />
+                        </Bar>
+                        <Bar dataKey="percentage" fill={ADMIN_CHART_THEME.gold} radius={[7, 7, 0, 0]} name="Share" opacity={0.78}>
+                            <LabelList dataKey="percentage" position="top" formatter={(value) => `${value}%`} fill={ADMIN_CHART_THEME.amber} fontSize={10} fontWeight={900} />
+                        </Bar>
                     </BarChart>
                 </ResponsiveContainer>
             ) : null;
@@ -3652,12 +3975,15 @@ const DashboardAdmin = () => {
             ];
             return (
                 <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={data}>
-                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E5E7EB" />
-                        <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#6B7280' }} />
-                        <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#6B7280' }} />
-                        <RechartsTooltip />
-                        <Bar dataKey="value" fill="#720101" radius={[6, 6, 0, 0]} name="Events" />
+                    <BarChart data={data} layout="vertical" margin={{ left: 20, right: 28 }}>
+                        <ExecutiveGrid />
+                        <ExecutiveXAxis type="number" />
+                        <ExecutiveYAxis type="category" dataKey="label" width={140} tick={ADMIN_CHART_CATEGORY_TICK} />
+                        <ExecutiveTooltip />
+                        <Bar dataKey="value" radius={[0, 7, 7, 0]} name="Events">
+                            <ExecutiveBarCells data={data} colorFor={(_, index) => chartColorByIndex(index)} />
+                            <LabelList dataKey="value" position="right" fill={ADMIN_CHART_THEME.slate} fontSize={11} fontWeight={950} />
+                        </Bar>
                     </BarChart>
                 </ResponsiveContainer>
             );
@@ -3667,11 +3993,14 @@ const DashboardAdmin = () => {
             return visiblePackagePerformanceData.length ? (
                 <ResponsiveContainer width="100%" height="100%">
                     <BarChart data={visiblePackagePerformanceData} layout="vertical" margin={{ left: 24, right: 24 }}>
-                        <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#E5E7EB" />
-                        <XAxis type="number" axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#6B7280' }} tickFormatter={(value) => `PHP ${Math.round(value / 1000)}k`} />
-                        <YAxis type="category" dataKey="label" width={160} axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#374151', fontWeight: 700 }} />
-                        <RechartsTooltip formatter={(value) => formatCurrency(value)} />
-                        <Bar dataKey="revenue" fill="#720101" radius={[0, 6, 6, 0]} name="Revenue" />
+                        <ExecutiveGrid horizontal={false} vertical />
+                        <ExecutiveXAxis type="number" tickFormatter={shortCurrency} />
+                        <ExecutiveYAxis type="category" dataKey="label" width={180} tick={ADMIN_CHART_CATEGORY_TICK} />
+                        <ExecutiveTooltip valueFormatter={(value) => formatCurrency(value)} />
+                        <Bar dataKey="revenue" radius={[0, 7, 7, 0]} name="Revenue">
+                            <ExecutiveBarCells data={visiblePackagePerformanceData} colorFor={(_, index) => chartColorByIndex(index)} />
+                            <LabelList dataKey="revenue" position="right" formatter={shortCurrency} fill={ADMIN_CHART_THEME.slate} fontSize={10} fontWeight={900} />
+                        </Bar>
                     </BarChart>
                 </ResponsiveContainer>
             ) : null;
@@ -3681,11 +4010,14 @@ const DashboardAdmin = () => {
             return visibleMenuPerformanceData.length ? (
                 <ResponsiveContainer width="100%" height="100%">
                     <BarChart data={visibleMenuPerformanceData} layout="vertical" margin={{ left: 24, right: 24 }}>
-                        <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#E5E7EB" />
-                        <XAxis type="number" axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#6B7280' }} />
-                        <YAxis type="category" dataKey="label" width={160} axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#374151', fontWeight: 700 }} />
-                        <RechartsTooltip />
-                        <Bar dataKey={menuViewFilters.sort === 'pax' ? 'paxServed' : 'selections'} fill="#720101" radius={[0, 6, 6, 0]} name={menuViewFilters.sort === 'pax' ? 'Guests served' : 'Selections'} />
+                        <ExecutiveGrid horizontal={false} vertical />
+                        <ExecutiveXAxis type="number" />
+                        <ExecutiveYAxis type="category" dataKey="label" width={180} tick={ADMIN_CHART_CATEGORY_TICK} />
+                        <ExecutiveTooltip />
+                        <Bar dataKey={menuViewFilters.sort === 'pax' ? 'paxServed' : 'selections'} radius={[0, 7, 7, 0]} name={menuViewFilters.sort === 'pax' ? 'Guests served' : 'Selections'}>
+                            <ExecutiveBarCells data={visibleMenuPerformanceData} colorFor={(_, index) => chartColorByIndex(index + 2)} />
+                            <LabelList dataKey={menuViewFilters.sort === 'pax' ? 'paxServed' : 'selections'} position="right" fill={ADMIN_CHART_THEME.slate} fontSize={10} fontWeight={900} />
+                        </Bar>
                     </BarChart>
                 </ResponsiveContainer>
             ) : null;
@@ -3695,12 +4027,13 @@ const DashboardAdmin = () => {
             return revenueForecastData.length ? (
                 <ResponsiveContainer width="100%" height="100%">
                     <LineChart data={revenueForecastData}>
-                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E5E7EB" />
-                        <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#6B7280' }} />
-                        <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#6B7280' }} tickFormatter={(value) => `PHP ${Math.round(value / 1000)}k`} />
-                        <RechartsTooltip formatter={(value) => formatCurrency(value)} />
-                        <Line type="monotone" dataKey="cumulativeRevenue" stroke="#720101" strokeWidth={3} dot={{ r: 4 }} name="Cumulative actual" connectNulls={false} />
-                        <Line type="monotone" dataKey="trendLine" stroke="#f0aa0b" strokeWidth={3} strokeDasharray="6 4" dot={{ r: 3 }} name="OLS trend" connectNulls />
+                        <ExecutiveGrid />
+                        <ExecutiveXAxis dataKey="label" />
+                        <ExecutiveYAxis tickFormatter={shortCurrency} />
+                        <ExecutiveTooltip valueFormatter={(value) => formatCurrency(value)} />
+                        {revenueForecastBoundaryLabel && <ReferenceLine x={revenueForecastBoundaryLabel} stroke={ADMIN_CHART_THEME.slate} strokeDasharray="4 4" label={{ value: 'Forecast', fill: ADMIN_CHART_THEME.slate, fontSize: 11, fontWeight: 900 }} />}
+                        <Line type="monotone" dataKey="cumulativeRevenue" stroke={ADMIN_CHART_THEME.maroon} strokeWidth={3.5} dot={{ r: 4, fill: '#fff', stroke: ADMIN_CHART_THEME.maroon, strokeWidth: 2 }} activeDot={{ r: 6 }} name="Cumulative actual" connectNulls={false} />
+                        <Line type="monotone" dataKey="trendLine" stroke={ADMIN_CHART_THEME.gold} strokeWidth={3.5} strokeDasharray="7 5" dot={{ r: 3, fill: '#fff', stroke: ADMIN_CHART_THEME.gold, strokeWidth: 2 }} name="SLR trend" connectNulls />
                     </LineChart>
                 </ResponsiveContainer>
             ) : null;
@@ -3710,15 +4043,24 @@ const DashboardAdmin = () => {
             return paxDemandData.length ? (
                 <ResponsiveContainer width="100%" height="100%">
                     <BarChart data={paxDemandData}>
-                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E5E7EB" />
-                        <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#6B7280' }} />
-                        <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#6B7280' }} />
-                        <RechartsTooltip />
-                        <Bar dataKey="pax" fill="#720101" radius={[6, 6, 0, 0]} name="Actual guests" />
-                        <Bar dataKey="forecast" fill="#f0aa0b" radius={[6, 6, 0, 0]} name="SMA forecast" />
+                        <ExecutiveGrid />
+                        <ExecutiveXAxis dataKey="label" />
+                        <ExecutiveYAxis />
+                        <ExecutiveTooltip />
+                        {paxForecastBoundaryLabel && <ReferenceLine x={paxForecastBoundaryLabel} stroke={ADMIN_CHART_THEME.slate} strokeDasharray="4 4" label={{ value: 'Forecast', fill: ADMIN_CHART_THEME.slate, fontSize: 11, fontWeight: 900 }} />}
+                        <Bar dataKey="pax" fill={ADMIN_CHART_THEME.maroon} radius={[7, 7, 0, 0]} name="Actual guests">
+                            <LabelList dataKey="pax" position="top" fill={ADMIN_CHART_THEME.slate} fontSize={10} fontWeight={900} />
+                        </Bar>
+                        <Bar dataKey="forecast" fill={ADMIN_CHART_THEME.gold} radius={[7, 7, 0, 0]} name="SMA forecast">
+                            <LabelList dataKey="forecast" position="top" fill={ADMIN_CHART_THEME.amber} fontSize={10} fontWeight={900} />
+                        </Bar>
                     </BarChart>
                 </ResponsiveContainer>
             ) : null;
+        }
+
+        if (panelId === 'peak-season-cross-tab') {
+            return <PeakSeasonCrossTab compact />;
         }
 
         return null;
@@ -3728,12 +4070,13 @@ const DashboardAdmin = () => {
         'revenue-trend': ['Revenue trend', analyticsInsightItems.revenue],
         'payment-breakdown': ['Payment breakdown', analyticsInsightItems.payments],
         'booking-pipeline': ['Booking pipeline', analyticsInsightItems.pipeline],
-        'sales-frequency': ['Booked package mix', analyticsInsightItems.salesFrequency || salesFrequencyDistribution.insight],
+        'sales-frequency': ['Sales Frequency Distribution', analyticsInsightItems.salesFrequency || salesFrequencyDistribution.insight],
         'conversion-funnel': ['Conversion funnel', analyticsInsightItems.conversion],
         'package-performance': ['Package performance', analyticsInsightItems.menu],
         'menu-performance': ['Menu performance', analyticsInsightItems.menu],
-        'revenue-forecast': ['Revenue regression', revenueForecast.interpretation || analyticsInsightItems.forecast || normalizeInsight(revenueForecast.insight, 'Forecast gives planning context.')],
-        'pax-forecast': ['Guest demand forecast', paxDemandProjection.interpretation || analyticsInsightItems.forecast || normalizeInsight(paxDemandProjection.insight, 'Demand forecast gives planning context.')],
+        'revenue-forecast': ['Revenue Forecast Using Simple Linear Regression', revenueForecast.interpretation || analyticsInsightItems.forecast || normalizeInsight(revenueForecast.insight, 'Forecast gives planning context.')],
+        'pax-forecast': ['Pax Demand Projection Using Simple Moving Average', paxDemandProjection.interpretation || analyticsInsightItems.forecast || normalizeInsight(paxDemandProjection.insight, 'Demand forecast gives planning context.')],
+        'peak-season-cross-tab': ['Peak Season Cross-Tabulation Heatmap', peakSeasonCrossTab.insight],
     };
 
     const renderAnalyticsWorkbench = () => {
@@ -3779,21 +4122,62 @@ const DashboardAdmin = () => {
             ['Payment completion', `${conversionFunnel.payment_completion_rate || 0}%`, `${conversionFunnel.payment_confirmations || 0} confirmed from ${conversionFunnel.payment_checkout_starts || 0} checkout starts`],
             ['Feedback captured', conversionFunnel.feedback_submissions || 0, `${conversionFunnel.testimonial_candidates || 0} testimonial candidates`],
         ];
+        const analyticsTabs = [
+            { key: 'overview', label: 'Overview', description: 'Decision summary', count: insightCards.length },
+            { key: 'thesis', label: 'Core Analytics', description: 'Forecast methods', count: 4 },
+            { key: 'supporting', label: 'Supporting Charts', description: 'Descriptive dashboard aids', count: 6 },
+            { key: 'operations', label: 'Operations Signals', description: 'Queues and alerts', count: topAlerts.length + topPackages.length + topDishes.length },
+        ];
+        const coreAnalyticsShortcuts = [
+            { id: 'sales-frequency', label: 'Sales Frequency Distribution', detail: `${dominantBookingCategory} leads at ${dominantBookingPercentage.toFixed(1)}%`, view: 'thesis' },
+            { id: 'revenue-forecast', label: 'Simple Linear Regression', detail: `${formatCurrency(bookingRevenueForecast)} next forecast`, view: 'thesis' },
+            { id: 'pax-forecast', label: 'Simple Moving Average', detail: `${bookingGuestBaseline.toLocaleString()} pax baseline`, view: 'thesis' },
+            { id: 'peak-season-cross-tab', label: 'Peak Season Cross-Tab', detail: `${peakSeasonBusiestMonth} / ${peakSeasonBusiestEventType}`, view: 'thesis' },
+        ];
+        const supportingShortcuts = [
+            { id: 'revenue-trend', label: 'Revenue trend', detail: `${revenueTrendData.length} periods`, view: 'supporting' },
+            { id: 'payment-breakdown', label: 'Payment breakdown', detail: `${visiblePaymentStatusBreakdown.length} statuses`, view: 'supporting' },
+            { id: 'booking-pipeline', label: 'Booking pipeline', detail: `${bookingPipelineData.length} statuses`, view: 'supporting' },
+            { id: 'conversion-funnel', label: 'Completion funnel', detail: `${conversionFunnel.booking_completion_rate || 0}% completion`, view: 'supporting' },
+            { id: 'package-performance', label: 'Package performance', detail: `${topPackages.length} top packages`, view: 'supporting' },
+            { id: 'menu-performance', label: 'Menu performance', detail: `${topDishes.length} top dishes`, view: 'supporting' },
+        ];
+        const operationSignals = [
+            ['Active bookings', analyticsSummary.activeBookings || 0, `${analyticsSummary.pendingBookings || 0} pending requests`],
+            ['Pending revenue', formatCurrency(analyticsSummary.pendingRevenue || 0), `${analyticsSummary.collectionRate || 0}% collection rate`],
+            ['Busiest month', peakSeasonBusiestMonth, `${peakSeasonTotalEvents} heatmap events`],
+            ['Top event type', peakSeasonBusiestEventType, 'Use with staffing and purchasing plans'],
+        ];
+        const chartShortcut = (item) => (
+            <button
+                key={item.id}
+                type="button"
+                className="admin-analytics-shortcut"
+                title={`${item.label}: ${item.detail}`}
+                onClick={() => {
+                    setActiveAnalyticsView(item.view);
+                    setActiveAnalyticsFilterPanel(null);
+                }}
+            >
+                <span>{item.label}</span>
+                <strong>{item.detail}</strong>
+            </button>
+        );
 
         return (
-            <div className="admin-insight-workbench animate-fadeIn space-y-5">
-                <section className="admin-panel overflow-visible">
-                    <div className="flex flex-col gap-4 border-b border-gray-100 bg-[#fffaf3] p-6 lg:flex-row lg:items-center lg:justify-between">
+            <div className="admin-insight-workbench admin-analytics-workspace animate-fadeIn">
+                <RevealOnScroll as="section" className="admin-analytics-shell">
+                    <div className="admin-analytics-hero">
                         <div>
                             <p className="admin-kicker">Insight workbench</p>
-                            <h3 className="mt-1 text-2xl font-black text-gray-950">Understand the business without scrolling through every chart</h3>
-                            <p className="mt-2 max-w-3xl text-sm font-semibold leading-6 text-gray-500">Start with the signals that need decisions, then drill into revenue, bookings, payments, menu demand, operations, and forecasts.</p>
+                            <h3>Analytics Command Center</h3>
+                            <p>Start with the business state, then jump into core forecasting methods, supporting descriptive charts, or operational signals without scanning a long wall of cards.</p>
                         </div>
-                        <div className="flex flex-wrap gap-2">
+                        <div className="admin-analytics-hero-actions">
                             {renderAnalyticsFilterControl('snapshot', businessSnapshot.label || 'Timeframe')}
                             <button
                                 type="button"
-                                onClick={() => fetchAnalytics()}
+                                onClick={() => fetchAnalytics({ force: true })}
                                 disabled={analyticsLoading}
                                 className="admin-icon-action admin-refresh-action"
                                 aria-label={analyticsLoading ? 'Refreshing insights' : 'Refresh insights'}
@@ -3806,20 +4190,83 @@ const DashboardAdmin = () => {
                     {analyticsLoading && !analytics ? (
                         <StaffSkeleton variant="metrics" rows={4} />
                     ) : (
-                        <div className="grid gap-3 p-5 md:grid-cols-2 xl:grid-cols-4">
-                            {insightCards.map(card => (
-                                <article key={card.key} className="rounded-xl border border-gray-100 bg-white p-4">
-                                    <p className="text-xs font-black uppercase tracking-widest text-[#9f6500]">{card.title}</p>
-                                    <p className="mt-3 text-2xl font-black text-gray-950">{card.value}</p>
-                                    <p className="mt-2 min-h-12 text-sm font-semibold leading-6 text-gray-500">{card.context}</p>
-                                    <button type="button" onClick={card.onClick} className="mt-4 text-xs font-black uppercase tracking-widest text-[#720101]">{card.action}</button>
-                                </article>
+                        <div className="admin-analytics-metric-strip">
+                            {insightCards.map((card, index) => (
+                                <RevealOnScroll as="article" key={card.key} delay={`rv-d${Math.min(index + 1, 4)}`} className="admin-analytics-metric-card">
+                                    <p>{card.title}</p>
+                                    <strong>{card.value}</strong>
+                                    <span>{card.context}</span>
+                                    <button type="button" onClick={card.onClick}>{card.action}</button>
+                                </RevealOnScroll>
                             ))}
                         </div>
                     )}
-                </section>
+                </RevealOnScroll>
 
-                <section className="admin-panel overflow-hidden">
+                <RevealOnScroll delay="rv-d1" className="admin-analytics-tabs" role="tablist" aria-label="Analytics views">
+                    {analyticsTabs.map(tab => (
+                        <button
+                            key={tab.key}
+                            type="button"
+                            role="tab"
+                            aria-selected={activeAnalyticsView === tab.key}
+                            className={activeAnalyticsView === tab.key ? 'is-active' : ''}
+                            onClick={() => {
+                                setActiveAnalyticsView(tab.key);
+                                setActiveAnalyticsFilterPanel(null);
+                            }}
+                        >
+                            <span>{tab.label}</span>
+                            <strong>{tab.description}</strong>
+                            <em>{tab.count}</em>
+                        </button>
+                    ))}
+                </RevealOnScroll>
+
+                {activeAnalyticsView === 'overview' && (
+                    <section className="admin-analytics-overview-grid">
+                        <RevealOnScroll className="admin-analytics-feature-card admin-analytics-current-read">
+                            <p className="admin-kicker">Current read</p>
+                            <h3>What Admin should notice first</h3>
+                            <div className="admin-analytics-insight-stack">
+                                {(analyticsTakeaways.length ? analyticsTakeaways : [
+                                    analyticsInsightItems.revenue,
+                                    analyticsInsightItems.conversion,
+                                    analyticsInsightItems.operations,
+                                ].filter(Boolean)).slice(0, 3).map((insight, index) => (
+                                    <InsightLine key={`${insight.headline}-${index}`} insight={insight} compact={false} />
+                                ))}
+                                {!analyticsTakeaways.length && !analyticsInsightItems.revenue && (
+                                    <div className="admin-loading-note is-compact">
+                                        <Loader2 className="h-4 w-4 animate-spin" />
+                                        <span>Checking for the latest updates...</span>
+                                    </div>
+                                )}
+                            </div>
+                        </RevealOnScroll>
+                        <RevealOnScroll delay="rv-d1" className="admin-analytics-rail">
+                            <div>
+                                <p className="admin-kicker">Jump to core methods</p>
+                                <h3>Core analytics</h3>
+                            </div>
+                            <div className="admin-analytics-shortcuts">
+                                {coreAnalyticsShortcuts.map(chartShortcut)}
+                            </div>
+                        </RevealOnScroll>
+                        <RevealOnScroll delay="rv-d2" className="admin-analytics-rail">
+                            <div>
+                                <p className="admin-kicker">Supporting dashboard aids</p>
+                                <h3>Descriptive charts</h3>
+                            </div>
+                            <div className="admin-analytics-shortcuts">
+                                {supportingShortcuts.map(chartShortcut)}
+                            </div>
+                        </RevealOnScroll>
+                    </section>
+                )}
+
+                {activeAnalyticsView === 'overview' && (
+                    <RevealOnScroll as="section" delay="rv-d2" className="admin-panel overflow-hidden">
                     <div className="flex flex-col gap-2 border-b border-gray-100 bg-white p-5 md:flex-row md:items-end md:justify-between">
                         <div>
                             <p className="admin-kicker">Conversion roadmap</p>
@@ -3842,9 +4289,92 @@ const DashboardAdmin = () => {
                             {conversionFunnel.low_feedback_followups} low-rating follow-up{conversionFunnel.low_feedback_followups === 1 ? '' : 's'} need retention attention.
                         </div>
                     )}
-                </section>
+                </RevealOnScroll>
+                )}
 
-                <section className="admin-key-takeaways">
+                {activeAnalyticsView === 'operations' && (
+                    <section className="admin-analytics-ops-grid">
+                        <RevealOnScroll className="admin-analytics-feature-card admin-analytics-ops-summary">
+                            <p className="admin-kicker">Operations signals</p>
+                            <h3>Queues, alerts, and seasonal pressure</h3>
+                            <div className="admin-analytics-signal-grid">
+                                {operationSignals.map(([label, value, context]) => {
+                                    const signalClass = String(label).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+
+                                    return (
+                                        <article key={label} className={`admin-analytics-signal-card is-${signalClass}`}>
+                                            <div>
+                                                <p>{label}</p>
+                                                <strong>{value}</strong>
+                                            </div>
+                                            <span>{context}</span>
+                                        </article>
+                                    );
+                                })}
+                            </div>
+                        </RevealOnScroll>
+                        <RevealOnScroll delay="rv-d1" className="admin-analytics-rail">
+                            <div>
+                                <p className="admin-kicker">Priority alerts</p>
+                                <h3>Needs attention</h3>
+                            </div>
+                            <div className="admin-analytics-list-stack">
+                                {topAlerts.length ? topAlerts.map((alert, index) => (
+                                    <div key={`${alert.label}-${index}`} className="admin-analytics-list-row is-alert" title={alert.label}>
+                                        <span>{alert.label}</span>
+                                        <strong>{alert.count ?? alert.value ?? 0}</strong>
+                                    </div>
+                                )) : <div className="admin-chart-empty is-compact">No priority alerts in this view.</div>}
+                            </div>
+                        </RevealOnScroll>
+                        <RevealOnScroll delay="rv-d2" className="admin-analytics-rail">
+                            <div>
+                                <p className="admin-kicker">Demand leaders</p>
+                                <h3>Top packages and dishes</h3>
+                            </div>
+                            <div className="admin-analytics-list-stack is-sectioned">
+                                {!!topPackages.length && (
+                                    <div className="admin-analytics-demand-group">
+                                        <div className="admin-analytics-demand-group-head">
+                                            <span>Packages</span>
+                                            <em>Revenue</em>
+                                        </div>
+                                        {topPackages.slice(0, 3).map((row, index) => (
+                                            <div key={`${row.label || row.name}-package-${index}`} className="admin-analytics-list-row is-revenue" title={row.label || row.name || 'Package'}>
+                                                <span className="admin-analytics-item-name">
+                                                    <em>Package</em>
+                                                    <b>{row.label || row.name || 'Package'}</b>
+                                                </span>
+                                                <strong>{formatCurrency(row.revenue || 0)}</strong>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                                {!!topDishes.length && (
+                                    <div className="admin-analytics-demand-group">
+                                        <div className="admin-analytics-demand-group-head">
+                                            <span>Dishes</span>
+                                            <em>Selections</em>
+                                        </div>
+                                        {topDishes.slice(0, 3).map((row, index) => (
+                                            <div key={`${row.label || row.name}-dish-${index}`} className="admin-analytics-list-row is-count" title={row.label || row.name || 'Dish'}>
+                                                <span className="admin-analytics-item-name">
+                                                    <em>Dish</em>
+                                                    <b>{row.label || row.name || 'Dish'}</b>
+                                                </span>
+                                                <strong>{row.selections ?? row.paxServed ?? row.bookings ?? 0}</strong>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                                {!topPackages.length && !topDishes.length && <div className="admin-chart-empty is-compact">No demand leaders for this filter.</div>}
+                            </div>
+                        </RevealOnScroll>
+                    </section>
+                )}
+
+                {activeAnalyticsView !== 'overview' && (
+                <RevealOnScroll as="section" delay="rv-d1" className="admin-key-takeaways">
                     <div>
                         <p className="admin-kicker">Key takeaways</p>
                         <h3>What Admin should notice first</h3>
@@ -3864,8 +4394,10 @@ const DashboardAdmin = () => {
                             </div>
                         )}
                     </div>
-                </section>
+                </RevealOnScroll>
+                )}
 
+                {(activeAnalyticsView === 'thesis' || activeAnalyticsView === 'supporting') && (
                 <div className="admin-analytics-grid">
                     <AnalyticsPanel
                         id="revenue-trend"
@@ -3877,16 +4409,20 @@ const DashboardAdmin = () => {
                         fallbackInsight={chartInsight('Revenue trend is ready.', 'Bars show verified collected revenue for each month in the active analytics window.', 'Use dips or spikes to plan payment follow-ups and purchasing timing.')}
                         guide={{ x: 'Month', y: 'Verified revenue' }}
                         loading={analyticsLoading && !!analytics}
+                        className={activeAnalyticsView === 'supporting' ? 'admin-analytics-compact-panel' : 'is-hidden'}
                         actions={renderAnalyticsFilterButton('revenueTrend', `Last ${analyticsFilters.trend_months} months`)}
                     >
                         {revenueTrendData.length ? (
                             <ResponsiveContainer width="100%" height="100%">
                                 <BarChart data={revenueTrendData} margin={{ top: 12, right: 16, bottom: 4, left: 8 }}>
-                                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E5E7EB" />
-                                    <XAxis dataKey="month" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#6B7280' }} />
-                                    <YAxis width={70} axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#6B7280' }} tickFormatter={(value) => `PHP ${Math.round(value / 1000)}k`} />
-                                    <RechartsTooltip formatter={(value) => formatCurrency(value)} />
-                                    <Bar dataKey="revenue" fill="#720101" radius={[6, 6, 0, 0]} name="Revenue" isAnimationActive={analyticsChartsAnimated} />
+                                    <ExecutiveGrid />
+                                    <ExecutiveXAxis dataKey="month" />
+                                    <ExecutiveYAxis width={70} tickFormatter={shortCurrency} />
+                                    <ExecutiveTooltip valueFormatter={(value) => formatCurrency(value)} />
+                                    {revenueTrendAverage > 0 && <ReferenceLine y={revenueTrendAverage} stroke={ADMIN_CHART_THEME.gold} strokeDasharray="5 5" label={{ value: 'Avg', fill: ADMIN_CHART_THEME.amber, fontSize: 10, fontWeight: 900 }} />}
+                                    <Bar dataKey="revenue" fill={ADMIN_CHART_THEME.maroon} radius={[7, 7, 0, 0]} name="Revenue" isAnimationActive={analyticsChartsAnimated}>
+                                        <LabelList dataKey="revenue" position="top" formatter={shortCurrency} fill={ADMIN_CHART_THEME.slate} fontSize={9} fontWeight={900} />
+                                    </Bar>
                                 </BarChart>
                             </ResponsiveContainer>
                         ) : <div className="admin-chart-empty">No collected revenue for this window.</div>}
@@ -3902,16 +4438,20 @@ const DashboardAdmin = () => {
                         fallbackInsight={chartInsight('Payment breakdown is ready.', 'Bars compare outstanding and collected payment value by status.', 'Use the largest unpaid status as the first collection follow-up queue.')}
                         guide={{ x: 'Payment status', y: 'Payment amount' }}
                         loading={analyticsLoading && !!analytics}
+                        className={activeAnalyticsView === 'supporting' ? 'admin-analytics-compact-panel' : 'is-hidden'}
                         actions={renderAnalyticsFilterButton('dashboardPayment', paymentRiskFilters.status === 'all' ? 'Payment status' : paymentRiskFilters.status)}
                     >
                         {visiblePaymentStatusBreakdown.length ? (
                             <ResponsiveContainer width="100%" height="100%">
                                 <BarChart data={visiblePaymentStatusBreakdown} margin={{ top: 12, right: 16, bottom: 4, left: 8 }}>
-                                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E5E7EB" />
-                                    <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#6B7280' }} />
-                                    <YAxis width={70} axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#6B7280' }} tickFormatter={(value) => `PHP ${Math.round(value / 1000)}k`} />
-                                    <RechartsTooltip formatter={(value) => formatCurrency(value)} />
-                                    <Bar dataKey="total" fill="#720101" radius={[6, 6, 0, 0]} name="Amount" isAnimationActive={analyticsChartsAnimated} />
+                                    <ExecutiveGrid />
+                                    <ExecutiveXAxis dataKey="label" />
+                                    <ExecutiveYAxis width={70} tickFormatter={shortCurrency} />
+                                    <ExecutiveTooltip valueFormatter={(value) => formatCurrency(value)} />
+                                    <Bar dataKey="total" radius={[7, 7, 0, 0]} name="Amount" isAnimationActive={analyticsChartsAnimated}>
+                                        <ExecutiveBarCells data={visiblePaymentStatusBreakdown} colorFor={(row, index) => chartStatusColor(row.label, index)} />
+                                        <LabelList dataKey="total" position="top" formatter={shortCurrency} fill={ADMIN_CHART_THEME.slate} fontSize={9} fontWeight={900} />
+                                    </Bar>
                                 </BarChart>
                             </ResponsiveContainer>
                         ) : <div className="admin-chart-empty">No payment rows for this filter.</div>}
@@ -3927,16 +4467,20 @@ const DashboardAdmin = () => {
                         fallbackInsight={chartInsight('Booking pipeline is ready.', 'Bars show how many bookings currently sit in each operational status.', 'Use high pending counts as a signal to review intake and approvals.')}
                         guide={{ x: 'Booking status', y: 'Booking count' }}
                         loading={analyticsLoading && !!analytics}
+                        className={activeAnalyticsView === 'supporting' ? 'admin-analytics-compact-panel' : 'is-hidden'}
                         actions={renderAnalyticsFilterButton('bookingPipeline', analyticsFilters.booking_status || 'Booking status')}
                     >
                         {bookingPipelineData.length ? (
                             <ResponsiveContainer width="100%" height="100%">
-                                <BarChart data={bookingPipelineData} margin={{ top: 12, right: 16, bottom: 4, left: 0 }}>
-                                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E5E7EB" />
-                                    <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#6B7280' }} />
-                                    <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#6B7280' }} />
-                                    <RechartsTooltip />
-                                    <Bar dataKey="count" fill="#720101" radius={[6, 6, 0, 0]} name="Bookings" isAnimationActive={analyticsChartsAnimated} />
+                                <BarChart data={bookingPipelineData} layout="vertical" margin={{ top: 12, right: 28, bottom: 4, left: 12 }}>
+                                    <ExecutiveGrid />
+                                    <ExecutiveXAxis type="number" />
+                                    <ExecutiveYAxis type="category" dataKey="label" width={112} tick={ADMIN_CHART_CATEGORY_TICK} />
+                                    <ExecutiveTooltip />
+                                    <Bar dataKey="count" radius={[0, 7, 7, 0]} name="Bookings" isAnimationActive={analyticsChartsAnimated}>
+                                        <ExecutiveBarCells data={bookingPipelineData} colorFor={(row, index) => chartStatusColor(row.label, index)} />
+                                        <LabelList dataKey="count" position="right" fill={ADMIN_CHART_THEME.slate} fontSize={10} fontWeight={950} />
+                                    </Bar>
                                 </BarChart>
                             </ResponsiveContainer>
                         ) : <div className="admin-chart-empty">No booking pipeline data yet.</div>}
@@ -3946,22 +4490,26 @@ const DashboardAdmin = () => {
                         id="sales-frequency"
                         filterKey="salesFrequency"
                         kicker="Descriptive sales"
-                        title="Booked package mix"
-                        description="Verified bookings grouped by the package categories configured in the system."
+                        title="Sales Frequency Distribution"
+                        description="Frequency, percentage share, and revenue contribution by package category."
                         insight={analyticsInsightItems.salesFrequency || salesFrequencyDistribution.insight}
-                        fallbackInsight={chartInsight('Booked package mix is ready.', 'Bars show how verified bookings are distributed across real package categories.', 'Use the leading category to tune package defaults and campaign focus.')}
-                        guide={{ x: 'Package category', y: 'Verified bookings' }}
+                        fallbackInsight={chartInsight('Sales Frequency Distribution is ready.', 'Bars show how verified bookings are distributed across real package categories.', 'Use the leading category to tune package defaults and campaign focus.')}
+                        guide={{ x: 'Package category', y: 'Frequency and percentage share' }}
                         loading={analyticsLoading && !!analytics}
+                        className={activeAnalyticsView === 'thesis' ? 'admin-analytics-compact-panel' : 'is-hidden'}
                         actions={renderAnalyticsFilterButton('salesFrequency', ANALYTICS_PACKAGE_CATEGORY_OPTIONS.find(option => option.value === (analyticsFilters.package_category || ''))?.label || 'Package category')}
                     >
                         {salesFrequencyData.length ? (
                             <ResponsiveContainer width="100%" height="100%">
                                 <BarChart data={salesFrequencyData} margin={{ top: 12, right: 16, bottom: 4, left: 0 }}>
-                                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E5E7EB" />
-                                    <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#6B7280' }} />
-                                    <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#6B7280' }} />
-                                    <RechartsTooltip formatter={(value, name) => name === 'Share' ? `${value}%` : value} />
-                                    <Bar dataKey="frequency" fill="#720101" radius={[6, 6, 0, 0]} name="Bookings" isAnimationActive={analyticsChartsAnimated} />
+                                    <ExecutiveGrid />
+                                    <ExecutiveXAxis dataKey="label" tick={ADMIN_CHART_CATEGORY_TICK} />
+                                    <ExecutiveYAxis />
+                                    <ExecutiveTooltip valueFormatter={(value, name) => name === 'Share' ? `${value}%` : shortNumber(value)} />
+                                    <Bar dataKey="frequency" radius={[7, 7, 0, 0]} name="Bookings" isAnimationActive={analyticsChartsAnimated}>
+                                        <ExecutiveBarCells data={salesFrequencyData} colorFor={(_, index) => chartColorByIndex(index)} />
+                                        <LabelList dataKey="frequency" position="top" fill={ADMIN_CHART_THEME.slate} fontSize={9} fontWeight={900} />
+                                    </Bar>
                                 </BarChart>
                             </ResponsiveContainer>
                         ) : <div className="admin-chart-empty">No verified sales frequency data yet.</div>}
@@ -3977,6 +4525,7 @@ const DashboardAdmin = () => {
                         fallbackInsight={chartInsight('Booking funnel is ready.', 'Bars show the main conversion steps from booking activity through feedback capture.', 'Watch for the first major drop-off before adjusting customer follow-up.')}
                         guide={{ x: 'Funnel step', y: 'Record count' }}
                         loading={analyticsLoading && !!analytics}
+                        className={activeAnalyticsView === 'supporting' ? 'admin-analytics-compact-panel' : 'is-hidden'}
                         actions={renderAnalyticsFilterButton('conversionFunnel', businessSnapshot.label || 'Timeframe')}
                     >
                         <ResponsiveContainer width="100%" height="100%">
@@ -3985,12 +4534,20 @@ const DashboardAdmin = () => {
                                 { label: 'Bookings', value: conversionFunnel.booking_submissions || 0 },
                                 { label: 'Payments', value: conversionFunnel.payment_confirmations || 0 },
                                 { label: 'Feedback', value: conversionFunnel.feedback_submissions || 0 },
-                            ]} margin={{ top: 12, right: 16, bottom: 4, left: 0 }}>
-                                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E5E7EB" />
-                                <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#6B7280' }} />
-                                <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#6B7280' }} />
-                                <RechartsTooltip />
-                                <Bar dataKey="value" fill="#720101" radius={[6, 6, 0, 0]} name="Events" isAnimationActive={analyticsChartsAnimated} />
+                            ]} layout="vertical" margin={{ top: 12, right: 28, bottom: 4, left: 12 }}>
+                                <ExecutiveGrid />
+                                <ExecutiveXAxis type="number" />
+                                <ExecutiveYAxis type="category" dataKey="label" width={112} tick={ADMIN_CHART_CATEGORY_TICK} />
+                                <ExecutiveTooltip />
+                                <Bar dataKey="value" radius={[0, 7, 7, 0]} name="Events" isAnimationActive={analyticsChartsAnimated}>
+                                    <ExecutiveBarCells data={[
+                                        { label: 'Starts' },
+                                        { label: 'Bookings' },
+                                        { label: 'Payments' },
+                                        { label: 'Feedback' },
+                                    ]} colorFor={(_, index) => chartColorByIndex(index)} />
+                                    <LabelList dataKey="value" position="right" fill={ADMIN_CHART_THEME.slate} fontSize={10} fontWeight={950} />
+                                </Bar>
                             </BarChart>
                         </ResponsiveContainer>
                     </AnalyticsPanel>
@@ -4005,16 +4562,20 @@ const DashboardAdmin = () => {
                         fallbackInsight={chartInsight('Package performance is ready.', 'Bars rank packages by verified booking value.', 'Use the leading packages to guide recommendations and sales scripts.')}
                         guide={{ x: 'Verified revenue', y: 'Package' }}
                         loading={analyticsLoading && !!analytics}
+                        className={activeAnalyticsView === 'supporting' ? 'admin-analytics-compact-panel' : 'is-hidden'}
                         actions={renderAnalyticsFilterButton('packagePerformance', `Top ${packageViewFilters.limit}`)}
                     >
                         {visiblePackagePerformanceData.length ? (
                             <ResponsiveContainer width="100%" height="100%">
                                 <BarChart data={visiblePackagePerformanceData} layout="vertical" margin={{ top: 12, left: 28, right: 20, bottom: 4 }}>
-                                    <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#E5E7EB" />
-                                    <XAxis type="number" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#6B7280' }} tickFormatter={(value) => `PHP ${Math.round(value / 1000)}k`} />
-                                    <YAxis type="category" dataKey="label" width={130} axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#374151', fontWeight: 700 }} />
-                                    <RechartsTooltip formatter={(value) => formatCurrency(value)} />
-                                    <Bar dataKey="revenue" fill="#720101" radius={[0, 6, 6, 0]} name="Revenue" isAnimationActive={analyticsChartsAnimated} />
+                                    <ExecutiveGrid horizontal={false} vertical />
+                                    <ExecutiveXAxis type="number" tickFormatter={shortCurrency} />
+                                    <ExecutiveYAxis type="category" dataKey="label" width={148} tick={ADMIN_CHART_CATEGORY_TICK} />
+                                    <ExecutiveTooltip valueFormatter={(value) => formatCurrency(value)} />
+                                    <Bar dataKey="revenue" radius={[0, 7, 7, 0]} name="Revenue" isAnimationActive={analyticsChartsAnimated}>
+                                        <ExecutiveBarCells data={visiblePackagePerformanceData} colorFor={(_, index) => chartColorByIndex(index)} />
+                                        <LabelList dataKey="revenue" position="right" formatter={shortCurrency} fill={ADMIN_CHART_THEME.slate} fontSize={9} fontWeight={900} />
+                                    </Bar>
                                 </BarChart>
                             </ResponsiveContainer>
                         ) : <div className="admin-chart-empty">No package data for this filter.</div>}
@@ -4030,16 +4591,20 @@ const DashboardAdmin = () => {
                         fallbackInsight={chartInsight('Menu performance is ready.', 'Bars rank dishes by the active menu filter.', 'Use high-demand dishes for purchasing and package menu defaults.')}
                         guide={{ x: menuViewFilters.sort === 'pax' ? 'Guests served' : 'Selections', y: 'Dish' }}
                         loading={analyticsLoading && !!analytics}
+                        className={activeAnalyticsView === 'supporting' ? 'admin-analytics-compact-panel' : 'is-hidden'}
                         actions={renderAnalyticsFilterButton('menuPerformance', MENU_CATEGORY_OPTIONS.find(option => option.value === menuViewFilters.category)?.label || 'Dish type')}
                     >
                         {visibleMenuPerformanceData.length ? (
                             <ResponsiveContainer width="100%" height="100%">
                                 <BarChart data={visibleMenuPerformanceData} layout="vertical" margin={{ top: 12, left: 28, right: 20, bottom: 4 }}>
-                                    <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#E5E7EB" />
-                                    <XAxis type="number" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#6B7280' }} />
-                                    <YAxis type="category" dataKey="label" width={130} axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#374151', fontWeight: 700 }} />
-                                    <RechartsTooltip />
-                                    <Bar dataKey={menuViewFilters.sort === 'pax' ? 'paxServed' : 'selections'} fill="#720101" radius={[0, 6, 6, 0]} name={menuViewFilters.sort === 'pax' ? 'Guests served' : 'Selections'} isAnimationActive={analyticsChartsAnimated} />
+                                    <ExecutiveGrid horizontal={false} vertical />
+                                    <ExecutiveXAxis type="number" />
+                                    <ExecutiveYAxis type="category" dataKey="label" width={148} tick={ADMIN_CHART_CATEGORY_TICK} />
+                                    <ExecutiveTooltip />
+                                    <Bar dataKey={menuViewFilters.sort === 'pax' ? 'paxServed' : 'selections'} radius={[0, 7, 7, 0]} name={menuViewFilters.sort === 'pax' ? 'Guests served' : 'Selections'} isAnimationActive={analyticsChartsAnimated}>
+                                        <ExecutiveBarCells data={visibleMenuPerformanceData} colorFor={(_, index) => chartColorByIndex(index + 2)} />
+                                        <LabelList dataKey={menuViewFilters.sort === 'pax' ? 'paxServed' : 'selections'} position="right" fill={ADMIN_CHART_THEME.slate} fontSize={9} fontWeight={900} />
+                                    </Bar>
                                 </BarChart>
                             </ResponsiveContainer>
                         ) : <div className="admin-chart-empty">No menu selections for this filter.</div>}
@@ -4049,58 +4614,110 @@ const DashboardAdmin = () => {
                         id="revenue-forecast"
                         filterKey="revenueRegression"
                         kicker="Forecast"
-                        title="Revenue regression"
+                        title="Revenue Forecast Using Simple Linear Regression"
                         description={`${revenueRegressionHistoryMonths}-month history with a ${revenueRegressionHorizon}-month projection.`}
                         insight={revenueForecast.interpretation || analyticsInsightItems.forecast || normalizeInsight(revenueForecast.insight, 'Forecast gives planning context.')}
-                        fallbackInsight={chartInsight('Revenue regression is ready.', 'The line compares cumulative actual revenue with the OLS trend and projected path.', 'Use the next projected month to plan buffers before committing purchases.')}
-                        guide={{ x: 'Month (history + projection)', y: 'Cumulative verified revenue', items: [{ label: 'Cumulative actual', color: '#720101' }, { label: 'OLS trend / projection', color: '#f0aa0b', dashed: true }] }}
+                        fallbackInsight={chartInsight('Simple Linear Regression is ready.', 'The line compares cumulative actual revenue with the SLR trend and projected path.', 'Use the next projected period to plan buffers before committing purchases.')}
+                        guide={{ x: 'Period (history + projection)', y: 'Cumulative verified revenue', items: [{ label: 'Cumulative actual', color: '#720101' }, { label: 'SLR trend / projection', color: '#f0aa0b', dashed: true }] }}
                         loading={analyticsLoading && !!analytics}
-                        className="admin-analytics-panel-wide"
+                        className={activeAnalyticsView === 'thesis' ? 'admin-analytics-panel-wide admin-analytics-feature-panel' : 'is-hidden'}
                         chartHeight="h-72"
                         actions={renderAnalyticsFilterButton('revenueRegression', `${revenueRegressionHistoryMonths} mo history + ${revenueRegressionHorizon} mo projection`)}
                     >
                         {revenueForecastData.length ? (
                             <ResponsiveContainer width="100%" height="100%">
                                 <LineChart data={revenueForecastData} margin={{ top: 12, right: 20, bottom: 4, left: 14 }}>
-                                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E5E7EB" />
-                                    <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#6B7280' }} />
-                                    <YAxis width={76} axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#6B7280' }} tickFormatter={(value) => `PHP ${Math.round(value / 1000)}k`} />
-                                    <RechartsTooltip formatter={(value) => formatCurrency(value)} />
-                                    <Line type="monotone" dataKey="cumulativeRevenue" stroke="#720101" strokeWidth={3} dot={{ r: 3 }} name="Cumulative actual" connectNulls={false} isAnimationActive={analyticsChartsAnimated} />
-                                    <Line type="monotone" dataKey="trendLine" stroke="#f0aa0b" strokeWidth={3} strokeDasharray="6 4" dot={{ r: 3 }} name="OLS trend" connectNulls isAnimationActive={analyticsChartsAnimated} />
+                                    <ExecutiveGrid />
+                                    <ExecutiveXAxis dataKey="label" tick={{ ...ADMIN_CHART_AXIS_TICK, fontSize: 10 }} />
+                                    <ExecutiveYAxis width={76} tickFormatter={shortCurrency} />
+                                    <ExecutiveTooltip valueFormatter={(value) => formatCurrency(value)} />
+                                    {revenueForecastBoundaryLabel && <ReferenceLine x={revenueForecastBoundaryLabel} stroke={ADMIN_CHART_THEME.slate} strokeDasharray="4 4" label={{ value: 'Forecast', fill: ADMIN_CHART_THEME.slate, fontSize: 10, fontWeight: 900 }} />}
+                                    <Line type="monotone" dataKey="cumulativeRevenue" stroke={ADMIN_CHART_THEME.maroon} strokeWidth={3.5} dot={{ r: 3, fill: '#fff', stroke: ADMIN_CHART_THEME.maroon, strokeWidth: 2 }} activeDot={{ r: 6 }} name="Cumulative actual" connectNulls={false} isAnimationActive={analyticsChartsAnimated} />
+                                    <Line type="monotone" dataKey="trendLine" stroke={ADMIN_CHART_THEME.gold} strokeWidth={3.5} strokeDasharray="7 5" dot={{ r: 3, fill: '#fff', stroke: ADMIN_CHART_THEME.gold, strokeWidth: 2 }} name="SLR trend" connectNulls isAnimationActive={analyticsChartsAnimated} />
                                 </LineChart>
                             </ResponsiveContainer>
-                        ) : <div className="admin-chart-empty">No revenue regression data yet.</div>}
+                        ) : <div className="admin-chart-empty">Insufficient historical revenue data.</div>}
                     </AnalyticsPanel>
 
                     <AnalyticsPanel
                         id="pax-forecast"
                         filterKey="paxForecast"
                         kicker="Operations forecast"
-                        title="Guest demand forecast"
-                        description="Projected pax for staffing and preparation planning."
+                        title="Pax Demand Projection Using Simple Moving Average"
+                        description="Projected pax for staffing, purchasing, and preparation planning."
                         insight={paxDemandProjection.interpretation || analyticsInsightItems.forecast || normalizeInsight(paxDemandProjection.insight, 'Demand forecast gives planning context.')}
-                        fallbackInsight={chartInsight('Guest demand forecast is ready.', 'Bars compare actual guest volume with simple moving-average demand forecasts.', 'Use the forecast to plan staffing, purchasing, and prep capacity.')}
+                        fallbackInsight={chartInsight('Simple Moving Average projection is ready.', 'Bars compare actual guest volume with moving-average pax forecasts.', 'Use the forecast to plan staffing, purchasing, and prep capacity.')}
                         guide={{ x: 'Period', y: 'Guest count', items: [{ label: 'Actual guests', color: '#720101' }, { label: 'SMA forecast', color: '#f0aa0b' }] }}
                         loading={analyticsLoading && !!analytics}
-                        className="admin-analytics-panel-wide"
+                        className={activeAnalyticsView === 'thesis' ? 'admin-analytics-panel-wide admin-analytics-feature-panel' : 'is-hidden'}
                         chartHeight="h-72"
                         actions={renderAnalyticsFilterButton('paxForecast', `${analyticsFilters.pax_projection_period} demand`)}
                     >
                         {paxDemandData.length ? (
                             <ResponsiveContainer width="100%" height="100%">
                                 <BarChart data={paxDemandData} margin={{ top: 12, right: 20, bottom: 4, left: 0 }}>
-                                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E5E7EB" />
-                                    <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#6B7280' }} />
-                                    <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#6B7280' }} />
-                                    <RechartsTooltip />
-                                    <Bar dataKey="pax" fill="#720101" radius={[6, 6, 0, 0]} name="Actual guests" isAnimationActive={analyticsChartsAnimated} />
-                                    <Bar dataKey="forecast" fill="#f0aa0b" radius={[6, 6, 0, 0]} name="SMA forecast" isAnimationActive={analyticsChartsAnimated} />
+                                    <ExecutiveGrid />
+                                    <ExecutiveXAxis dataKey="label" tick={{ ...ADMIN_CHART_AXIS_TICK, fontSize: 10 }} />
+                                    <ExecutiveYAxis />
+                                    <ExecutiveTooltip />
+                                    {paxForecastBoundaryLabel && <ReferenceLine x={paxForecastBoundaryLabel} stroke={ADMIN_CHART_THEME.slate} strokeDasharray="4 4" label={{ value: 'Forecast', fill: ADMIN_CHART_THEME.slate, fontSize: 10, fontWeight: 900 }} />}
+                                    <Bar dataKey="pax" fill={ADMIN_CHART_THEME.maroon} radius={[7, 7, 0, 0]} name="Actual guests" isAnimationActive={analyticsChartsAnimated}>
+                                        <LabelList dataKey="pax" position="top" fill={ADMIN_CHART_THEME.slate} fontSize={9} fontWeight={900} />
+                                    </Bar>
+                                    <Bar dataKey="forecast" fill={ADMIN_CHART_THEME.gold} radius={[7, 7, 0, 0]} name="SMA forecast" isAnimationActive={analyticsChartsAnimated}>
+                                        <LabelList dataKey="forecast" position="top" fill={ADMIN_CHART_THEME.amber} fontSize={9} fontWeight={900} />
+                                    </Bar>
                                 </BarChart>
                             </ResponsiveContainer>
-                        ) : <div className="admin-chart-empty">No guest demand forecast data yet.</div>}
+                        ) : <div className="admin-chart-empty">Insufficient historical pax demand data.</div>}
+                    </AnalyticsPanel>
+
+                    <AnalyticsPanel
+                        id="peak-season-cross-tab"
+                        kicker="Decision support heatmap"
+                        title="Peak Season Cross-Tabulation Heatmap"
+                        description="Event type by month frequency matrix for seasonal staffing, purchasing, and campaign timing."
+                        insight={peakSeasonCrossTab.insight}
+                        fallbackInsight={chartInsight('Peak season cross-tabulation is ready.', 'Cells show event frequency by event type and calendar month.', 'Use high-intensity cells to plan staffing, purchasing, and campaign timing.')}
+                        guide={{ x: 'Calendar month', y: 'Event type/category' }}
+                        loading={peakSeasonLoading || (analyticsLoading && !!analytics)}
+                        className={activeAnalyticsView === 'thesis' ? 'admin-analytics-panel-wide admin-analytics-feature-panel' : 'is-hidden'}
+                        chartHeight="min-h-[22rem]"
+                        actions={renderDashboardFilterControl(
+                            'analyticsPeakSeason',
+                            peakSeasonFilters.year === 'all' ? 'All years' : peakSeasonFilters.year,
+                            <>
+                                <label className={analyticsFilterLabelClass}>
+                                    Year
+                                    <select value={peakSeasonFilters.year} onChange={(event) => setPeakSeasonFilters(current => ({ ...current, year: event.target.value }))} className={analyticsFilterInputClass}>
+                                        <option value="all">All years</option>
+                                        {HEATMAP_YEAR_OPTIONS.map(year => <option key={year} value={year}>{year}</option>)}
+                                    </select>
+                                </label>
+                                <label className={analyticsFilterLabelClass}>
+                                    Booking status
+                                    <select value={peakSeasonFilters.status} onChange={(event) => setPeakSeasonFilters(current => ({ ...current, status: event.target.value }))} className={analyticsFilterInputClass}>
+                                        <option value="">Pending, confirmed, completed</option>
+                                        <option value="Pending">Pending</option>
+                                        <option value="Confirmed">Confirmed</option>
+                                        <option value="Completed">Completed</option>
+                                    </select>
+                                </label>
+                                <label className={analyticsFilterLabelClass}>
+                                    Event type
+                                    <select value={peakSeasonFilters.event_type} onChange={(event) => setPeakSeasonFilters(current => ({ ...current, event_type: event.target.value }))} className={analyticsFilterInputClass}>
+                                        <option value="">All event types</option>
+                                        {peakSeasonEventTypeOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+                                    </select>
+                                </label>
+                            </>,
+                            'sm:grid-cols-3'
+                        )}
+                    >
+                        <PeakSeasonCrossTab />
                     </AnalyticsPanel>
                 </div>
+                )}
 
                 <div className="hidden grid gap-5 xl:grid-cols-[minmax(0,1.25fr)_minmax(20rem,.75fr)]">
                     <section className="admin-panel overflow-hidden">
@@ -4119,11 +4736,14 @@ const DashboardAdmin = () => {
                                     {revenueTrendData.length ? (
                                         <ResponsiveContainer width="100%" height="100%">
                                             <BarChart data={revenueTrendData}>
-                                                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E5E7EB" />
-                                                <XAxis dataKey="month" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#6B7280' }} />
-                                                <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#6B7280' }} />
-                                                <RechartsTooltip />
-                                                <Bar dataKey="revenue" fill="#720101" radius={[6, 6, 0, 0]} name="Revenue" />
+                                                <ExecutiveGrid />
+                                                <ExecutiveXAxis dataKey="month" />
+                                                <ExecutiveYAxis tickFormatter={shortCurrency} />
+                                                <ExecutiveTooltip valueFormatter={(value) => formatCurrency(value)} />
+                                                {revenueTrendAverage > 0 && <ReferenceLine y={revenueTrendAverage} stroke={ADMIN_CHART_THEME.gold} strokeDasharray="5 5" />}
+                                                <Bar dataKey="revenue" fill={ADMIN_CHART_THEME.maroon} radius={[7, 7, 0, 0]} name="Revenue">
+                                                    <LabelList dataKey="revenue" position="top" formatter={shortCurrency} fill={ADMIN_CHART_THEME.slate} fontSize={9} fontWeight={900} />
+                                                </Bar>
                                             </BarChart>
                                         </ResponsiveContainer>
                                     ) : <StaffSkeleton variant="panel" rows={3} />}
@@ -5417,7 +6037,7 @@ const DashboardAdmin = () => {
                                                     'sm:grid-cols-1'
                                                 )}
                                                 <button
-                                                    onClick={() => fetchAnalytics()}
+                                                    onClick={() => fetchAnalytics({ force: true })}
                                                     disabled={analyticsLoading}
                                                     className="admin-icon-action admin-refresh-action"
                                                     title={analyticsLoading ? 'Refreshing dashboard data' : 'Refresh dashboard data'}
@@ -5516,11 +6136,12 @@ const DashboardAdmin = () => {
                                             {revenueTrendData.length ? (
                                                 <ResponsiveContainer width="100%" height="100%">
                                                     <LineChart data={revenueTrendData}>
-                                                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E5E7EB" />
-                                                        <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#6B7280' }} />
-                                                        <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#6B7280' }} tickFormatter={(value) => `PHP ${Math.round(value / 1000)}k`} />
-                                                        <RechartsTooltip formatter={(value) => formatCurrency(value)} />
-                                                        <Line type="monotone" dataKey="revenue" stroke="#720101" strokeWidth={3} dot={{ r: 4 }} name="Collected" />
+                                                        <ExecutiveGrid />
+                                                        <ExecutiveXAxis dataKey="label" />
+                                                        <ExecutiveYAxis tickFormatter={shortCurrency} />
+                                                        <ExecutiveTooltip valueFormatter={(value) => formatCurrency(value)} />
+                                                        {revenueTrendAverage > 0 && <ReferenceLine y={revenueTrendAverage} stroke={ADMIN_CHART_THEME.gold} strokeDasharray="5 5" label={{ value: 'Avg', fill: ADMIN_CHART_THEME.amber, fontSize: 10, fontWeight: 900 }} />}
+                                                        <Line type="monotone" dataKey="revenue" stroke={ADMIN_CHART_THEME.maroon} strokeWidth={3.5} dot={{ r: 4, fill: '#fff', stroke: ADMIN_CHART_THEME.maroon, strokeWidth: 2 }} activeDot={{ r: 6 }} name="Collected" />
                                                     </LineChart>
                                                 </ResponsiveContainer>
                                             ) : <div className="flex h-full items-center justify-center rounded-xl bg-gray-50 text-sm font-bold text-gray-400">No collected revenue for this window.</div>}
@@ -5550,8 +6171,8 @@ const DashboardAdmin = () => {
                                             )}
                                         </div>
                                         <div className="space-y-3">
-                                            {visibleOperationalAlerts.map((alert) => (
-                                                <div key={alert.label} className={`rounded-xl border p-4 ${alert.severity === 'danger' ? 'border-red-200 bg-red-50' : alert.severity === 'warning' ? 'border-amber-200 bg-amber-50' : 'border-emerald-100 bg-emerald-50'}`}>
+                                            {visibleOperationalAlerts.map((alert, index) => (
+                                                <div key={`${alert.label || 'alert'}-${index}`} className={`rounded-xl border p-4 ${alert.severity === 'danger' ? 'border-red-200 bg-red-50' : alert.severity === 'warning' ? 'border-amber-200 bg-amber-50' : 'border-emerald-100 bg-emerald-50'}`}>
                                                     <div className="flex items-start justify-between gap-4">
                                                         <p className="text-sm font-black text-gray-900">{alert.label}</p>
                                                         <span className="rounded-full bg-white px-3 py-1 text-sm font-black text-gray-950 shadow-sm">{alert.count}</span>
@@ -5580,7 +6201,7 @@ const DashboardAdmin = () => {
                                                         <span className="flex items-center gap-2"><CreditCard className="h-3.5 w-3.5" /> Payment status</span>
                                                         <select value={paymentRiskFilters.status} onChange={(e) => setPaymentRiskFilters({ ...paymentRiskFilters, status: e.target.value })} className="mt-2 w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-black normal-case tracking-normal text-gray-800 outline-none">
                                                             <option value="all">All statuses</option>
-                                                            {paymentStatusBreakdown.map(row => <option key={row.label} value={String(row.label || '').toLowerCase()}>{row.label}</option>)}
+                                                            {paymentStatusBreakdown.map((row, index) => <option key={`${row.label || 'status'}-${index}`} value={String(row.label || '').toLowerCase()}>{row.label}</option>)}
                                                         </select>
                                                     </label>
                                                     <label className="text-[11px] font-black uppercase tracking-widest text-gray-400">
@@ -5595,18 +6216,21 @@ const DashboardAdmin = () => {
                                                 {visiblePaymentStatusBreakdown.length ? (
                                                     <ResponsiveContainer width="100%" height="100%">
                                                         <BarChart data={visiblePaymentStatusBreakdown}>
-                                                            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E5E7EB" />
-                                                            <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#6B7280' }} />
-                                                            <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#6B7280' }} />
-                                                            <RechartsTooltip formatter={(value, name) => name === 'total' ? formatCurrency(value) : value} />
-                                                            <Bar dataKey="total" fill="#f0aa0b" radius={[6, 6, 0, 0]} name="Amount" />
+                                                            <ExecutiveGrid />
+                                                            <ExecutiveXAxis dataKey="label" />
+                                                            <ExecutiveYAxis tickFormatter={shortCurrency} />
+                                                            <ExecutiveTooltip valueFormatter={(value) => formatCurrency(value)} />
+                                                            <Bar dataKey="total" radius={[7, 7, 0, 0]} name="Amount">
+                                                                <ExecutiveBarCells data={visiblePaymentStatusBreakdown} colorFor={(row, index) => chartStatusColor(row.label, index)} />
+                                                                <LabelList dataKey="total" position="top" formatter={shortCurrency} fill={ADMIN_CHART_THEME.slate} fontSize={9} fontWeight={900} />
+                                                            </Bar>
                                                         </BarChart>
                                                     </ResponsiveContainer>
                                                 ) : <div className="flex h-full items-center justify-center rounded-xl bg-gray-50 text-sm font-bold text-gray-400">No payment rows.</div>}
                                             </div>
                                             <div className="space-y-3">
-                                                {visiblePaymentAgingData.map((bucket) => (
-                                                    <div key={bucket.label} className="rounded-xl border border-gray-100 bg-gray-50 p-4">
+                                                {visiblePaymentAgingData.map((bucket, index) => (
+                                                    <div key={`${bucket.label || 'bucket'}-${index}`} className="rounded-xl border border-gray-100 bg-gray-50 p-4">
                                                         <div className="flex items-center justify-between gap-3">
                                                             <span className="text-sm font-black text-gray-800">{bucket.label}</span>
                                                             <span className="text-sm font-black text-gray-950">{formatCurrency(bucket.value || 0)}</span>
@@ -5644,8 +6268,8 @@ const DashboardAdmin = () => {
                                             )}
                                         </div>
                                         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-                                            {bookingPipelineData.slice(0, 3).map((row) => (
-                                                <div key={row.label} className="rounded-xl border border-gray-100 bg-white p-4 shadow-sm">
+                                            {bookingPipelineData.slice(0, 3).map((row, index) => (
+                                                <div key={`${row.label || 'pipeline'}-${index}`} className="rounded-xl border border-gray-100 bg-white p-4 shadow-sm">
                                                     <p className="text-[11px] font-black uppercase tracking-widest text-gray-400">{row.label}</p>
                                                     <p className="mt-2 text-2xl font-black text-gray-950">{row.count}</p>
                                                     <p className="text-xs font-bold text-amber-700">{formatCurrency(row.value || 0)}</p>
@@ -5748,8 +6372,8 @@ const DashboardAdmin = () => {
                                         <div className="mb-5 flex items-start justify-between gap-3">
                                             <div>
                                                 <p className="admin-kicker">Demand intensity</p>
-                                                <h3 className="mt-1 text-lg font-black text-gray-950">Peak Season Heatmap</h3>
-                                                <p className="mt-1 text-sm font-semibold text-gray-500">Monthly event load for planning purchasing and staffing.</p>
+                                                <h3 className="mt-1 text-lg font-black text-gray-950">Peak Season Cross-Tabulation Heatmap</h3>
+                                                <p className="mt-1 text-sm font-semibold text-gray-500">Event type by month demand for planning purchasing, staffing, and campaigns.</p>
                                             </div>
                                             {renderDashboardFilterControl(
                                                 'dashboardPeakSeason',
@@ -5801,27 +6425,20 @@ const DashboardAdmin = () => {
                                             </div>
                                             <div className="rounded-xl border border-gray-100 bg-white p-3">
                                                 <p className="text-[10px] font-black uppercase tracking-widest text-[#9f6500]">Busiest month</p>
-                                                <p className="mt-1 text-xl font-black text-gray-950">{peakSeasonBusiestMonth?.month || 'None'}</p>
+                                                <p className="mt-1 text-xl font-black text-gray-950">{peakSeasonBusiestMonth}</p>
+                                            </div>
+                                            <div className="rounded-xl border border-gray-100 bg-white p-3 sm:col-span-2">
+                                                <p className="text-[10px] font-black uppercase tracking-widest text-[#9f6500]">Busiest event type</p>
+                                                <p className="mt-1 text-xl font-black text-gray-950">{peakSeasonBusiestEventType}</p>
                                             </div>
                                         </div>
-                                        <div className={`grid grid-cols-3 gap-3 text-center text-xs sm:grid-cols-4 ${peakSeasonLoading ? 'opacity-60' : ''}`}>
-                                            {['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'].map((month) => {
-                                                const val = peakSeasonData.find(item => item.month === month)?.events || peakSeasonData.find(item => item.month === month)?.count || 0;
-                                                const bgColor = val <= 3 ? 'bg-green-100 text-green-800' : val <= 6 ? 'bg-yellow-200 text-yellow-800' : val <= 8 ? 'bg-orange-300 text-orange-900' : 'bg-red-500 text-white font-bold';
-                                                return (
-                                                    <div key={month} className={`rounded-xl p-3 ${bgColor}`}>
-                                                        <span className="block font-black">{month}</span>
-                                                        <span className="text-[11px] font-bold">{val} events</span>
-                                                    </div>
-                                                );
-                                            })}
-                                        </div>
+                                        <PeakSeasonCrossTab compact />
                                         <div className="admin-heatmap-legend mt-5">
                                             {[
-                                                ['bg-green-100', 'Low', '0-3 events'],
-                                                ['bg-yellow-200', 'Moderate', '4-6 events'],
-                                                ['bg-orange-300', 'High', '7-8 events'],
-                                                ['bg-red-500', 'Peak', '9+ events'],
+                                                ['admin-cross-tab-swatch is-low', 'Low', 'Lowest active cells'],
+                                                ['admin-cross-tab-swatch is-moderate', 'Moderate', '25-49% of peak'],
+                                                ['admin-cross-tab-swatch is-high', 'High', '50-74% of peak'],
+                                                ['admin-cross-tab-swatch is-peak', 'Peak', '75%+ of peak'],
                                             ].map(([color, label, range]) => (
                                                 <span key={label}>
                                                     <i className={color} />
@@ -5951,20 +6568,20 @@ const DashboardAdmin = () => {
                                     </div>
                                 </div>
 
-                                {/* Peak Season Heatmap Placeholder */}
+                                {/* Peak Season Cross-Tabulation Heatmap */}
                                 <div className="admin-panel p-6 lg:col-span-2">
                                     <h3 className="font-bold text-gray-900 mb-6 flex items-center gap-2">
                                         <svg className="w-5 h-5 text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
-                                        Peak Season Heatmap (Demand Intensity)
+                                        Peak Season Cross-Tabulation Heatmap
                                     </h3>
                                     <div className="grid grid-cols-6 md:grid-cols-12 gap-3 text-center text-xs">
-                                        {['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'].map((month, i) => {
-                                            const val = peakSeasonData.find(item => item.month === month)?.events || peakSeasonData.find(item => item.month === month)?.count || 0;
+                                        {HEATMAP_MONTHS.map((month, i) => {
+                                            const val = peakSeasonMonthlyTotals.find(item => item.month === month.label)?.events || peakSeasonMonthlyTotals.find(item => item.month === month.label)?.count || 0;
                                             const bgColor = val <= 3 ? 'bg-green-100 text-green-800' : val <= 6 ? 'bg-yellow-200 text-yellow-800' : val <= 8 ? 'bg-orange-300 text-orange-900' : 'bg-red-500 text-white font-bold shadow-sm';
 
                                             return (
                                                 <div key={i} className={`flex flex-col items-center justify-center p-4 rounded-xl ${bgColor} transition-transform hover:scale-105 cursor-default`}>
-                                                    <span className="font-bold text-sm mb-1">{month}</span>
+                                                    <span className="font-bold text-sm mb-1">{month.label}</span>
                                                 </div>
                                             );
                                         })}
@@ -5990,11 +6607,11 @@ const DashboardAdmin = () => {
                                     <div>
                                         <p className="admin-kicker">Predictive Intelligence</p>
                                         <h3 className="mt-1 text-2xl font-black text-gray-950">Business Forecasting & Operational Signals</h3>
-                                        <p className="mt-2 max-w-3xl text-sm font-semibold leading-6 text-gray-500">Forecast revenue and guest demand with simple moving averages, then review the operational signals admins need for staffing, purchasing, and payment follow-up.</p>
+                                        <p className="mt-2 max-w-3xl text-sm font-semibold leading-6 text-gray-500">Forecast revenue with Simple Linear Regression, project pax demand with Simple Moving Average, and review the operational signals admins need for staffing, purchasing, and payment follow-up.</p>
                                     </div>
                                     <button
                                         type="button"
-                                        onClick={() => fetchAnalytics()}
+                                        onClick={() => fetchAnalytics({ force: true })}
                                         disabled={analyticsLoading}
                                         className="admin-icon-action admin-refresh-action"
                                         aria-label={analyticsLoading ? 'Refreshing analytics' : 'Refresh analytics'}
@@ -6032,8 +6649,8 @@ const DashboardAdmin = () => {
                                         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                                             <div>
                                                 <p className="admin-kicker">Finance Forecast</p>
-                                                <h3 className="mt-1 text-xl font-black text-gray-950">Revenue Forecast Using OLS Regression</h3>
-                                                <p className="mt-2 text-sm font-semibold leading-6 text-gray-500">Projects cumulative verified revenue with a deterministic linear trend line.</p>
+                                                <h3 className="mt-1 text-xl font-black text-gray-950">Revenue Forecast Using Simple Linear Regression</h3>
+                                                <p className="mt-2 text-sm font-semibold leading-6 text-gray-500">Uses OLS to project cumulative verified revenue with a deterministic linear trend line.</p>
                                             </div>
                                             {renderAnalyticsFilterControl('revenueForecast', 'Forecast filters')}
                                         </div>
@@ -6054,12 +6671,13 @@ const DashboardAdmin = () => {
                                         {revenueForecastData.length ? (
                                             <ResponsiveContainer width="100%" height="100%">
                                                 <LineChart data={revenueForecastData}>
-                                                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E5E7EB" />
-                                                    <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#6B7280' }} />
-                                                    <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#6B7280' }} tickFormatter={(value) => `PHP ${Math.round(value / 1000)}k`} />
-                                                    <RechartsTooltip formatter={(value) => formatCurrency(value)} />
-                                                    <Line type="monotone" dataKey="cumulativeRevenue" stroke="#720101" strokeWidth={3} dot={{ r: 3 }} name="Cumulative actual" connectNulls={false} />
-                                                    <Line type="monotone" dataKey="trendLine" stroke="#f0aa0b" strokeWidth={3} strokeDasharray="6 4" dot={{ r: 3 }} name="OLS trend" connectNulls />
+                                                    <ExecutiveGrid />
+                                                    <ExecutiveXAxis dataKey="label" />
+                                                    <ExecutiveYAxis tickFormatter={shortCurrency} />
+                                                    <ExecutiveTooltip valueFormatter={(value) => formatCurrency(value)} />
+                                                    {revenueForecastBoundaryLabel && <ReferenceLine x={revenueForecastBoundaryLabel} stroke={ADMIN_CHART_THEME.slate} strokeDasharray="4 4" label={{ value: 'Forecast', fill: ADMIN_CHART_THEME.slate, fontSize: 10, fontWeight: 900 }} />}
+                                                    <Line type="monotone" dataKey="cumulativeRevenue" stroke={ADMIN_CHART_THEME.maroon} strokeWidth={3.5} dot={{ r: 3, fill: '#fff', stroke: ADMIN_CHART_THEME.maroon, strokeWidth: 2 }} activeDot={{ r: 6 }} name="Cumulative actual" connectNulls={false} />
+                                                    <Line type="monotone" dataKey="trendLine" stroke={ADMIN_CHART_THEME.gold} strokeWidth={3.5} strokeDasharray="7 5" dot={{ r: 3, fill: '#fff', stroke: ADMIN_CHART_THEME.gold, strokeWidth: 2 }} name="SLR trend" connectNulls />
                                                 </LineChart>
                                             </ResponsiveContainer>
                                         ) : <div className="flex h-full items-center justify-center rounded-xl bg-gray-50 text-sm font-bold text-gray-400">No revenue data available.</div>}
@@ -6072,7 +6690,7 @@ const DashboardAdmin = () => {
                                         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                                             <div>
                                                 <p className="admin-kicker">Operations Forecast</p>
-                                                <h3 className="mt-1 text-xl font-black text-gray-950">Moving Averages for Guest Demand Projection</h3>
+                                                <h3 className="mt-1 text-xl font-black text-gray-950">Pax Demand Projection Using Simple Moving Average</h3>
                                                 <p className="mt-2 text-sm font-semibold leading-6 text-gray-500">Smooths historical guest demand so culinary and logistics planning is not distorted by one-off spikes.</p>
                                             </div>
                                             {renderAnalyticsFilterControl('paxForecast', `${analyticsFilters.pax_projection_period} demand`)}
@@ -6094,15 +6712,20 @@ const DashboardAdmin = () => {
                                         {paxDemandData.length ? (
                                             <ResponsiveContainer width="100%" height="100%">
                                                 <BarChart data={paxDemandData}>
-                                                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E5E7EB" />
-                                                    <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#6B7280' }} />
-                                                    <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#6B7280' }} />
-                                                    <RechartsTooltip />
-                                                    <Bar dataKey="pax" fill="#2563eb" radius={[6, 6, 0, 0]} name="Actual guests" />
-                                                    <Bar dataKey="forecast" fill="#22c55e" radius={[6, 6, 0, 0]} name="SMA forecast" />
+                                                    <ExecutiveGrid />
+                                                    <ExecutiveXAxis dataKey="label" />
+                                                    <ExecutiveYAxis />
+                                                    <ExecutiveTooltip />
+                                                    {paxForecastBoundaryLabel && <ReferenceLine x={paxForecastBoundaryLabel} stroke={ADMIN_CHART_THEME.slate} strokeDasharray="4 4" label={{ value: 'Forecast', fill: ADMIN_CHART_THEME.slate, fontSize: 10, fontWeight: 900 }} />}
+                                                    <Bar dataKey="pax" fill={ADMIN_CHART_THEME.maroon} radius={[7, 7, 0, 0]} name="Actual guests">
+                                                        <LabelList dataKey="pax" position="top" fill={ADMIN_CHART_THEME.slate} fontSize={9} fontWeight={900} />
+                                                    </Bar>
+                                                    <Bar dataKey="forecast" fill={ADMIN_CHART_THEME.gold} radius={[7, 7, 0, 0]} name="SMA forecast">
+                                                        <LabelList dataKey="forecast" position="top" fill={ADMIN_CHART_THEME.amber} fontSize={9} fontWeight={900} />
+                                                    </Bar>
                                                 </BarChart>
                                             </ResponsiveContainer>
-                                        ) : <div className="flex h-full items-center justify-center rounded-xl bg-gray-50 text-sm font-bold text-gray-400">No guest demand data available.</div>}
+                                        ) : <div className="flex h-full items-center justify-center rounded-xl bg-gray-50 text-sm font-bold text-gray-400">Insufficient historical pax demand data.</div>}
                                     </div>
                                     <p className="mt-4 rounded-2xl bg-emerald-50 p-4 text-sm font-semibold leading-6 text-emerald-900">{paxDemandProjection.insight}</p>
                                 </section>
@@ -6121,11 +6744,12 @@ const DashboardAdmin = () => {
                                         {revenueTrendData.length ? (
                                             <ResponsiveContainer width="100%" height="100%">
                                                 <LineChart data={revenueTrendData}>
-                                                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E5E7EB" />
-                                                    <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#6B7280' }} />
-                                                    <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#6B7280' }} tickFormatter={(value) => `PHP ${Math.round(value / 1000)}k`} />
-                                                    <RechartsTooltip formatter={(value) => formatCurrency(value)} />
-                                                    <Line type="monotone" dataKey="revenue" stroke="#720101" strokeWidth={3} dot={{ r: 4 }} name="Collected" />
+                                                    <ExecutiveGrid />
+                                                    <ExecutiveXAxis dataKey="label" />
+                                                    <ExecutiveYAxis tickFormatter={shortCurrency} />
+                                                    <ExecutiveTooltip valueFormatter={(value) => formatCurrency(value)} />
+                                                    {revenueTrendAverage > 0 && <ReferenceLine y={revenueTrendAverage} stroke={ADMIN_CHART_THEME.gold} strokeDasharray="5 5" label={{ value: 'Avg', fill: ADMIN_CHART_THEME.amber, fontSize: 10, fontWeight: 900 }} />}
+                                                    <Line type="monotone" dataKey="revenue" stroke={ADMIN_CHART_THEME.maroon} strokeWidth={3.5} dot={{ r: 4, fill: '#fff', stroke: ADMIN_CHART_THEME.maroon, strokeWidth: 2 }} activeDot={{ r: 6 }} name="Collected" />
                                                 </LineChart>
                                             </ResponsiveContainer>
                                         ) : <div className="flex h-full items-center justify-center rounded-xl bg-gray-50 text-sm font-bold text-gray-400">No collected revenue for this window.</div>}
@@ -6145,18 +6769,21 @@ const DashboardAdmin = () => {
                                             {visiblePaymentStatusBreakdown.length ? (
                                                 <ResponsiveContainer width="100%" height="100%">
                                                     <BarChart data={visiblePaymentStatusBreakdown}>
-                                                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E5E7EB" />
-                                                        <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#6B7280' }} />
-                                                        <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#6B7280' }} />
-                                                        <RechartsTooltip formatter={(value, name) => name === 'total' ? formatCurrency(value) : value} />
-                                                        <Bar dataKey="total" fill="#f0aa0b" radius={[6, 6, 0, 0]} name="Amount" />
+                                                        <ExecutiveGrid />
+                                                        <ExecutiveXAxis dataKey="label" />
+                                                        <ExecutiveYAxis tickFormatter={shortCurrency} />
+                                                        <ExecutiveTooltip valueFormatter={(value) => formatCurrency(value)} />
+                                                        <Bar dataKey="total" radius={[7, 7, 0, 0]} name="Amount">
+                                                            <ExecutiveBarCells data={visiblePaymentStatusBreakdown} colorFor={(row, index) => chartStatusColor(row.label, index)} />
+                                                            <LabelList dataKey="total" position="top" formatter={shortCurrency} fill={ADMIN_CHART_THEME.slate} fontSize={9} fontWeight={900} />
+                                                        </Bar>
                                                     </BarChart>
                                                 </ResponsiveContainer>
                                             ) : <div className="flex h-full items-center justify-center rounded-xl bg-gray-50 text-sm font-bold text-gray-400">No payment rows.</div>}
                                         </div>
                                         <div className="space-y-3">
-                                            {visiblePaymentAgingData.map((bucket) => (
-                                                <div key={bucket.label} className="rounded-xl border border-gray-100 bg-gray-50 p-4">
+                                            {visiblePaymentAgingData.map((bucket, index) => (
+                                                <div key={`${bucket.label || 'bucket'}-${index}`} className="rounded-xl border border-gray-100 bg-gray-50 p-4">
                                                     <div className="flex items-center justify-between gap-3">
                                                         <span className="text-sm font-black text-gray-800">{bucket.label}</span>
                                                         <span className="text-sm font-black text-gray-950">{formatCurrency(bucket.value || 0)}</span>
@@ -6186,8 +6813,8 @@ const DashboardAdmin = () => {
                                         </div>
                                     </div>
                                     <div className="max-h-[31rem] space-y-3 overflow-y-auto p-6">
-                                        {visiblePackagePerformanceData.map((pkg) => (
-                                            <div key={pkg.label || pkg.name} className="rounded-xl border border-gray-100 bg-gray-50 p-4">
+                                        {visiblePackagePerformanceData.map((pkg, index) => (
+                                            <div key={`${pkg.id || pkg.package_id || pkg.label || pkg.name || 'package'}-${index}`} className="rounded-xl border border-gray-100 bg-gray-50 p-4">
                                                 <div className="flex items-start justify-between gap-4">
                                                     <div className="min-w-0">
                                                         <p className="truncate font-black text-gray-950">{pkg.label || pkg.name}</p>
@@ -6223,11 +6850,14 @@ const DashboardAdmin = () => {
                                         {visibleMenuPerformanceData.length ? (
                                             <ResponsiveContainer width="100%" height="100%">
                                                 <BarChart data={visibleMenuPerformanceData} layout="vertical" margin={{ left: 24, right: 12, top: 6, bottom: 6 }}>
-                                                    <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#E5E7EB" />
-                                                    <XAxis type="number" axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#6B7280' }} />
-                                                    <YAxis type="category" dataKey="label" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#374151', fontWeight: 700 }} width={150} />
-                                                    <RechartsTooltip />
-                                                    <Bar dataKey={menuViewFilters.sort === 'pax' ? 'paxServed' : 'selections'} fill="#720101" radius={[0, 6, 6, 0]} name={menuViewFilters.sort === 'pax' ? 'Guests served' : 'Selections'} />
+                                                    <ExecutiveGrid horizontal={false} vertical />
+                                                    <ExecutiveXAxis type="number" />
+                                                    <ExecutiveYAxis type="category" dataKey="label" width={160} tick={ADMIN_CHART_CATEGORY_TICK} />
+                                                    <ExecutiveTooltip />
+                                                    <Bar dataKey={menuViewFilters.sort === 'pax' ? 'paxServed' : 'selections'} radius={[0, 7, 7, 0]} name={menuViewFilters.sort === 'pax' ? 'Guests served' : 'Selections'}>
+                                                        <ExecutiveBarCells data={visibleMenuPerformanceData} colorFor={(_, index) => chartColorByIndex(index + 2)} />
+                                                        <LabelList dataKey={menuViewFilters.sort === 'pax' ? 'paxServed' : 'selections'} position="right" fill={ADMIN_CHART_THEME.slate} fontSize={10} fontWeight={900} />
+                                                    </Bar>
                                                 </BarChart>
                                             </ResponsiveContainer>
                                         ) : <div className="flex h-full items-center justify-center rounded-xl bg-gray-50 text-sm font-bold text-gray-400">No menu selections for the selected filters.</div>}

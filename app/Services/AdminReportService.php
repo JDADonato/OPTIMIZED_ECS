@@ -107,6 +107,7 @@ class AdminReportService
             $menuPerformance = $this->memo('menuPerformance', $filters, fn () => $this->menuPerformance($filters));
             $customerGrowth = $this->memo('customerGrowth', $filters, fn () => $this->customerGrowth($filters));
             $operationsLoad = $this->memo('operationsLoad', $filters, fn () => $this->operationsLoad($filters));
+            $peakSeasonCrossTab = $this->memo('peakSeasonCrossTab', $filters, fn () => $this->peakSeasonCrossTab($filters));
             $operationalAlerts = $this->memo('operationalAlerts', $filters, fn () => $this->operationalAlerts($filters));
             $salesFrequency = $this->memo('salesFrequencyDistribution', $filters, fn () => $this->salesFrequencyDistribution($filters));
             $revenueForecast = $this->memo('revenueForecast', $filters, fn () => $this->revenueForecast($filters));
@@ -132,6 +133,7 @@ class AdminReportService
                 ],
                 'conversionFunnel' => $this->memo('conversionFunnel', $filters, fn () => $this->conversionFunnel($filters)),
                 'operationsLoad' => $operationsLoad,
+                'peakSeasonCrossTab' => $peakSeasonCrossTab,
                 'alerts' => $operationalAlerts,
                 'operationalAlerts' => $operationalAlerts,
                 'salesFrequencyDistribution' => $salesFrequency,
@@ -149,13 +151,14 @@ class AdminReportService
                     'menuPerformance' => $menuPerformance,
                     'operationalAlerts' => $operationalAlerts,
                     'salesFrequency' => $salesFrequency,
+                    'peakSeasonCrossTab' => $peakSeasonCrossTab,
                     'revenueForecast' => $revenueForecast,
                     'paxDemandProjection' => $paxDemandProjection,
                 ]),
                 'projectedPaxDemand' => $paxDemandProjection['rows'],
                 'salesFrequency' => $this->legacySalesFrequency($filters),
                 'topSellers' => $packagePerformance['rows'],
-                'peakSeasons' => $operationsLoad,
+                'peakSeasons' => $peakSeasonCrossTab['monthlyTotals'] ?? $operationsLoad,
             ];
         });
     }
@@ -247,8 +250,17 @@ class AdminReportService
         $filters = $this->withSnapshotWindow($filters);
 
         return $this->cachedPart('operations', $filters, 60, function () use ($filters) {
+            $peakSeasonCrossTab = $this->memo('peakSeasonCrossTab', $filters, fn () => $this->peakSeasonCrossTab($filters));
+            $salesFrequency = $this->memo('salesFrequencyDistribution', $filters, fn () => $this->salesFrequencyDistribution($filters));
+            $revenueForecast = $this->memo('revenueForecast', $filters, fn () => $this->revenueForecast($filters));
+            $paxDemandProjection = $this->memo('paxDemandProjection', $filters, fn () => $this->paxDemandProjection($filters));
+
             return [
                 'operationsLoad' => $this->memo('operationsLoad', $filters, fn () => $this->operationsLoad($filters)),
+                'peakSeasonCrossTab' => $peakSeasonCrossTab,
+                'salesFrequencyDistribution' => $salesFrequency,
+                'revenueRegression' => $revenueForecast,
+                'demandMovingAverage' => $paxDemandProjection,
                 'alerts' => $this->memo('operationalAlerts', $filters, fn () => $this->operationalAlerts($filters)),
                 'insight' => $this->insightForWidget('operational_alerts', ['rows' => $this->memo('operationalAlerts', $filters, fn () => $this->operationalAlerts($filters))]),
             ];
@@ -288,6 +300,7 @@ class AdminReportService
                 'revenueForecast' => $revenueRegression,
                 'demandMovingAverage' => $demandMovingAverage,
                 'paxDemandProjection' => $demandMovingAverage,
+                'peakSeasonCrossTab' => $this->memo('peakSeasonCrossTab', $filters, fn () => $this->peakSeasonCrossTab($filters)),
                 'insights' => [
                     'salesFrequency' => $salesFrequency['insight'] ?? null,
                     'revenueRegression' => $revenueRegression['interpretation'] ?? null,
@@ -435,6 +448,7 @@ class AdminReportService
             'pipeline' => isset($parts['bookingPipeline']) ? $this->insightForWidget('booking_pipeline', $parts['bookingPipeline']) : null,
             'menu' => isset($parts['packagePerformance']) ? $this->insightForWidget('package_performance', $parts['packagePerformance']) : null,
             'salesFrequency' => $parts['salesFrequency']['insight'] ?? null,
+            'peakSeason' => $parts['peakSeasonCrossTab']['insight'] ?? null,
         ])->filter();
 
         $priority = ['critical' => 4, 'warning' => 3, 'watch' => 2, 'good' => 1];
@@ -507,16 +521,25 @@ class AdminReportService
 
     private function insightForForecasts(array $revenueForecast, array $paxProjection): array
     {
+        if (($revenueForecast['is_insufficient_data'] ?? false) || ($paxProjection['is_insufficient_data'] ?? false)) {
+            return $this->insight(
+                'Predictive analytics need more historical data.',
+                'The named analytics are available, but the current filters do not expose enough real records for both the Simple Linear Regression and Simple Moving Average models.',
+                'Broaden the filter window or keep collecting verified payments and completed booking demand before using the forecast for planning.',
+                'good'
+            );
+        }
+
         $direction = (string) ($revenueForecast['summary']['direction'] ?? 'upward');
         $nextRevenue = (float) ($revenueForecast['summary']['nextForecast'] ?? 0);
         $forecastPax = (int) ($paxProjection['summary']['nextForecast'] ?? $paxProjection['summary']['forecastPax'] ?? 0);
 
         if ($direction === 'downward') {
-            return $this->insight('Revenue regression is trending downward.', 'Revenue is trending downward with an expected trajectory of '.$this->peso($nextRevenue).' next month.', 'Check upcoming confirmed bookings and payment schedules before planning expenses.', 'warning');
+            return $this->insight('Simple Linear Regression is trending downward.', 'Revenue is trending downward with an expected trajectory of '.$this->peso($nextRevenue).' in the next forecast period.', 'Check upcoming confirmed bookings and payment schedules before planning expenses.', 'warning');
         }
 
         if ($forecastPax > 0) {
-            return $this->insight('Forecasts are usable for preparation.', 'Revenue is trending upward with an expected trajectory of '.$this->peso($nextRevenue).' next month, while demand projects '.number_format($forecastPax).' guests.', 'Share the revenue and demand projections with finance, handoff, and operations planning.', 'watch');
+            return $this->insight('Predictive analytics are usable for preparation.', 'Revenue is trending upward with an expected trajectory of '.$this->peso($nextRevenue).', while SMA demand projects '.number_format($forecastPax).' guests.', 'Share the revenue and demand projections with finance, handoff, and operations planning.', 'watch');
         }
 
         return $this->insight('Forecast needs more history.', 'There is not enough visible demand to make this projection very useful yet.', 'Use actual booking queues until more history is available.', 'good');
@@ -599,7 +622,7 @@ class AdminReportService
     private function cachedPart(string $part, array $filters, int $ttlSeconds, callable $callback): array
     {
         $version = Cache::get('admin.analytics.version', 1);
-        $key = 'admin.analytics.v5.'.$version.'.'.$part.'.'.$this->filterHash($filters);
+        $key = 'admin.analytics.v6.'.$version.'.'.$part.'.'.$this->filterHash($filters);
 
         return Cache::remember($key, now()->addSeconds($ttlSeconds), $callback);
     }
@@ -959,42 +982,48 @@ class AdminReportService
 
     private function revenueForecast(array $filters): array
     {
-        $historyCount = min(max((int) ($filters['trend_months'] ?? 12), 6), 24);
-        $horizon = 3;
-        $end = today()->startOfMonth();
-        $start = $end->copy()->subMonths($historyCount - 1);
-        $monthExpression = $this->monthExpression('payments.verified_at');
+        $period = $this->normalizePeriod($filters['revenue_forecast_period'] ?? 'monthly');
+        $requestedHistoryMonths = min(max((int) ($filters['trend_months'] ?? 12), 6), 24);
+        $historyCount = $period === 'quarterly'
+            ? max(4, (int) ceil($requestedHistoryMonths / 3))
+            : $requestedHistoryMonths;
+        $horizon = min(max((int) ($filters['revenue_forecast_horizon'] ?? ($period === 'quarterly' ? 4 : 3)), 1), 12);
+        $end = $this->periodStart(today(), $period);
+        $start = $this->shiftPeriod($end, -($historyCount - 1), $period);
+        $periodExpression = $this->periodExpression('payments.verified_at', $period);
 
         $rows = $this->paymentQuery($filters)
             ->whereIn('payments.status', ['Paid', 'Verified'])
             ->whereNotNull('payments.verified_at')
             ->where('payments.verified_at', '<=', now())
             ->where('payments.verified_at', '>=', $start->toDateString())
-            ->where('payments.verified_at', '<', $end->copy()->addMonth()->toDateString())
-            ->selectRaw("$monthExpression as month")
+            ->where('payments.verified_at', '<', $this->shiftPeriod($end, 1, $period)->toDateString())
+            ->selectRaw("$periodExpression as period_key")
             ->selectRaw('SUM(payments.amount) as revenue')
-            ->groupBy('month')
-            ->orderBy('month')
+            ->groupBy('period_key')
+            ->orderBy('period_key')
             ->get()
-            ->keyBy('month');
+            ->keyBy('period_key');
 
         $monthly = collect(range(0, $historyCount - 1))
-            ->map(function ($index) use ($start, $rows) {
-                $month = $start->copy()->addMonths($index);
-                $key = $month->format('Y-m');
+            ->map(function ($index) use ($start, $period, $rows) {
+                $date = $this->shiftPeriod($start, $index, $period);
+                $key = $this->periodKey($date, $period);
 
                 return [
                     'x' => $index + 1,
                     'period' => $key,
                     'month' => $key,
-                    'label' => $month->format('M Y'),
+                    'label' => $this->periodLabel($date, $period),
                     'revenue' => (float) ($rows[$key]->revenue ?? 0),
                 ];
             })
             ->values();
 
-        if ((float) $monthly->sum('revenue') <= 0) {
-            return $this->fallbackRevenueRegression($filters, $historyCount, $horizon);
+        $sampleSize = $monthly->filter(fn ($row) => (float) ($row['revenue'] ?? 0) > 0)->count();
+
+        if ($sampleSize < 2) {
+            return $this->insufficientRevenueRegression($monthly->all(), $period, $historyCount, $horizon, $sampleSize);
         }
 
         $cumulative = 0.0;
@@ -1030,16 +1059,16 @@ class AdminReportService
 
         for ($i = 1; $i <= $horizon; $i++) {
             $x = $historyCount + $i;
-            $date = $end->copy()->addMonths($i);
+            $date = $this->shiftPeriod($end, $i, $period);
             $trend = max($regression['alpha'] + ($regression['beta'] * $x), 0);
             $monthlyForecast = max($trend - $previousTrend, 0);
             $previousTrend = $trend;
 
             $projection[] = [
                 'x' => $x,
-                'period' => $date->format('Y-m'),
-                'month' => $date->format('Y-m'),
-                'label' => $date->format('M Y'),
+                'period' => $this->periodKey($date, $period),
+                'month' => $this->periodKey($date, $period),
+                'label' => $this->periodLabel($date, $period),
                 'revenue' => null,
                 'cumulativeRevenue' => null,
                 'trendLine' => round($trend, 2),
@@ -1057,8 +1086,19 @@ class AdminReportService
         $changePercent = $lastMonthly > 0 ? round((($nextForecast - $lastMonthly) / $lastMonthly) * 100, 1) : 0;
 
         return [
-            'period' => 'monthly',
+            'method' => 'Simple Linear Regression (OLS)',
+            'formula' => 'Y = a + bX',
+            'variables' => [
+                'Y' => 'Projected cumulative verified revenue.',
+                'a' => 'Regression intercept.',
+                'b' => 'Regression slope.',
+                'X' => 'Sequential time period index.',
+            ],
+            'period' => $period,
             'horizon' => $horizon,
+            'historyWindow' => $historyCount,
+            'sampleSize' => $sampleSize,
+            'is_insufficient_data' => false,
             'is_fallback' => false,
             'alpha' => round($regression['alpha'], 4),
             'beta' => round($regression['beta'], 4),
@@ -1072,15 +1112,16 @@ class AdminReportService
                 'lastMonthlyRevenue' => $lastMonthly,
                 'direction' => $direction,
                 'changePercent' => $changePercent,
-                'method' => 'OLS linear regression',
+                'method' => 'Simple Linear Regression (OLS)',
+                'sampleSize' => $sampleSize,
             ],
             'interpretation' => $this->insight(
-                'Revenue regression is ready.',
-                'Revenue is trending '.$direction.' with an expected trajectory of '.$this->peso($nextForecast).' next month.',
+                'Simple Linear Regression revenue forecast is ready.',
+                'Verified revenue is trending '.$direction.' with an expected trajectory of '.$this->peso($nextForecast).' for the next '.$period.' period.',
                 'Consider adjusting operational buffers and purchasing commitments before the next planning cycle.',
                 $direction === 'downward' ? 'warning' : 'watch'
             ),
-            'insight' => 'Revenue is trending '.$direction.' with an expected trajectory of '.$this->peso($nextForecast).' next month. Consider adjusting operational buffers.',
+            'insight' => 'Verified revenue is trending '.$direction.' with an expected trajectory of '.$this->peso($nextForecast).' for the next '.$period.' period. Consider adjusting operational buffers.',
         ];
     }
 
@@ -1156,8 +1197,10 @@ class AdminReportService
             ->values()
             ->all();
 
-        if (array_sum($seriesValues) <= 0) {
-            return $this->fallbackPaxDemandProjection($filters, $period, $horizon, $window);
+        $sampleSize = count(array_filter($seriesValues, fn ($value) => (float) $value > 0));
+
+        if ($sampleSize < $window) {
+            return $this->insufficientPaxDemandProjection($history->all(), $period, $horizon, $window, $sampleSize);
         }
 
         $forecastRows = [];
@@ -1181,9 +1224,19 @@ class AdminReportService
         $nextForecast = (int) ($forecastRows[0]['forecast'] ?? 0);
 
         return [
+            'method' => 'Simple Moving Average (SMA)',
+            'formula' => 'SMA = (P1 + P2 + ... + Pn) / n',
+            'variables' => [
+                'SMA' => 'Projected pax demand for the next period.',
+                'P' => 'Historical pax demand per period.',
+                'n' => 'Configured moving-average window.',
+            ],
             'period' => $period,
             'smaWindow' => $window,
             'horizon' => $horizon,
+            'historyWindow' => $historyCount,
+            'sampleSize' => $sampleSize,
+            'is_insufficient_data' => false,
             'is_fallback' => false,
             'rows' => $history->concat($forecastRows)->values()->all(),
             'summary' => [
@@ -1192,15 +1245,16 @@ class AdminReportService
                 'nextForecast' => $nextForecast,
                 'nextMonthBaseline' => $nextForecast,
                 'peakPeriod' => $peak['label'] ?? 'No historical demand',
-                'method' => strtoupper((string) $window).'-period SMA',
+                'method' => 'Simple Moving Average ('.strtoupper((string) $window).'-period SMA)',
+                'sampleSize' => $sampleSize,
             ],
             'interpretation' => $this->insight(
-                'Guest demand baseline is ready.',
-                'The smoothed moving average projects a baseline requirement for '.number_format($nextForecast).' total guests next month.',
+                'Simple Moving Average pax demand projection is ready.',
+                'The moving average projects a baseline requirement for '.number_format($nextForecast).' total guests in the next '.$period.' period.',
                 'Ensure raw ingredient inventory aligns with this baseline before supplier commitments are finalized.',
                 'watch'
             ),
-            'insight' => 'The smoothed moving average projects a baseline requirement for '.number_format($nextForecast).' total guests next month. Ensure raw ingredient inventory aligns with this baseline.',
+            'insight' => 'The moving average projects a baseline requirement for '.number_format($nextForecast).' total guests in the next '.$period.' period. Ensure raw ingredient inventory aligns with this baseline.',
         ];
     }
 
@@ -1247,6 +1301,149 @@ class AdminReportService
             ])
             ->values()
             ->all();
+    }
+
+    private function peakSeasonCrossTab(array $filters): array
+    {
+        $months = collect(range(1, 12))
+            ->map(fn ($month) => [
+                'key' => str_pad((string) $month, 2, '0', STR_PAD_LEFT),
+                'label' => Carbon::create(2024, $month, 1)->format('M'),
+                'monthNumber' => $month,
+            ])
+            ->values()
+            ->all();
+
+        $monthExpression = $this->calendarMonthExpression('event_date');
+        $query = $this->bookingQuery($filters);
+
+        if (! isset($filters['booking_status'])) {
+            $query->whereIn('status', ['Pending', 'Confirmed', 'Completed']);
+        }
+
+        $records = $query
+            ->selectRaw("COALESCE(NULLIF(event_type, ''), 'Unspecified Event') as event_type_label")
+            ->selectRaw("$monthExpression as month_key")
+            ->selectRaw('COUNT(*) as events')
+            ->selectRaw('SUM(pax) as pax')
+            ->groupBy('event_type_label', 'month_key')
+            ->orderBy('event_type_label')
+            ->orderBy('month_key')
+            ->get();
+
+        $maxEvents = max((int) $records->max('events'), 0);
+        $monthlyTotals = collect($months)
+            ->map(fn ($month) => [
+                'month' => $month['label'],
+                'monthNumber' => $month['monthNumber'],
+                'events' => 0,
+                'count' => 0,
+                'pax' => 0,
+            ])
+            ->keyBy('monthNumber')
+            ->all();
+
+        $rows = $records
+            ->groupBy('event_type_label')
+            ->map(function ($group, $label) use ($months, $maxEvents, &$monthlyTotals) {
+                $cellsByMonth = $group->keyBy(fn ($row) => (int) $row->month_key);
+                $cells = collect($months)
+                    ->map(function ($month) use ($cellsByMonth, $maxEvents, &$monthlyTotals) {
+                        $monthNumber = (int) $month['monthNumber'];
+                        $record = $cellsByMonth->get($monthNumber);
+                        $events = (int) ($record->events ?? 0);
+                        $pax = (int) ($record->pax ?? 0);
+
+                        if ($events > 0) {
+                            $monthlyTotals[$monthNumber]['events'] += $events;
+                            $monthlyTotals[$monthNumber]['count'] += $events;
+                            $monthlyTotals[$monthNumber]['pax'] += $pax;
+                        }
+
+                        return [
+                            ...$month,
+                            'events' => $events,
+                            'count' => $events,
+                            'pax' => $pax,
+                            'intensity' => $this->heatmapIntensity($events, $maxEvents),
+                        ];
+                    })
+                    ->values()
+                    ->all();
+
+                return [
+                    'eventType' => (string) $label,
+                    'label' => (string) $label,
+                    'totalEvents' => (int) collect($cells)->sum('events'),
+                    'totalPax' => (int) collect($cells)->sum('pax'),
+                    'months' => $cells,
+                ];
+            })
+            ->sortByDesc('totalEvents')
+            ->values()
+            ->all();
+
+        $monthlyTotals = collect($monthlyTotals)
+            ->map(fn ($row) => [
+                ...$row,
+                'intensity' => $this->heatmapIntensity((int) $row['events'], max((int) collect($monthlyTotals)->max('events'), 0)),
+            ])
+            ->values()
+            ->all();
+
+        $busiestMonth = collect($monthlyTotals)->sortByDesc('events')->first();
+        $busiestEventType = collect($rows)->sortByDesc('totalEvents')->first();
+        $totalEvents = collect($rows)->sum('totalEvents');
+        $totalPax = collect($rows)->sum('totalPax');
+
+        return [
+            'method' => 'Cross-tabulation frequency heatmap',
+            'formula' => 'Frequency = count of bookings grouped by event type and calendar month',
+            'variables' => [
+                'rows' => 'Event type or category.',
+                'columns' => 'Calendar month from January to December.',
+                'cell' => 'Booking frequency and pax demand for the event type during the month.',
+            ],
+            'months' => $months,
+            'rows' => $rows,
+            'monthlyTotals' => $monthlyTotals,
+            'summary' => [
+                'busiestMonth' => $busiestMonth['month'] ?? 'No month',
+                'busiestMonthEvents' => (int) ($busiestMonth['events'] ?? 0),
+                'busiestEventType' => $busiestEventType['label'] ?? 'No event type',
+                'busiestEventTypeEvents' => (int) ($busiestEventType['totalEvents'] ?? 0),
+                'totalEvents' => (int) $totalEvents,
+                'totalPax' => (int) $totalPax,
+                'sampleSize' => (int) $totalEvents,
+            ],
+            'is_insufficient_data' => $totalEvents === 0,
+            'insight' => $this->insight(
+                $totalEvents > 0 ? 'Peak season cross-tabulation is ready.' : 'Peak season cross-tabulation needs booking history.',
+                $totalEvents > 0
+                    ? 'The busiest month is '.($busiestMonth['month'] ?? 'unknown').' and the leading event type is '.($busiestEventType['label'] ?? 'unknown').'.'
+                    : 'No pending, confirmed, or completed bookings match the selected filters yet.',
+                $totalEvents > 0
+                    ? 'Use the high-intensity cells to plan staffing, purchasing, and campaign timing.'
+                    : 'Broaden the filters or wait for more booking records before using seasonal heatmap decisions.',
+                $totalEvents > 0 ? 'watch' : 'good'
+            ),
+        ];
+    }
+
+    private function heatmapIntensity(int $value, int $max): string
+    {
+        if ($value <= 0 || $max <= 0) {
+            return 'none';
+        }
+
+        $ratio = $value / $max;
+
+        return match (true) {
+            $ratio >= 0.75 => 'peak',
+            $ratio >= 0.5 => 'high',
+            $ratio >= 0.25 => 'moderate',
+            default => 'low',
+        };
     }
 
     private function operationalAlerts(array $filters): array
@@ -1414,6 +1611,7 @@ class AdminReportService
                 'frequency' => (int) $row['count'],
                 'revenue' => round((float) $row['revenue'], 2),
                 'percentage' => $total > 0 ? round(((int) $row['count'] / $total) * 100, 1) : 0,
+                'revenueContribution' => $revenue > 0 ? round(((float) $row['revenue'] / $revenue) * 100, 1) : 0,
             ])
             ->sortByDesc('count')
             ->values()
@@ -1425,12 +1623,20 @@ class AdminReportService
             : 'No verified sales volume is available for package-category distribution yet.';
 
         return [
+            'method' => 'Frequency Distribution',
+            'formula' => 'Percentage = (category frequency / total frequency) x 100',
+            'variables' => [
+                'frequency' => 'Number of verified bookings in the package category.',
+                'percentage' => 'Share of verified booking frequency represented by the category.',
+                'revenueContribution' => 'Share of verified revenue represented by the category.',
+            ],
             'rows' => $rows,
             'summary' => [
                 'totalFrequency' => (int) $total,
                 'totalRevenue' => round((float) $revenue, 2),
                 'leader' => $top['label'] ?? 'No package category',
                 'leaderPercentage' => (float) ($top['percentage'] ?? 0),
+                'sampleSize' => (int) $total,
             ],
             'is_fallback' => $isFallback,
             'insight' => $this->insight(
@@ -1440,32 +1646,6 @@ class AdminReportService
                 $isFallback ? 'warning' : 'watch'
             ),
         ];
-    }
-
-    private function fallbackSalesFrequencyDistribution(array $filters): array
-    {
-        $seed = $this->advancedFallbackSeed($filters, 'sales-frequency');
-        $rows = collect($this->salesValueTiers())
-            ->values()
-            ->map(function ($tier, $index) use ($seed) {
-                $count = $this->pseudoBetween($seed, $index, 3, 18);
-                $average = match ($tier['key']) {
-                    'premium' => 340000,
-                    'birthday' => 210000,
-                    'standard' => 165000,
-                    'custom' => 120000,
-                    default => 100000,
-                };
-
-                return [
-                    ...$tier,
-                    'count' => $count,
-                    'revenue' => $count * $average,
-                ];
-            })
-            ->all();
-
-        return $this->salesFrequencyPayload($rows, true);
     }
 
     private function ordinaryLeastSquares(array $points): array
@@ -1489,175 +1669,84 @@ class AdminReportService
         return ['alpha' => (float) $alpha, 'beta' => (float) $beta];
     }
 
-    private function fallbackRevenueRegression(array $filters, int $historyCount, int $horizon): array
+    private function insufficientRevenueRegression(array $historical, string $period, int $historyCount, int $horizon, int $sampleSize): array
     {
-        $seed = $this->advancedFallbackSeed($filters, 'revenue-regression');
-        $end = today()->startOfMonth();
-        $start = $end->copy()->subMonths($historyCount - 1);
-        $monthly = collect(range(0, $historyCount - 1))
-            ->map(function ($index) use ($start, $seed) {
-                $month = $start->copy()->addMonths($index);
-                $base = 85000 + ($index * 9000);
-                $variance = $this->pseudoBetween($seed, $index, -18000, 32000);
-
-                return [
-                    'x' => $index + 1,
-                    'period' => $month->format('Y-m'),
-                    'month' => $month->format('Y-m'),
-                    'label' => $month->format('M Y'),
-                    'revenue' => max($base + $variance, 15000),
-                ];
-            })
-            ->values();
-
-        $cumulative = 0.0;
-        $history = $monthly->map(function ($row) use (&$cumulative) {
-            $cumulative += (float) $row['revenue'];
-
-            return [
-                ...$row,
-                'cumulativeRevenue' => round($cumulative, 2),
-                'trendLine' => null,
-                'projectedTrend' => null,
-                'forecast' => null,
-                'isForecast' => false,
-            ];
-        })->values();
-        $regression = $this->ordinaryLeastSquares($history->map(fn ($row) => ['x' => (float) $row['x'], 'y' => (float) $row['cumulativeRevenue']])->all());
-        $history = $history->map(fn ($row) => [
-            ...$row,
-            'trendLine' => round(max($regression['alpha'] + ($regression['beta'] * (float) $row['x']), 0), 2),
-        ])->values();
-        $projection = [];
-        $previousTrend = (float) ($history->last()['trendLine'] ?? 0);
-
-        for ($i = 1; $i <= $horizon; $i++) {
-            $x = $historyCount + $i;
-            $date = $end->copy()->addMonths($i);
-            $trend = max($regression['alpha'] + ($regression['beta'] * $x), 0);
-            $monthlyForecast = max($trend - $previousTrend, 0);
-            $previousTrend = $trend;
-            $projection[] = [
-                'x' => $x,
-                'period' => $date->format('Y-m'),
-                'month' => $date->format('Y-m'),
-                'label' => $date->format('M Y'),
-                'revenue' => null,
-                'cumulativeRevenue' => null,
-                'trendLine' => round($trend, 2),
-                'projectedTrend' => round($trend, 2),
-                'forecast' => round($monthlyForecast, 2),
-                'projectedRevenue' => round($monthlyForecast, 2),
-                'isForecast' => true,
-            ];
-        }
-
-        $nextForecast = (float) ($projection[0]['projectedRevenue'] ?? 0);
-
         return [
-            'period' => 'monthly',
+            'method' => 'Simple Linear Regression (OLS)',
+            'formula' => 'Y = a + bX',
+            'variables' => [
+                'Y' => 'Projected cumulative verified revenue.',
+                'a' => 'Regression intercept.',
+                'b' => 'Regression slope.',
+                'X' => 'Sequential time period index.',
+            ],
+            'period' => $period,
             'horizon' => $horizon,
-            'is_fallback' => true,
-            'alpha' => round($regression['alpha'], 4),
-            'beta' => round($regression['beta'], 4),
-            'historical' => $history->all(),
-            'projection' => $projection,
-            'rows' => $history->concat($projection)->values()->all(),
+            'historyWindow' => $historyCount,
+            'sampleSize' => $sampleSize,
+            'is_insufficient_data' => true,
+            'is_fallback' => false,
+            'alpha' => null,
+            'beta' => null,
+            'historical' => $historical,
+            'projection' => [],
+            'rows' => [],
             'summary' => [
-                'nextForecast' => $nextForecast,
-                'nextTrend' => (float) ($projection[0]['projectedTrend'] ?? 0),
-                'lastActual' => (float) ($history->last()['cumulativeRevenue'] ?? 0),
-                'lastMonthlyRevenue' => (float) ($history->last()['revenue'] ?? 0),
-                'direction' => $regression['beta'] >= 0 ? 'upward' : 'downward',
+                'nextForecast' => null,
+                'nextTrend' => null,
+                'lastActual' => 0,
+                'lastMonthlyRevenue' => 0,
+                'direction' => 'insufficient',
                 'changePercent' => 0,
-                'method' => 'OLS linear regression',
+                'method' => 'Simple Linear Regression (OLS)',
+                'sampleSize' => $sampleSize,
             ],
             'interpretation' => $this->insight(
-                'Fallback revenue regression is active.',
-                'Revenue is trending upward with an expected trajectory of '.$this->peso($nextForecast).' next month.',
-                'Replace fallback values with verified payments as soon as real history is available.',
-                'warning'
+                'Simple Linear Regression needs more verified revenue history.',
+                'At least two periods with verified revenue are required before the system can draw a defensible regression line.',
+                'Use actual booking and payment queues until more verified payment periods are available.',
+                'good'
             ),
-            'insight' => 'Fallback revenue regression is active. Revenue is trending upward with an expected trajectory of '.$this->peso($nextForecast).' next month.',
+            'insight' => 'Insufficient historical data for Simple Linear Regression revenue forecasting.',
         ];
     }
 
-    private function fallbackPaxDemandProjection(array $filters, string $period, int $horizon, int $window): array
+    private function insufficientPaxDemandProjection(array $historical, string $period, int $horizon, int $window, int $sampleSize): array
     {
-        $seed = $this->advancedFallbackSeed($filters, 'pax-demand');
-        $end = $this->periodStart(today(), $period);
-        $historyCount = $period === 'quarterly' ? 10 : 18;
-        $start = $this->shiftPeriod($end, -($historyCount - 1), $period);
-        $seriesValues = [];
-        $history = collect(range(0, $historyCount - 1))
-            ->map(function ($index) use ($start, $period, $seed, &$seriesValues) {
-                $date = $this->shiftPeriod($start, $index, $period);
-                $pax = $this->pseudoBetween($seed, $index, 70, 280);
-                $seriesValues[] = (float) $pax;
-
-                return [
-                    'period' => $this->periodKey($date, $period),
-                    'label' => $this->periodLabel($date, $period),
-                    'pax' => $pax,
-                    'events' => max(1, (int) round($pax / 95)),
-                    'forecast' => null,
-                    'isForecast' => false,
-                ];
-            })
-            ->values();
-
-        $forecastRows = [];
-        for ($i = 1; $i <= $horizon; $i++) {
-            $forecast = $this->simpleMovingAverage($seriesValues, $window);
-            $seriesValues[] = $forecast;
-            $date = $this->shiftPeriod($end, $i, $period);
-            $forecastRows[] = [
-                'period' => $this->periodKey($date, $period),
-                'label' => $this->periodLabel($date, $period),
-                'pax' => null,
-                'events' => null,
-                'forecast' => (int) round($forecast),
-                'isForecast' => true,
-            ];
-        }
-
-        $nextForecast = (int) ($forecastRows[0]['forecast'] ?? 0);
-
         return [
+            'method' => 'Simple Moving Average (SMA)',
+            'formula' => 'SMA = (P1 + P2 + ... + Pn) / n',
+            'variables' => [
+                'SMA' => 'Projected pax demand for the next period.',
+                'P' => 'Historical pax demand per period.',
+                'n' => 'Configured moving-average window.',
+            ],
             'period' => $period,
             'smaWindow' => $window,
             'horizon' => $horizon,
-            'is_fallback' => true,
-            'rows' => $history->concat($forecastRows)->values()->all(),
+            'historyWindow' => count($historical),
+            'sampleSize' => $sampleSize,
+            'is_insufficient_data' => true,
+            'is_fallback' => false,
+            'rows' => [],
+            'historical' => $historical,
             'summary' => [
-                'historicalPax' => (int) $history->sum('pax'),
-                'forecastPax' => (int) collect($forecastRows)->sum('forecast'),
-                'nextForecast' => $nextForecast,
-                'nextMonthBaseline' => $nextForecast,
-                'peakPeriod' => ($history->sortByDesc('pax')->first()['label'] ?? 'Fallback demand'),
-                'method' => strtoupper((string) $window).'-period SMA',
+                'historicalPax' => (int) collect($historical)->sum('pax'),
+                'forecastPax' => null,
+                'nextForecast' => null,
+                'nextMonthBaseline' => null,
+                'peakPeriod' => 'Insufficient history',
+                'method' => 'Simple Moving Average ('.strtoupper((string) $window).'-period SMA)',
+                'sampleSize' => $sampleSize,
             ],
             'interpretation' => $this->insight(
-                'Fallback demand baseline is active.',
-                'The smoothed moving average projects a baseline requirement for '.number_format($nextForecast).' total guests next month.',
-                'Use this only for panel evaluation until real booking history is available.',
-                'warning'
+                'Simple Moving Average needs more pax history.',
+                'The selected moving-average window requires at least '.$window.' periods with guest demand before a defensible projection can be shown.',
+                'Use confirmed upcoming events until more historical demand periods are available.',
+                'good'
             ),
-            'insight' => 'Fallback demand baseline is active. The smoothed moving average projects a baseline requirement for '.number_format($nextForecast).' total guests next month.',
+            'insight' => 'Insufficient historical data for Simple Moving Average pax demand projection.',
         ];
-    }
-
-    private function advancedFallbackSeed(array $filters, string $salt): string
-    {
-        return $salt.':'.$this->filterHash($filters).':'.today()->format('Y-m-d');
-    }
-
-    private function pseudoBetween(string $seed, int $index, int $min, int $max): int
-    {
-        $range = max(1, $max - $min + 1);
-        $value = abs(crc32($seed.':'.$index));
-
-        return $min + (int) ($value % $range);
     }
 
     private function peso(float $amount): string
