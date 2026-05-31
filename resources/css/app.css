@@ -9679,6 +9679,10 @@
   outline: 0;
 }
 
+.customer-chat-scroll {
+  overflow-x: hidden;
+}
+
 .customer-chat-message-sections {
   display: grid;
   gap: .75rem;
@@ -9773,7 +9777,7 @@
 .customer-chat-message-unit {
   position: relative;
   display: grid;
-  max-width: min(82%, 18rem);
+  max-width: min(78%, 17rem);
   min-width: 0;
   gap: .1rem;
 }
@@ -9793,6 +9797,7 @@
   min-width: 0;
   align-items: center;
   gap: .2rem;
+  overflow: visible;
 }
 
 .customer-chat-message.is-mine .customer-chat-message-row {
@@ -9887,13 +9892,19 @@
   position: relative;
   z-index: 35;
   display: flex;
+  max-width: 1.25rem;
+  min-width: 1.25rem;
   align-items: center;
+  justify-content: center;
+  flex: 0 0 1.25rem;
   opacity: 0;
   pointer-events: none;
   transition: opacity .12s ease;
 }
 
 .customer-chat-message:hover .customer-chat-message-actions,
+.customer-chat-message-unit:hover .customer-chat-message-actions,
+.customer-chat-message-row:hover .customer-chat-message-actions,
 .customer-chat-message:focus-within .customer-chat-message-actions,
 .customer-chat-message-actions.is-open {
   opacity: 1;
@@ -9902,8 +9913,11 @@
 
 .customer-chat-message-actions > button {
   display: inline-flex;
+  width: 1.25rem;
+  height: 1.25rem;
   align-items: center;
   justify-content: center;
+  border-radius: 999px;
   border: 0;
   background: transparent;
   color: #64748b;
@@ -9923,7 +9937,7 @@
 .customer-chat-message-menu {
   position: absolute;
   top: 50%;
-  right: calc(100% + .3rem);
+  left: calc(100% + .3rem);
   z-index: 45;
   width: max-content;
   min-width: 0;
@@ -9937,8 +9951,8 @@
 }
 
 .customer-chat-message.is-mine .customer-chat-message-menu {
-  right: auto;
-  left: calc(100% + .3rem);
+  right: calc(100% + .3rem);
+  left: auto;
 }
 
 .customer-chat-message-menu button {
@@ -9956,6 +9970,16 @@
 .customer-chat-message-menu button:hover {
   background: #fff7e8;
   color: #720101;
+}
+
+.customer-chat-message-menu button:disabled {
+  cursor: default;
+  color: #94a3b8;
+}
+
+.customer-chat-message-menu button:disabled:hover {
+  background: transparent;
+  color: #94a3b8;
 }
 
 .customer-chat-message-menu .is-danger {
@@ -9985,11 +10009,11 @@
 }
 
 .customer-chat-message.is-mine .customer-chat-message-hover-time {
-  right: calc(100% + .35rem);
+  right: calc(100% + .25rem);
 }
 
 .customer-chat-message.is-theirs .customer-chat-message-hover-time {
-  left: calc(100% + .35rem);
+  left: calc(100% + .25rem);
 }
 
 .customer-chat-message-unit:hover .customer-chat-message-hover-time,
@@ -10035,6 +10059,31 @@
 }
 
 @media (max-width: 480px) {
+  .customer-chat-message-unit {
+    max-width: min(76%, 16rem);
+  }
+
+  .customer-chat-message-menu {
+    top: auto;
+    right: auto;
+    bottom: calc(100% + .35rem);
+    left: 50%;
+    max-width: min(10rem, 70vw);
+    transform: translateX(-50%);
+  }
+
+  .customer-chat-message.is-mine .customer-chat-message-menu {
+    right: 0;
+    left: auto;
+    transform: none;
+  }
+
+  .customer-chat-message.is-theirs .customer-chat-message-menu {
+    right: auto;
+    left: 0;
+    transform: none;
+  }
+
   .customer-chat-message-hover-time {
     top: auto;
     bottom: calc(100% + .22rem);

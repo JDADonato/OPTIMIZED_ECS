@@ -183,7 +183,20 @@ Route::middleware('cache.headers:public;max_age=300;etag')->group(function () {
 // Client routes
 
 // Public Views (Client Side)
-Route::get('/book', fn () => Inertia::render('client/BookingWizard'))->name('booking.wizard');
+Route::get('/book', function () {
+    $version = (int) cache()->get('catalog.version', 1);
+    $eventTypes = cache()->remember("catalog.public.event_types.v{$version}.booking", now()->addMinutes(10), fn () => (
+        \App\Models\EventType::query()
+            ->whereRaw('is_active is true')
+            ->orderBy('label')
+            ->limit(50)
+            ->get()
+    ));
+
+    return Inertia::render('client/BookingWizard', [
+        'initialEventTypes' => $eventTypes,
+    ]);
+})->name('booking.wizard');
 Route::get('/menu', fn () => Inertia::render('client/MenuGallery'))->name('menu.gallery');
 Route::get('/food-tasting', fn () => Inertia::render('client/FoodTasting'))->name('food-tasting');
 
@@ -236,7 +249,21 @@ Route::middleware(['auth', 'role:Client'])->group(function () {
 Route::middleware(['auth', 'role:Marketing,Admin'])->group(function () {
     Route::get('/preview/menu', fn () => Inertia::render('client/MenuGallery', ['previewMode' => true]))->name('preview.menu');
     Route::get('/preview/packages', fn () => Inertia::render('client/MenuGallery', ['previewMode' => true, 'previewPanel' => 'packages']))->name('preview.packages');
-    Route::get('/preview/book', fn () => Inertia::render('client/BookingWizard', ['previewMode' => true]))->name('preview.booking');
+    Route::get('/preview/book', function () {
+        $version = (int) cache()->get('catalog.version', 1);
+        $eventTypes = cache()->remember("catalog.public.event_types.v{$version}.booking", now()->addMinutes(10), fn () => (
+            \App\Models\EventType::query()
+                ->whereRaw('is_active is true')
+                ->orderBy('label')
+                ->limit(50)
+                ->get()
+        ));
+
+        return Inertia::render('client/BookingWizard', [
+            'previewMode' => true,
+            'initialEventTypes' => $eventTypes,
+        ]);
+    })->name('preview.booking');
     Route::get('/preview/customer-booking/{booking}', [BookingController::class, 'preview'])->name('preview.customer-booking');
     Route::get('/preview/announcements/{announcement}', [AnnouncementController::class, 'preview'])->name('preview.announcement');
     Route::get('/dashboard/marketing', fn () => Inertia::render('DashboardMarketing'))->name('dashboard.marketing');

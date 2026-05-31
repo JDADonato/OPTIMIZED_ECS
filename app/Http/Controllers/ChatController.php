@@ -21,6 +21,7 @@ use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Str;
 
 /**
@@ -129,19 +130,27 @@ class ChatController extends Controller
         $user = Auth::user();
         $this->authorizeConversationAccess($user, $conversation);
 
-        $limit = $this->pageLimit($request, 30, 75);
-        $query = $conversation->messages()
-            ->with('sender:id,username,role')
-            ->latest('id');
+        $limit = $this->pageLimit($request, 20, 75);
+        $query = Message::query()
+            ->where('conversation_id', $conversation->id)
+            ->with('sender:id,username,role');
+        $isDeltaSync = $request->filled('after_id');
 
-        if ($request->filled('before_id')) {
-            $query->where('id', '<', (int) $request->query('before_id'));
+        if ($isDeltaSync) {
+            $query->where('id', '>', (int) $request->query('after_id'))
+                ->oldest('id');
+        } else {
+            $query->latest('id');
+
+            if ($request->filled('before_id')) {
+                $query->where('id', '<', (int) $request->query('before_id'));
+            }
         }
 
         $rows = $query->limit($limit + 1)->get();
         $hasMore = $rows->count() > $limit;
-        $messages = $rows->take($limit)
-            ->reverse()
+        $limitedRows = $rows->take($limit);
+        $messages = ($isDeltaSync ? $limitedRows : $limitedRows->reverse())
             ->values()
             ->map(fn ($msg) => $this->formatMessage($msg, $user));
 
@@ -158,6 +167,7 @@ class ChatController extends Controller
             'pagination' => [
                 'has_more' => $hasMore,
                 'before_id' => $messages->first()['id'] ?? null,
+                'after_id' => $messages->last()['id'] ?? null,
             ],
         ]);
     }
@@ -195,14 +205,13 @@ class ChatController extends Controller
             return $response;
         }
 
-        $message = Message::create([
-            'conversation_id' => $conversation->id,
-            'sender_id' => $user->id,
-            'receiver_id' => $this->messageReceiverId($conversation, $user),
-            'message' => $request->message,
-        ]);
+        [$message, $wasCreated] = $this->createChatMessage($conversation, $user, $request->message, $clientTempId);
 
         $message->load('sender:id,username,role');
+
+        if (! $wasCreated) {
+            return response()->json($this->formatMessage($message, $user), 200);
+        }
 
         // Broadcast the message to the conversation channel. If Reverb is offline,
         // message delivery still succeeds and polling/refresh can catch up.
@@ -228,7 +237,7 @@ class ChatController extends Controller
             }
         }
 
-        return response()->json($this->formatMessage($message, $user, $clientTempId), 201);
+        return response()->json($this->formatMessage($message, $user), 201);
     }
 
     // ─────────────────────────────────────────────
@@ -286,14 +295,22 @@ class ChatController extends Controller
         }
 
         // Create the first message
-        $message = Message::create([
-            'conversation_id' => $conversation->id,
-            'sender_id' => $user->id,
-            'receiver_id' => $this->messageReceiverId($conversation, $user),
-            'message' => $request->message,
-        ]);
+        [$message, $wasCreated] = $this->createChatMessage($conversation, $user, $request->message, $clientTempId);
 
         $message->load('sender:id,username,role');
+
+        if (! $wasCreated) {
+            return response()->json([
+                'conversation' => [
+                    'id' => $conversation->id,
+                    'client_id' => $conversation->client_id,
+                    'staff_id' => $conversation->staff_id,
+                    'booking_id' => $conversation->booking_id,
+                    'status' => $conversation->status,
+                ],
+                'message' => $this->formatMessage($message, $user),
+            ], 200);
+        }
 
         // Broadcast events. Fail softly so an offline Reverb server does not block chat.
         if ($isNew) {
@@ -312,7 +329,7 @@ class ChatController extends Controller
                 'booking_id' => $conversation->booking_id,
                 'status' => $conversation->status,
             ],
-            'message' => $this->formatMessage($message, $user, $clientTempId),
+            'message' => $this->formatMessage($message, $user),
         ], $isNew ? 201 : 200);
     }
 
@@ -846,6 +863,7 @@ class ChatController extends Controller
             'edited_at' => $msg->edited_at,
             'deleted_at' => $msg->deleted_at,
             'delete_reason' => $msg->deleted_at && in_array($currentUser->role, ['Marketing', 'Admin']) ? $msg->delete_reason : null,
+            'metadata' => $msg->metadata,
             'created_at' => $msg->created_at->toISOString(),
             'time' => $localTime->format('g:i A'),
             'sender_name' => $msg->sender->username ?? 'Unknown',
@@ -853,11 +871,48 @@ class ChatController extends Controller
             'is_booking_card' => str_starts_with($msg->message, '📋 BOOKING DETAILS'),
         ];
 
-        if ($clientTempId) {
-            $payload['client_temp_id'] = $clientTempId;
+        if ($msg->client_temp_id || $clientTempId) {
+            $payload['client_temp_id'] = $msg->client_temp_id ?: $clientTempId;
         }
 
         return $payload;
+    }
+
+    private function existingClientTempMessage(Conversation $conversation, int $senderId, ?string $clientTempId): ?Message
+    {
+        if (! $clientTempId) {
+            return null;
+        }
+
+        return Message::query()
+            ->with('sender:id,username,role')
+            ->where('conversation_id', $conversation->id)
+            ->where('sender_id', $senderId)
+            ->where('client_temp_id', $clientTempId)
+            ->first();
+    }
+
+    private function createChatMessage(Conversation $conversation, $sender, string $text, ?string $clientTempId): array
+    {
+        try {
+            $message = Message::create([
+                'conversation_id' => $conversation->id,
+                'sender_id' => $sender->id,
+                'client_temp_id' => $clientTempId,
+                'receiver_id' => $this->messageReceiverId($conversation, $sender),
+                'message' => $text,
+            ]);
+        } catch (QueryException $error) {
+            if ($existing = $this->existingClientTempMessage($conversation, (int) $sender->id, $clientTempId)) {
+                return [$existing, false];
+            }
+
+            throw $error;
+        }
+
+        $message->load('sender:id,username,role');
+
+        return [$message, true];
     }
 
     private function clientTempId(Request $request): ?string

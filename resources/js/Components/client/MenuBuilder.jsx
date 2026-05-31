@@ -19,6 +19,40 @@ const CATEGORY_LABELS = {
 };
 
 const money = (value) => `\u20B1${Number(value || 0).toLocaleString()}`;
+const emptyMenuGroups = { starter: [], main: [], side: [], dessert: [], drink: [] };
+
+const BookingMenuSkeleton = ({ rows = 6 }) => (
+    <div className="grid grid-cols-1 gap-4 md:grid-cols-2" aria-label="Loading menu choices">
+        {Array.from({ length: rows }).map((_, index) => (
+            <div key={index} className="rounded-xl border border-[#720101]/10 bg-white p-4">
+                <div className="flex gap-4">
+                    <div className="h-24 w-24 flex-shrink-0 animate-pulse rounded-lg bg-gradient-to-r from-[#fffaf3] via-white to-[#f1e5dc]" />
+                    <div className="min-w-0 flex-1 space-y-3">
+                        <div className="h-4 w-2/3 animate-pulse rounded-full bg-gray-100" />
+                        <div className="h-3 w-full animate-pulse rounded-full bg-gray-100" />
+                        <div className="h-3 w-3/4 animate-pulse rounded-full bg-gray-100" />
+                        <div className="h-4 w-24 animate-pulse rounded-full bg-[#720101]/10" />
+                    </div>
+                    <div className="h-9 w-16 animate-pulse rounded-full bg-gray-100" />
+                </div>
+            </div>
+        ))}
+    </div>
+);
+
+const BookingPackageSkeleton = ({ rows = 3 }) => (
+    <>
+        {Array.from({ length: rows }).map((_, index) => (
+            <div key={index} className="rounded-2xl border border-[#720101]/10 bg-white p-5 shadow-sm">
+                <div className="h-3 w-20 animate-pulse rounded-full bg-[#720101]/10" />
+                <div className="mt-4 h-6 w-2/3 animate-pulse rounded-full bg-gray-100" />
+                <div className="mt-3 h-3 w-full animate-pulse rounded-full bg-gray-100" />
+                <div className="mt-2 h-3 w-4/5 animate-pulse rounded-full bg-gray-100" />
+                <div className="mt-6 h-10 w-full animate-pulse rounded-xl bg-[#720101]/10" />
+            </div>
+        ))}
+    </>
+);
 
 // Open menu builder stays flexible. Curated packages use their structure as included allowances.
 const CATEGORY_LIMITS = {
@@ -291,8 +325,15 @@ const MenuBuilder = ({ bookingData, updateBooking, onNext, onBack, mode = 'full'
 
     // Pricing overrides from server
     const [pricingOverrides, setPricingOverrides] = useState({});
-    const [customItems, setCustomItems] = useState({ starter: [], main: [], side: [], dessert: [], drink: [] });
+    const [customItems, setCustomItems] = useState(emptyMenuGroups);
     const [curatedPackages, setCuratedPackages] = useState([]);
+    const [menuCatalogLoading, setMenuCatalogLoading] = useState(true);
+    const [menuCatalogLoaded, setMenuCatalogLoaded] = useState(false);
+    const [menuCatalogError, setMenuCatalogError] = useState(false);
+    const [pricingLoading, setPricingLoading] = useState(true);
+    const [packagesLoading, setPackagesLoading] = useState(true);
+    const [packagesLoaded, setPackagesLoaded] = useState(false);
+    const [packagesError, setPackagesError] = useState(false);
     const [lightboxDish, setLightboxDish] = useState(null);
     const [menuSearch, setMenuSearch] = useState('');
     const [menuFilter, setMenuFilter] = useState('all');
@@ -310,24 +351,48 @@ const MenuBuilder = ({ bookingData, updateBooking, onNext, onBack, mode = 'full'
                 }
             } catch (error) {
                 console.error("Error fetching pricing overrides:", error);
+            } finally {
+                setPricingLoading(false);
             }
         };
         fetchOverrides();
-        fetchMenuItemsFromAPI().then(organizedDishes => setCustomItems(organizedDishes));
+        setMenuCatalogLoading(true);
+        setMenuCatalogError(false);
+        fetchMenuItemsFromAPI()
+            .then(organizedDishes => {
+                setCustomItems(organizedDishes || emptyMenuGroups);
+                setMenuCatalogLoaded(true);
+            })
+            .catch(error => {
+                console.error('Error fetching menu catalog:', error);
+                setCustomItems(emptyMenuGroups);
+                setMenuCatalogError(true);
+                setMenuCatalogLoaded(true);
+            })
+            .finally(() => setMenuCatalogLoading(false));
     }, []);
 
     useEffect(() => {
         const slug = bookingData.eventTypeSlug;
         const packageUrl = slug ? `/api/packages/type/${encodeURIComponent(slug)}` : '/api/packages?per_page=100';
+        setPackagesLoading(true);
+        setPackagesLoaded(false);
+        setPackagesError(false);
         fetch(packageUrl)
             .then(res => res.ok ? res.json() : null)
             .then(data => {
                 const list = Array.isArray(data) ? data : (data?.data || []);
                 setCuratedPackages(list);
+                setPackagesLoaded(true);
             })
             .catch(error => {
                 console.error('Error fetching curated packages:', error);
                 setCuratedPackages([]);
+                setPackagesLoaded(true);
+                setPackagesError(true);
+            })
+            .finally(() => {
+                setPackagesLoading(false);
             });
     }, [bookingData.eventTypeSlug]);
 
@@ -357,7 +422,18 @@ const MenuBuilder = ({ bookingData, updateBooking, onNext, onBack, mode = 'full'
     }, [mergedDishes, pax, pricingOverrides]);
     const budgetNumber = parseInt(budget || 0, 10);
     const isBudgetReady = budgetMinimum > 0 && budgetNumber >= budgetMinimum;
-    const budgetMissingCategory = CATEGORY_TABS.find(tab => (mergedDishes[tab.key] || []).length === 0);
+    const isMenuCatalogLoading = menuCatalogLoading || pricingLoading || !menuCatalogLoaded;
+    const isMenuCatalogReady = menuCatalogLoaded && !menuCatalogLoading && !pricingLoading;
+    const budgetMissingCategory = isMenuCatalogReady ? CATEGORY_TABS.find(tab => (mergedDishes[tab.key] || []).length === 0) : null;
+    const budgetStatusMessage = isMenuCatalogLoading
+        ? 'Menu prices are still loading.'
+        : menuCatalogError
+            ? 'Menu prices could not be loaded. Please try again later.'
+            : budgetMissingCategory
+                ? `No active ${budgetMissingCategory.label.toLowerCase()} dishes are available yet.`
+                : budgetMinimum > 0
+                    ? `For ${pax} guests, a complete menu starts at ${money(budgetMinimum)}. This includes at least one choice from each menu section.`
+                    : 'Checking the starting menu price for your guest count.';
     const packageTerms = [
         ...GLOBAL_PAYMENT_TERMS,
         packageCategory.pricingNote,
@@ -719,7 +795,7 @@ const MenuBuilder = ({ bookingData, updateBooking, onNext, onBack, mode = 'full'
     const activeCategoryExtraCount = activeCategoryAllowance ? Math.max(0, activeCategoryCount - activeCategoryAllowance) : 0;
     const isGuidedMenu = bookingData.package_id === 'custom';
     const isCuratedSelection = bookingData.package_id && !['custom', 'budget-guided'].includes(String(bookingData.package_id));
-    const canAdvanceMenu = isGuidedMenu ? (!isLastCategory || allCategoriesFilled) : allCategoriesFilled;
+    const canAdvanceMenu = !isMenuCatalogLoading && !menuCatalogError && (isGuidedMenu ? (!isLastCategory || allCategoriesFilled) : allCategoriesFilled);
     const hasAnySelection = totalDishCount > 0;
     const showMenuGuide = isGuidedMenu || hasPackagePricing;
     const goToPreviousCategory = () => {
@@ -769,6 +845,12 @@ const MenuBuilder = ({ bookingData, updateBooking, onNext, onBack, mode = 'full'
     const totalMenuPages = Math.max(1, Math.ceil(activeDishes.length / dishesPerPage));
     const currentMenuPage = Math.min(menuPage, totalMenuPages);
     const pagedDishes = activeDishes.slice((currentMenuPage - 1) * dishesPerPage, currentMenuPage * dishesPerPage);
+    const activeSourceDishes = mergedDishes[activeTab] || [];
+    const hasActiveSourceDishes = activeSourceDishes.length > 0;
+    const menuEmptyTitle = hasActiveSourceDishes ? 'No dishes match these filters.' : 'No active dishes are available yet.';
+    const menuEmptyCopy = hasActiveSourceDishes
+        ? 'Try a different search, filter, or category.'
+        : 'This category has loaded, but no published dishes are available right now.';
     const packageSubSteps = phase === 'curated'
         ? ['Choose method', 'Select package']
         : ['Choose method'];
@@ -818,17 +900,13 @@ const MenuBuilder = ({ bookingData, updateBooking, onNext, onBack, mode = 'full'
                         </div>
 
                         <div className={`rounded-xl border px-3 py-2 text-xs font-bold leading-relaxed ${isBudgetReady ? 'border-green-100 bg-green-50 text-green-700' : 'border-amber-200 bg-amber-50 text-amber-800'}`}>
-                            {budgetMissingCategory
-                                ? `Menu prices are still loading for ${budgetMissingCategory.label}.`
-                                : budgetMinimum > 0
-                                    ? `For ${pax} guests, a complete menu starts at ${money(budgetMinimum)}. This includes at least one choice from each menu section.`
-                                    : 'Checking the starting menu price for your guest count.'}
+                            {budgetStatusMessage}
                         </div>
 
                         <div className="flex gap-4">
                             <button
                                 onClick={applyBudgetMaximizer}
-                                disabled={!isBudgetReady || Boolean(budgetMissingCategory)}
+                                disabled={!isBudgetReady || Boolean(budgetMissingCategory) || isMenuCatalogLoading || menuCatalogError}
                                 className={`flex-1 py-4 rounded-xl font-bold shadow-lg transition-all transform active:scale-95 flex items-center justify-center ${isBudgetReady && !budgetMissingCategory
                                     ? 'bg-red-900 text-white hover:bg-red-800 hover:shadow-xl'
                                     : 'bg-gray-200 text-gray-400 cursor-not-allowed'
@@ -903,11 +981,7 @@ const MenuBuilder = ({ bookingData, updateBooking, onNext, onBack, mode = 'full'
                                     className="mb-5 w-full rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm font-bold text-gray-900 outline-none focus:border-red-900 focus:ring-4 focus:ring-red-900/10"
                                 />
                                 <div className={`mb-5 rounded-xl border px-3 py-2 text-xs font-bold leading-relaxed ${isBudgetReady ? 'border-green-100 bg-green-50 text-green-700' : 'border-amber-200 bg-amber-50 text-amber-800'}`}>
-                                    {budgetMissingCategory
-                                        ? `Menu prices are still loading for ${budgetMissingCategory.label}.`
-                                        : budgetMinimum > 0
-                                            ? `For ${pax} guests, a complete menu starts at ${money(budgetMinimum)}. This includes at least one choice from each menu section.`
-                                            : 'Checking the starting menu price for your guest count.'}
+                                    {budgetStatusMessage}
                                 </div>
                                 <ul className="space-y-2 text-xs text-gray-500 mb-5">
                                     <li className="flex items-center"><svg className="w-4 h-4 mr-2 text-green-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>Auto-selects dishes to fit your budget</li>
@@ -917,7 +991,7 @@ const MenuBuilder = ({ bookingData, updateBooking, onNext, onBack, mode = 'full'
                                 <button
                                     type="button"
                                     onClick={applyBudgetMaximizer}
-                                    disabled={!isBudgetReady || Boolean(budgetMissingCategory)}
+                                    disabled={!isBudgetReady || Boolean(budgetMissingCategory) || isMenuCatalogLoading || menuCatalogError}
                                     className="text-green-600 font-bold text-sm flex items-center group-hover:translate-x-1 transition-transform disabled:cursor-not-allowed disabled:opacity-50"
                                 >
                                     Build from budget
@@ -1009,7 +1083,14 @@ const MenuBuilder = ({ bookingData, updateBooking, onNext, onBack, mode = 'full'
 
                 <div className="booking-package-layout booking-package-layout-simple">
                     <div className="booking-menu-path booking-curated-grid booking-curated-grid-simple">
-                        {packageCards.map((pkg, index) => {
+                        {packagesLoading || !packagesLoaded ? (
+                            <BookingPackageSkeleton rows={3} />
+                        ) : packageCards.length === 0 ? (
+                            <div className="booking-menu-empty md:col-span-3">
+                                <strong>{packagesError ? 'Packages could not be loaded.' : 'No packages available yet.'}</strong>
+                                <span>{packagesError ? 'You can still go back and build a custom menu.' : 'Try another event type or build a custom menu instead.'}</span>
+                            </div>
+                        ) : packageCards.map((pkg, index) => {
                             const menuStructure = pkg.structure || {};
                             const totalDishes = Object.values(menuStructure).reduce((sum, count) => sum + count, 0);
                             const baseTotal = pkg.pricingType === 'addon' ? pkg.addOnPrice : pkg.pricingType === 'flat' ? pkg.flatPrice : (pkg.basePrice * (pax || 0));
@@ -1272,8 +1353,16 @@ const MenuBuilder = ({ bookingData, updateBooking, onNext, onBack, mode = 'full'
 
             {/* Dish Grid */}
             <div className="flex-1 overflow-y-auto max-h-[450px] pr-2 custom-scrollbar">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {pagedDishes.map(dish => {
+                {isMenuCatalogLoading ? (
+                    <BookingMenuSkeleton rows={6} />
+                ) : menuCatalogError ? (
+                    <div className="booking-menu-empty">
+                        <strong>Menu choices could not be loaded.</strong>
+                        <span>Please go back and try this step again in a moment.</span>
+                    </div>
+                ) : (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        {pagedDishes.map(dish => {
                             const isSelected = selections[activeTab]?.includes(dish.id);
                             const cost = getDishCost(dish);
                             const categoryCount = selections[activeTab]?.length || 0;
@@ -1336,26 +1425,33 @@ const MenuBuilder = ({ bookingData, updateBooking, onNext, onBack, mode = 'full'
                                 </div>
                             );
                         })}
-                </div>
-                {pagedDishes.length === 0 && (
+                    </div>
+                )}
+                {!isMenuCatalogLoading && !menuCatalogError && pagedDishes.length === 0 && (
                     <div className="booking-menu-empty">
-                        <strong>No dishes found.</strong>
-                        <span>Try a different search, filter, or category.</span>
+                        <strong>{menuEmptyTitle}</strong>
+                        <span>{menuEmptyCopy}</span>
                     </div>
                 )}
             </div>
 
             <div className="booking-menu-pagination">
-                <span>
-                    Showing {activeDishes.length === 0 ? 0 : ((currentMenuPage - 1) * dishesPerPage) + 1}
-                    -{Math.min(currentMenuPage * dishesPerPage, activeDishes.length)} of {activeDishes.length}
-                </span>
+                {isMenuCatalogLoading ? (
+                    <span>Loading menu choices...</span>
+                ) : menuCatalogError ? (
+                    <span>Menu choices unavailable</span>
+                ) : (
+                    <span>
+                        Showing {activeDishes.length === 0 ? 0 : ((currentMenuPage - 1) * dishesPerPage) + 1}
+                        -{Math.min(currentMenuPage * dishesPerPage, activeDishes.length)} of {activeDishes.length}
+                    </span>
+                )}
                 <div>
-                    <button type="button" onClick={() => setMenuPage(page => Math.max(1, page - 1))} disabled={currentMenuPage <= 1}>
+                    <button type="button" onClick={() => setMenuPage(page => Math.max(1, page - 1))} disabled={isMenuCatalogLoading || currentMenuPage <= 1}>
                         Previous
                     </button>
-                    <strong>Page {currentMenuPage} of {totalMenuPages}</strong>
-                    <button type="button" onClick={() => setMenuPage(page => Math.min(totalMenuPages, page + 1))} disabled={currentMenuPage >= totalMenuPages}>
+                    <strong>{isMenuCatalogLoading ? 'Loading...' : `Page ${currentMenuPage} of ${totalMenuPages}`}</strong>
+                    <button type="button" onClick={() => setMenuPage(page => Math.min(totalMenuPages, page + 1))} disabled={isMenuCatalogLoading || currentMenuPage >= totalMenuPages}>
                         Next
                     </button>
                 </div>
@@ -1386,12 +1482,16 @@ const MenuBuilder = ({ bookingData, updateBooking, onNext, onBack, mode = 'full'
                 <div className="flex items-center gap-4">
                     <div className="text-right">
                         <p className="text-xs text-gray-400 uppercase tracking-wider">Menu Total</p>
-                        {!allCategoriesFilled && (
+                        {isMenuCatalogLoading ? (
+                            <p className="booking-menu-required-note">
+                                Checking available dishes...
+                            </p>
+                        ) : !allCategoriesFilled && (
                             <p className="booking-menu-required-note">
                                 Missing {missingCategories.map(tab => tab.label).join(', ')}
                             </p>
                         )}
-                        <p className="text-xl font-bold text-gray-900">₱{menuTotal.toLocaleString()}</p>
+                        <p className="text-xl font-bold text-gray-900">{isMenuCatalogLoading ? 'Loading...' : money(menuTotal)}</p>
                     </div>
                     <button
                         onClick={goToNextCategory}

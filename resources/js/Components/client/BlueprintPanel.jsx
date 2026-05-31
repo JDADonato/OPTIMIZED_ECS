@@ -51,7 +51,7 @@ const paymentScheduleForDate = (date, total) => {
     };
 };
 
-const BlueprintPanel = ({ bookingData, collapsed = false, onToggle }) => {
+const BlueprintPanel = ({ bookingData, collapsed = false, deferCatalog = false, onToggle }) => {
     const {
         eventType,
         eventName,
@@ -81,18 +81,22 @@ const BlueprintPanel = ({ bookingData, collapsed = false, onToggle }) => {
         package_floor_surcharge_rate = 0.03,
         menuExtraFee = 0,
     } = bookingData;
+    const selectedDishCount = Object.values(selectedDishes).reduce((sum, arr) => sum + (arr?.length || 0), 0);
 
     const [pricingOverrides, setPricingOverrides] = useState({});
     const [customItems, setCustomItems] = useState({ starter: [], main: [], side: [], dessert: [], drink: [] });
     const [openSections, setOpenSections] = useState(() => new Set(['details', 'menu']));
 
     useEffect(() => {
+        if (deferCatalog && selectedDishCount === 0) return;
+
+        let ignore = false;
         const fetchOverrides = async () => {
             try {
                 const res = await fetch('/api/pricing');
                 if (res.ok) {
                     const data = await res.json();
-                    setPricingOverrides(data.overrides || {});
+                    if (!ignore) setPricingOverrides(data.overrides || {});
                 }
             } catch (error) {
                 console.error("Error fetching pricing overrides:", error);
@@ -100,8 +104,14 @@ const BlueprintPanel = ({ bookingData, collapsed = false, onToggle }) => {
         };
 
         fetchOverrides();
-        fetchMenuItemsFromAPI().then(organizedDishes => setCustomItems(organizedDishes));
-    }, []);
+        fetchMenuItemsFromAPI().then(organizedDishes => {
+            if (!ignore) setCustomItems(organizedDishes);
+        });
+
+        return () => {
+            ignore = true;
+        };
+    }, [deferCatalog, selectedDishCount]);
 
     const menuTotal = useMemo(() => {
         if (package_pricing_type === 'flat') {
@@ -149,7 +159,7 @@ const BlueprintPanel = ({ bookingData, collapsed = false, onToggle }) => {
     const overtimeFee = useMemo(() => Math.max(0, duration - 4) * 5000, [duration]);
     const totalEstimate = menuTotal + packageServiceCharge + packageVat + locationSurcharge + floorSurcharge + decemberSurcharge + contingencyFee + cashBond + overtimeFee;
     const paymentSchedule = useMemo(() => paymentScheduleForDate(date, totalEstimate), [date, totalEstimate]);
-    const totalDishCount = Object.values(selectedDishes).reduce((sum, arr) => sum + (arr?.length || 0), 0);
+    const totalDishCount = selectedDishCount;
     const feeCount = [
         menuExtraFee,
         packageServiceCharge,

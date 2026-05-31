@@ -21,6 +21,28 @@ const trackPublicFunnel = (event, payload = {}) => {
     window.dataLayer?.push({ event: `ecs_${event}`, ...payload });
 };
 
+const emptyMenuGroups = { starter: [], main: [], side: [], dessert: [], drink: [] };
+
+const MenuCardSkeleton = ({ count = 6 }) => (
+    <div className="grid grid-cols-1 gap-8 md:grid-cols-2 lg:grid-cols-3" aria-label="Loading menu dishes">
+        {Array.from({ length: count }).map((_, index) => (
+            <div key={index} className="overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-sm">
+                <div className="h-48 animate-pulse bg-gradient-to-r from-[#fffaf3] via-white to-[#f1e5dc]" />
+                <div className="space-y-3 p-6">
+                    <div className="h-3 w-20 animate-pulse rounded-full bg-[#720101]/10" />
+                    <div className="h-5 w-3/4 animate-pulse rounded-full bg-gray-100" />
+                    <div className="h-3 w-full animate-pulse rounded-full bg-gray-100" />
+                    <div className="h-3 w-2/3 animate-pulse rounded-full bg-gray-100" />
+                    <div className="flex items-center justify-between border-t border-gray-50 pt-4">
+                        <div className="h-3 w-24 animate-pulse rounded-full bg-gray-100" />
+                        <div className="h-5 w-16 animate-pulse rounded-full bg-[#720101]/10" />
+                    </div>
+                </div>
+            </div>
+        ))}
+    </div>
+);
+
 const MenuGallery = () => {
     const { auth } = usePage().props;
     const user = auth?.user || null;
@@ -31,7 +53,11 @@ const MenuGallery = () => {
     const [sortOrder, setSortOrder] = useState('default');
     const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
     const [pricingOverrides, setPricingOverrides] = useState({});
-    const [customItems, setCustomItems] = useState({ starter: [], main: [], side: [], dessert: [], drink: [] });
+    const [customItems, setCustomItems] = useState(emptyMenuGroups);
+    const [catalogLoading, setCatalogLoading] = useState(true);
+    const [catalogLoaded, setCatalogLoaded] = useState(false);
+    const [catalogError, setCatalogError] = useState(false);
+    const [pricingLoading, setPricingLoading] = useState(true);
     const [currentPage, setCurrentPage] = useState(1);
     const [hoveredDish, setHoveredDish] = useState(null);
     const [lightboxDish, setLightboxDish] = useState(null);
@@ -61,15 +87,31 @@ const MenuGallery = () => {
         return () => window.removeEventListener('scroll', handleScroll);
     }, []);
 
+    const loadCatalog = () => {
+        setCatalogLoading(true);
+        setCatalogError(false);
+        fetchMenuItemsFromAPI()
+            .then(organizedDishes => {
+                setCustomItems(organizedDishes || emptyMenuGroups);
+                setCatalogLoaded(true);
+            })
+            .catch(error => {
+                console.error('Error loading menu catalog:', error);
+                setCustomItems(emptyMenuGroups);
+                setCatalogError(true);
+                setCatalogLoaded(true);
+            })
+            .finally(() => setCatalogLoading(false));
+    };
+
     useEffect(() => {
-        // Fetch pricing overrides
         fetch('/api/pricing')
             .then(res => res.json())
             .then(data => setPricingOverrides(data.overrides || {}))
-            .catch(console.error);
+            .catch(console.error)
+            .finally(() => setPricingLoading(false));
 
-        // Load menu items for the gallery.
-        fetchMenuItemsFromAPI().then(organizedDishes => setCustomItems(organizedDishes));
+        loadCatalog();
     }, []);
 
     // Menu items organized by category (already structured from API)
@@ -281,8 +323,12 @@ const MenuGallery = () => {
 
     // Get price range for display
     const allPrices = displayedDishes.map(d => d.costPerHead);
-    const minPrice = Math.min(...allPrices);
-    const maxPrice = Math.max(...allPrices);
+    const minPrice = allPrices.length ? Math.min(...allPrices) : null;
+    const maxPrice = allPrices.length ? Math.max(...allPrices) : null;
+    const sourceDishCount = Object.values(mergedDishes).reduce((sum, items) => sum + (items?.length || 0), 0);
+    const isInitialMenuLoading = catalogLoading || pricingLoading;
+    const hasLoadedCatalog = catalogLoaded && !catalogLoading;
+    const hasSourceDishes = sourceDishCount > 0;
 
     return (
         <div className={`min-h-screen bg-white ${isStaffUser(user) ? 'pt-[104px]' : 'pt-[68px]'}`}>
@@ -405,7 +451,11 @@ const MenuGallery = () => {
                     Explore our diverse selection of exquisite dishes, crafted to perfection for your special events.
                 </p>
                 <p className="text-yellow-400 mt-3 text-sm font-medium">
-                    Price range: ₱{minPrice} – ₱{maxPrice} per head
+                    {isInitialMenuLoading
+                        ? 'Loading current menu pricing...'
+                        : minPrice !== null && maxPrice !== null
+                            ? `Price range: ₱${minPrice} – ₱${maxPrice} per head`
+                            : 'Menu catalog is being prepared.'}
                 </p>
             </RevealOnScroll>
 
@@ -617,14 +667,40 @@ const MenuGallery = () => {
 
                 {/* Results count */}
                 <RevealOnScroll as="p" delay="rv-d2" className="text-sm text-gray-400 mb-6">
-                    Showing {Math.min((currentPage - 1) * ITEMS_PER_PAGE + 1, displayedDishes.length)}–{Math.min(currentPage * ITEMS_PER_PAGE, displayedDishes.length)} of {displayedDishes.length} {displayedDishes.length === 1 ? 'dish' : 'dishes'}
-                    {searchQuery && ` matching "${searchQuery}"`}
-                    {priceFilter !== 'all' && ` in ${priceRanges.find(r => r.id === priceFilter)?.label}`}
-                    {sortOrder !== 'default' && ` · Sorted by ${sortOptions.find(s => s.id === sortOrder)?.label.toLowerCase()}`}
+                    {isInitialMenuLoading ? (
+                        'Loading dishes...'
+                    ) : catalogError ? (
+                        'Menu catalog could not be loaded.'
+                    ) : displayedDishes.length > 0 ? (
+                        <>
+                            Showing {Math.min((currentPage - 1) * ITEMS_PER_PAGE + 1, displayedDishes.length)}–{Math.min(currentPage * ITEMS_PER_PAGE, displayedDishes.length)} of {displayedDishes.length} {displayedDishes.length === 1 ? 'dish' : 'dishes'}
+                            {searchQuery && ` matching "${searchQuery}"`}
+                            {priceFilter !== 'all' && ` in ${priceRanges.find(r => r.id === priceFilter)?.label}`}
+                            {sortOrder !== 'default' && ` · Sorted by ${sortOptions.find(s => s.id === sortOrder)?.label.toLowerCase()}`}
+                        </>
+                    ) : hasLoadedCatalog && hasSourceDishes ? (
+                        'No dishes match the current filters.'
+                    ) : (
+                        'No menu dishes are available yet.'
+                    )}
                 </RevealOnScroll>
 
                 {/* Main Grid */}
-                {paginatedDishes.length > 0 ? (
+                {isInitialMenuLoading ? (
+                    <MenuCardSkeleton count={ITEMS_PER_PAGE} />
+                ) : catalogError ? (
+                    <div className="rounded-3xl border border-red-100 bg-red-50 px-6 py-14 text-center">
+                        <h3 className="text-lg font-bold text-red-900 mb-2">Menu is taking longer to load</h3>
+                        <p className="mx-auto max-w-md text-sm font-semibold leading-6 text-red-700">We could not reach the menu catalog. Try again so we can show current dishes and prices.</p>
+                        <button
+                            type="button"
+                            onClick={loadCatalog}
+                            className="mt-5 rounded-full bg-red-900 px-6 py-3 text-sm font-bold uppercase tracking-wider text-white hover:bg-red-800"
+                        >
+                            Retry Menu
+                        </button>
+                    </div>
+                ) : paginatedDishes.length > 0 ? (
                     <>
                         <div key={`page-${currentPage}-${activeCategory}-${priceFilter}`} className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
                             {paginatedDishes.map((dish, idx) => (
@@ -735,14 +811,16 @@ const MenuGallery = () => {
                 ) : (
                     <div className="text-center py-20 animate-fadeIn">
                         <svg className="w-16 h-16 text-gray-300 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
-                        <h3 className="text-lg font-bold text-gray-400 mb-2">No dishes found</h3>
-                        <p className="text-gray-400 text-sm">Try adjusting your filters to see more dishes.</p>
-                        <button
-                            onClick={() => { setPriceFilter('all'); setSortOrder('default'); }}
-                            className="mt-4 px-6 py-2 bg-red-900 text-white text-sm font-bold rounded-full hover:bg-red-800 transition-colors"
-                        >
-                            Clear Filters
-                        </button>
+                        <h3 className="text-lg font-bold text-gray-400 mb-2">{hasSourceDishes ? 'No dishes match these filters' : 'No menu dishes available yet'}</h3>
+                        <p className="text-gray-400 text-sm">{hasSourceDishes ? 'Try adjusting your filters to see more dishes.' : 'The menu catalog has loaded, but no active dishes are published right now.'}</p>
+                        {hasSourceDishes && (
+                            <button
+                                onClick={() => { setSearchQuery(''); setPriceFilter('all'); setSortOrder('default'); }}
+                                className="mt-4 px-6 py-2 bg-red-900 text-white text-sm font-bold rounded-full hover:bg-red-800 transition-colors"
+                            >
+                                Clear Filters
+                            </button>
+                        )}
                     </div>
                 )}
             </div>

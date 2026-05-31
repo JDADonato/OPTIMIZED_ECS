@@ -9,6 +9,7 @@ import csrfFetch from '../../utils/csrf';
 import { operationalChannelsForUser } from '../../utils/liveChannels';
 import { getChatModerationFeedback, getChatModerationIssue } from '../../utils/chatModeration';
 import { describeCustomerIdentity } from '../../utils/customerIdentity';
+import { chatMessageStore } from '../../utils/chatMessageStore';
 import { LiveSyncIndicator, SoftRefreshBoundary, UpdatedRowPulse } from './LiveFeedback';
 import {
     CalendarDays,
@@ -51,6 +52,7 @@ const sortMessagesOldestFirst = (items = []) => [...items].sort((a, b) => {
 });
 const MESSAGE_CACHE_LIMIT = 20;
 const MESSAGE_CACHE_TTL_MS = 120000;
+const MESSAGE_PAGE_LIMIT = 20;
 const createClientTempId = () => `tmp-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 const localTimeLabel = (date = new Date()) => date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
 const messageDate = (message) => {
@@ -423,6 +425,11 @@ const StaffMessaging = ({ variant = 'staff', refreshToken = 0, onMetricsChange =
             marker,
             cachedAt: Date.now(),
         });
+        chatMessageStore.set(conversationId, {
+            messages: sortMessagesOldestFirst(nextMessages),
+            hasOlderMessages: Boolean(hasMore),
+            marker,
+        });
 
         while (messageCacheRef.current.size > MESSAGE_CACHE_LIMIT) {
             const oldestKey = messageCacheRef.current.keys().next().value;
@@ -492,7 +499,16 @@ const StaffMessaging = ({ variant = 'staff', refreshToken = 0, onMetricsChange =
 
         const cacheKey = String(conversationId);
         const marker = typeof conversation === 'object' ? getConversationCacheMarker(conversation) : '';
-        const cached = messageCacheRef.current.get(cacheKey);
+        let cached = messageCacheRef.current.get(cacheKey);
+
+        if (!cached) {
+            const stored = await chatMessageStore.get(cacheKey);
+            if (stored?.messages?.length) {
+                messageCacheRef.current.set(cacheKey, stored);
+                cached = stored;
+            }
+        }
+
         const cacheIsFresh = cacheIsUsable(cached, marker, force);
         const shouldShowLoading = !cached || (!cacheIsFresh && (cached.messages || []).length === 0);
 
@@ -519,14 +535,24 @@ const StaffMessaging = ({ variant = 'staff', refreshToken = 0, onMetricsChange =
         }
 
         try {
-            const res = await fetch(`/api/chat/conversations/${conversationId}/messages?limit=30`);
+            const latestServerId = chatMessageStore.latestServerMessageId(cached?.messages || []);
+            const params = new URLSearchParams({ limit: String(MESSAGE_PAGE_LIMIT) });
+            if (latestServerId > 0 && cached?.messages?.length) {
+                params.set('after_id', String(latestServerId));
+            }
+
+            const res = await fetch(`/api/chat/conversations/${conversationId}/messages?${params.toString()}`);
             if (res.ok) {
                 const d = normalizeMessagesResponse(await res.json());
-                const hasMore = Boolean(d.pagination?.has_more);
-                rememberMessages(conversationId, d.data, hasMore, marker);
+                const baseMessages = cached?.messages?.length && latestServerId > 0 ? cached.messages : [];
+                const nextMessages = d.data.reduce((items, message) => mergeMessageIntoList(items, message), baseMessages);
+                const hasMore = latestServerId > 0 && cached?.messages?.length
+                    ? Boolean(cached.hasOlderMessages)
+                    : Boolean(d.pagination?.has_more);
+                rememberMessages(conversationId, nextMessages, hasMore, getConversationCacheMarker(conversation, nextMessages[nextMessages.length - 1]) || marker);
 
                 if (prefetch) {
-                    return d.data;
+                    return nextMessages;
                 }
 
                 if (messageFetchRequestRef.current !== requestId || String(selectedConvRef.current?.id || '') !== cacheKey) {
@@ -534,7 +560,7 @@ const StaffMessaging = ({ variant = 'staff', refreshToken = 0, onMetricsChange =
                 }
 
                 shouldScrollToBottomRef.current = true;
-                setMessages(d.data);
+                setMessages(nextMessages);
                 setHasOlderMessages(hasMore);
             }
         } catch (e) { /* silent */ }
@@ -543,7 +569,7 @@ const StaffMessaging = ({ variant = 'staff', refreshToken = 0, onMetricsChange =
                 setMessagesLoading(false);
             }
         }
-    }, [cacheIsUsable, getConversationCacheMarker, normalizeMessagesResponse, rememberMessages]);
+    }, [cacheIsUsable, getConversationCacheMarker, mergeMessageIntoList, normalizeMessagesResponse, rememberMessages]);
 
     const prefetchMessages = useCallback((conversation) => {
         if (!conversation?.id) return;
@@ -562,7 +588,7 @@ const StaffMessaging = ({ variant = 'staff', refreshToken = 0, onMetricsChange =
         }
 
         try {
-            const res = await fetch(`/api/chat/conversations/${selectedConv.id}/messages?limit=30&before_id=${messages[0].id}`);
+            const res = await fetch(`/api/chat/conversations/${selectedConv.id}/messages?limit=${MESSAGE_PAGE_LIMIT}&before_id=${messages[0].id}`);
             if (res.ok) {
                 const d = normalizeMessagesResponse(await res.json());
                 prependedOlderMessages = true;
@@ -621,9 +647,8 @@ const StaffMessaging = ({ variant = 'staff', refreshToken = 0, onMetricsChange =
 
                     if (selectedConvRef.current?.id === e.conversationId) {
                         setMessages(prev => {
-                            if (prev.find(m => m.id === e.messageData.id)) return prev;
                             shouldScrollToBottomRef.current = true;
-                            const next = sortMessagesOldestFirst([...prev, { ...e.messageData, is_mine: false }]);
+                            const next = mergeMessageIntoList(prev, { ...e.messageData, is_mine: false });
                             const cached = messageCacheRef.current.get(String(e.conversationId));
                             rememberMessages(e.conversationId, next, cached?.hasOlderMessages ?? hasOlderMessages, getConversationCacheMarker(selectedConvRef.current, e.messageData));
                             return next;
@@ -638,7 +663,7 @@ const StaffMessaging = ({ variant = 'staff', refreshToken = 0, onMetricsChange =
         return () => {
             // Cleanup on unmount
         };
-    }, [getConversationCacheMarker, hasOlderMessages, patchConversationPreview, rememberMessages, scheduleConversationsRefresh, selectedConv, user?.id]);
+    }, [getConversationCacheMarker, hasOlderMessages, mergeMessageIntoList, patchConversationPreview, rememberMessages, scheduleConversationsRefresh, selectedConv, user?.id]);
 
     useEffect(() => () => {
         window.clearTimeout(conversationRefreshTimerRef.current);

@@ -1,25 +1,65 @@
 import { useState, useEffect, useRef } from 'react';
 
-const EventIdentity = ({ bookingData, updateBooking, onNext, onBack }) => {
+const EVENT_TYPES_CACHE_KEY = 'ecs:booking:event-types';
+
+const readCachedEventTypes = () => {
+    if (typeof window === 'undefined' || !window.sessionStorage) return [];
+
+    try {
+        const cached = JSON.parse(window.sessionStorage.getItem(EVENT_TYPES_CACHE_KEY) || '[]');
+        return Array.isArray(cached) ? cached : [];
+    } catch (error) {
+        return [];
+    }
+};
+
+const writeCachedEventTypes = (eventTypes) => {
+    if (typeof window === 'undefined' || !window.sessionStorage || !Array.isArray(eventTypes)) return;
+
+    try {
+        window.sessionStorage.setItem(EVENT_TYPES_CACHE_KEY, JSON.stringify(eventTypes));
+    } catch (error) {
+        // Cache failures should never block booking.
+    }
+};
+
+const EventIdentity = ({ bookingData, updateBooking, onNext, onBack, initialEventTypes = [] }) => {
+    const hydratedEventTypes = Array.isArray(initialEventTypes) ? initialEventTypes : [];
+    const cachedEventTypes = hydratedEventTypes.length ? [] : readCachedEventTypes();
+    const initialTypes = hydratedEventTypes.length ? hydratedEventTypes : cachedEventTypes;
     const [selected, setSelected] = useState(bookingData.eventType || '');
     const [eventName, setEventName] = useState(bookingData.eventName || '');
-    const [eventTypes, setEventTypes] = useState([]);
-    const [loading, setLoading] = useState(true);
+    const [eventTypes, setEventTypes] = useState(initialTypes);
+    const [loading, setLoading] = useState(initialTypes.length === 0);
     const [attemptedNext, setAttemptedNext] = useState(false);
     const eventNameRef = useRef(null);
 
     useEffect(() => {
+        if (hydratedEventTypes.length) {
+            setEventTypes(hydratedEventTypes);
+            setLoading(false);
+            writeCachedEventTypes(hydratedEventTypes);
+            return;
+        }
+
+        if (cachedEventTypes.length) {
+            setEventTypes(cachedEventTypes);
+            setLoading(false);
+        }
+
         fetch('/api/event-types?per_page=50')
             .then(res => res.json())
             .then(data => {
-                setEventTypes(Array.isArray(data.data) ? data.data : []);
+                const nextEventTypes = Array.isArray(data.data) ? data.data : [];
+                setEventTypes(nextEventTypes);
+                writeCachedEventTypes(nextEventTypes);
                 setLoading(false);
             })
             .catch(err => {
                 console.error('Error fetching event types:', err);
                 setLoading(false);
             });
-    }, []);
+    }, [hydratedEventTypes.length]);
 
     const handleSelect = (eventType) => {
         setSelected(eventType.label);

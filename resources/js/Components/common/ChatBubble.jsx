@@ -2,16 +2,19 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import useSmartRefresh from '../../hooks/useSmartRefresh';
 import useRealtimeStatus from '../../hooks/useRealtimeStatus';
 import ConfirmModal from './ConfirmModal';
-import { LiveSyncIndicator, SoftRefreshBoundary } from './LiveFeedback';
+import { SoftRefreshBoundary } from './LiveFeedback';
 import { MoreVertical, SendHorizontal } from 'lucide-react';
 import { customerBookingStatus } from '../../utils/statusLabels';
 import csrfFetch from '../../utils/csrf';
 import { operationalChannelsForUser } from '../../utils/liveChannels';
 import { getChatModerationFeedback, getChatModerationIssue } from '../../utils/chatModeration';
+import { chatMessageStore } from '../../utils/chatMessageStore';
 
 const CHAT_CACHE_TTL_MS = 60000;
 const MESSAGE_CACHE_LIMIT = 20;
 const MESSAGE_CACHE_TTL_MS = 120000;
+const MESSAGE_PAGE_LIMIT = 20;
+const OPTIMISTIC_TIMEOUT_MS = 30000;
 const BOOKING_CACHE_TTL_MS = 180000;
 const createClientTempId = () => `tmp-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 const localTimeLabel = (date = new Date()) => date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
@@ -174,6 +177,23 @@ const ChatBubble = ({ user, openOnMount = false }) => {
         const timer = window.setInterval(() => setRelativeNow(Date.now()), 10000);
         return () => window.clearInterval(timer);
     }, []);
+    useEffect(() => {
+        const timer = window.setInterval(() => {
+            setMessages(prev => prev.map(message => {
+                if (message?.optimistic_status !== 'sending') return message;
+                const sentAt = messageDate(message);
+                if (!sentAt || Date.now() - sentAt.getTime() < OPTIMISTIC_TIMEOUT_MS) return message;
+
+                return {
+                    ...message,
+                    optimistic_status: 'failed',
+                    error: 'Message could not be confirmed. Please retry.',
+                };
+            }));
+        }, 5000);
+
+        return () => window.clearInterval(timer);
+    }, []);
 
     const messageSections = useMemo(() => buildMessageSections(messages), [messages]);
     const latestMessageKey = useMemo(() => {
@@ -296,6 +316,11 @@ const ChatBubble = ({ user, openOnMount = false }) => {
             marker: marker || getMessagesCacheMarker(nextMessages),
             cachedAt: Date.now(),
         });
+        chatMessageStore.set(key, {
+            messages: sortMessagesOldestFirst(nextMessages),
+            hasOlderMessages: Boolean(hasMore),
+            marker: marker || getMessagesCacheMarker(nextMessages),
+        });
 
         while (messageCacheRef.current.size > MESSAGE_CACHE_LIMIT) {
             const oldestKey = messageCacheRef.current.keys().next().value;
@@ -346,7 +371,15 @@ const ChatBubble = ({ user, openOnMount = false }) => {
         const marker = typeof conversationArg === 'object'
             ? getConversationCacheMarker(conversationArg)
             : getConversationCacheMarker(conversationRef.current);
-        const cached = messageCacheRef.current.get(cacheKey);
+        let cached = messageCacheRef.current.get(cacheKey);
+
+        if (!cached) {
+            const stored = await chatMessageStore.get(cacheKey);
+            if (stored?.messages?.length) {
+                messageCacheRef.current.set(cacheKey, stored);
+                cached = stored;
+            }
+        }
 
         if (cached) {
             applyCachedMessages(convId, cached);
@@ -366,35 +399,45 @@ const ChatBubble = ({ user, openOnMount = false }) => {
         messageFetchRequestRef.current = requestId;
 
         try {
-            const res = await fetch(`/api/chat/conversations/${convId}/messages?limit=30`);
+            const latestServerId = chatMessageStore.latestServerMessageId(cached?.messages || []);
+            const params = new URLSearchParams({ limit: String(MESSAGE_PAGE_LIMIT) });
+            if (latestServerId > 0 && cached?.messages?.length) {
+                params.set('after_id', String(latestServerId));
+            }
+
+            const res = await fetch(`/api/chat/conversations/${convId}/messages?${params.toString()}`);
             if (res.ok) {
                 const d = normalizeMessagesResponse(await res.json());
-                const hasMore = Boolean(d.pagination?.has_more);
-                const nextMarker = getMessagesCacheMarker(d.data) || marker;
-                rememberMessages(convId, d.data, hasMore, nextMarker);
+                const baseMessages = cached?.messages?.length && latestServerId > 0 ? cached.messages : [];
+                const nextMessages = d.data.reduce((items, message) => mergeMessageIntoList(items, message), baseMessages);
+                const hasMore = latestServerId > 0 && cached?.messages?.length
+                    ? Boolean(cached.hasOlderMessages)
+                    : Boolean(d.pagination?.has_more);
+                const nextMarker = getMessagesCacheMarker(nextMessages) || marker;
+                rememberMessages(convId, nextMessages, hasMore, nextMarker);
 
                 if (messageFetchRequestRef.current !== requestId || String(conversationRef.current?.id || convId) !== cacheKey) {
-                    return d.data;
+                    return nextMessages;
                 }
 
                 shouldScrollToBottomRef.current = true;
-                setMessages(d.data);
+                setMessages(nextMessages);
                 setHasOlderMessages(hasMore);
                 messagesLoadedForRef.current = convId;
                 lastMessagesLoadedAtRef.current = Date.now();
                 fetchUnreadCount();
-                return d.data;
+                return nextMessages;
             }
         } catch (e) { /* silent */ }
         return cached?.messages || [];
-    }, [applyCachedMessages, cacheIsUsable, fetchUnreadCount, getConversationCacheMarker, getMessagesCacheMarker, rememberMessages]);
+    }, [applyCachedMessages, cacheIsUsable, fetchUnreadCount, getConversationCacheMarker, getMessagesCacheMarker, mergeMessageIntoList, rememberMessages]);
 
     const loadOlderMessages = useCallback(async () => {
         if (!conversation?.id || !messages.length || loadingOlderMessages) return;
         setLoadingOlderMessages(true);
 
         try {
-            const res = await fetch(`/api/chat/conversations/${conversation.id}/messages?limit=30&before_id=${messages[0].id}`);
+            const res = await fetch(`/api/chat/conversations/${conversation.id}/messages?limit=${MESSAGE_PAGE_LIMIT}&before_id=${messages[0].id}`);
             if (res.ok) {
                 const d = normalizeMessagesResponse(await res.json());
                 const hasMore = Boolean(d.pagination?.has_more);
@@ -506,9 +549,8 @@ const ChatBubble = ({ user, openOnMount = false }) => {
 
                 if (conversationRef.current?.id === e.conversationId) {
                     setMessages(prev => {
-                        if (prev.find(m => m.id === e.messageData.id)) return prev;
                         shouldScrollToBottomRef.current = true;
-                        const next = sortMessagesOldestFirst([...prev, { ...e.messageData, is_mine: false }]);
+                        const next = mergeMessageIntoList(prev, { ...e.messageData, is_mine: false });
                         const cached = messageCacheRef.current.get(String(e.conversationId));
                         rememberMessages(e.conversationId, next, cached?.hasOlderMessages ?? false, getMessagesCacheMarker(next));
                         return next;
@@ -532,7 +574,7 @@ const ChatBubble = ({ user, openOnMount = false }) => {
         return () => {
             // Don't leave on re-render, only on unmount
         };
-    }, [conversation?.id, fetchUnreadCount, getMessagesCacheMarker, rememberMessages, user?.id]);
+    }, [conversation?.id, fetchUnreadCount, getMessagesCacheMarker, mergeMessageIntoList, rememberMessages, user?.id]);
 
     // Cleanup on unmount
     useEffect(() => {
@@ -561,25 +603,38 @@ const ChatBubble = ({ user, openOnMount = false }) => {
         const cachedMessages = cachedConversation?.id
             ? messageCacheRef.current.get(String(cachedConversation.id))
             : null;
-        const hasCachedMessages = Boolean(cachedMessages) || messagesRef.current.length > 0;
+        const hasLoadedConversationBefore = lastConversationLoadedAtRef.current > 0;
+        const hasLoadedMessagesForConversation = cachedConversation?.id
+            ? messagesLoadedForRef.current === cachedConversation.id
+            : false;
+        const hasAnyLocalChatState = Boolean(cachedConversation)
+            || hasLoadedConversationBefore
+            || hasLoadedMessagesForConversation
+            || Boolean(cachedMessages)
+            || messagesRef.current.length > 0;
 
         fetchBookings();
 
-        if (cachedConversation && hasCachedMessages) {
-            if (cachedMessages) {
+        if (hasAnyLocalChatState) {
+            if (cachedConversation?.id && cachedMessages) {
                 applyCachedMessages(cachedConversation.id, cachedMessages);
             }
+
             setLoadingConv(false);
-            refreshOpenConversation();
+            setBackgroundSyncing(true);
+            refreshOpenConversation().finally(() => setBackgroundSyncing(false));
             return;
         }
 
         setLoadingConv(true);
-        const conv = await fetchConversation({ force: !cachedConversation });
-        if (conv) {
-            await refreshMessagesIfChanged(conv);
+        try {
+            const conv = await fetchConversation({ force: !cachedConversation });
+            if (conv) {
+                await refreshMessagesIfChanged(conv);
+            }
+        } finally {
+            setLoadingConv(false);
         }
-        setLoadingConv(false);
     };
 
     const handleClose = () => {
@@ -889,6 +944,11 @@ const ChatBubble = ({ user, openOnMount = false }) => {
         return Date.now() - new Date(msg.created_at || 0).getTime() <= 15 * 60 * 1000;
     };
 
+    const canShowMessageActions = (msg) => {
+        if (msg?.optimistic_status) return false;
+        return Boolean(msg?.is_mine && !msg.deleted_at);
+    };
+
     const startEditMessage = (msg) => {
         setOpenActionMessageId(null);
         setEditingMessageId(msg.id);
@@ -962,7 +1022,8 @@ const ChatBubble = ({ user, openOnMount = false }) => {
         const messageKey = String(msg.client_temp_id || msg.id);
         const actionKey = String(msg.id || msg.client_temp_id || messageKey);
         const actionMenuOpen = openActionMessageId === actionKey;
-        const canUseActions = (canEditMessage(msg) || canDeleteMessage(msg)) && editingMessageId !== msg.id;
+        const canUseActions = canShowMessageActions(msg) && editingMessageId !== msg.id;
+        const hasActiveActions = canEditMessage(msg) || canDeleteMessage(msg);
         const exactMetaText = messageStatusText(msg);
         const groupSize = group?.messages?.length || 1;
         const positionClass = groupSize <= 1
@@ -1010,6 +1071,9 @@ const ChatBubble = ({ user, openOnMount = false }) => {
                                         )}
                                         {canDeleteMessage(msg) && (
                                             <button type="button" className="is-danger" onClick={() => deleteMessage(msg)}>Delete message</button>
+                                        )}
+                                        {!hasActiveActions && (
+                                            <button type="button" disabled>Actions expired</button>
                                         )}
                                     </div>
                                 )}
@@ -1060,39 +1124,22 @@ const ChatBubble = ({ user, openOnMount = false }) => {
             {isOpen && (
                 <div className="fixed bottom-5 right-5 z-50 flex h-[min(560px,calc(100vh-2.5rem))] w-[calc(100%-2rem)] max-w-[390px] flex-col overflow-hidden rounded-[22px] border border-[#ead8cc] bg-[#fffaf3] shadow-xl shadow-slate-950/20" style={{ animation: 'fadeIn .2s ease' }}>
                     {/* Header */}
-                    <div className="flex flex-shrink-0 items-center justify-between border-b border-[#ead8cc] bg-white px-4 py-4">
+                    <div className="flex flex-shrink-0 items-center justify-between border-b border-[#5a0101] bg-[#720101] px-4 py-4">
                         <div className="flex items-center gap-3">
-                            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-[#fff4df] text-[#720101]">
+                            <div className="flex h-10 w-10 items-center justify-center text-[#f0aa0b]">
                                 <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" /></svg>
                             </div>
                             <div>
-                                <p className="text-[10px] font-black uppercase tracking-[0.18em] text-[#9f6500]">Support</p>
-                                <h3 className="text-base font-black leading-tight text-[#720101]">Eloquente Catering</h3>
-                                <p className="text-xs font-semibold text-slate-500">
+                                <p className="text-[10px] font-black uppercase tracking-[0.18em] text-[#f0aa0b]">Support</p>
+                                <h3 className="text-base font-black leading-tight text-white">Eloquente Catering</h3>
+                                <p className="text-xs font-semibold text-white/75">
                                     {conversation?.staff_name
                                         ? `Currently with ${conversation.staff_name}`
                                         : (conversation ? 'Waiting for staff...' : 'Send a message to get started')}
                                 </p>
-                                <div className="mt-1">
-                                    <LiveSyncIndicator
-                                        state={backgroundSyncing ? 'syncing' : realtimeSyncState}
-                                        compact
-                                        visibility="exceptions"
-                                        className="is-subtle"
-                                        labelOverrides={{
-                                            loading: 'Opening',
-                                            stale: 'Saved chat',
-                                            error: 'Update delayed',
-                                        }}
-                                        onRetry={() => {
-                                            fetchUnreadCount();
-                                            if (conversation?.id) fetchMessages(conversation.id, { force: true });
-                                        }}
-                                    />
-                                </div>
                             </div>
                         </div>
-                        <button onClick={handleClose} className="rounded-full border border-[#ead8cc] bg-[#fffaf3] p-2 text-[#720101] transition-colors hover:bg-[#fff4df]" aria-label="Minimize chat">
+                        <button onClick={handleClose} className="p-2 text-white transition-colors hover:text-[#f0aa0b] focus:outline-none focus:ring-2 focus:ring-white/40" aria-label="Minimize chat">
                             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.2} d="M20 12H4" /></svg>
                         </button>
                     </div>
@@ -1109,7 +1156,7 @@ const ChatBubble = ({ user, openOnMount = false }) => {
                         ) : (
                             <SoftRefreshBoundary className="h-full" refreshing={backgroundSyncing} stale={realtimeSyncState === 'stale' || realtimeSyncState === 'reconnecting'} staleMessage="Viewing saved chat. New messages will appear when the connection catches up." showRefreshBar={false}>
                             <div className="flex flex-col h-full">
-                                <div className="flex-1 overflow-y-auto p-4 space-y-3" style={{ maxHeight: 'calc(560px - 142px)' }}>
+                                <div className="customer-chat-scroll flex-1 overflow-y-auto p-4 space-y-3" style={{ maxHeight: 'calc(560px - 142px)' }}>
                                     {/* Status Indicator */}
                                     {!conversation && (
                                         <div className="text-center py-6">

@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Models\Booking;
 use App\Models\Conversation;
 use App\Models\EventPreparationTask;
+use App\Models\Message;
 use App\Models\User;
 use App\Services\EventPreparationService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -46,6 +47,84 @@ class FastChatAndHandoffLoadingTest extends TestCase
             ->assertCreated()
             ->assertJsonPath('message.client_temp_id', 'tmp-client-456')
             ->assertJsonPath('message.message', 'I need planning help.');
+    }
+
+    public function test_chat_send_reuses_duplicate_client_temp_id(): void
+    {
+        $client = $this->user('Client');
+        $marketing = $this->user('Marketing');
+        $conversation = Conversation::create([
+            'client_id' => $client->id,
+            'staff_id' => $marketing->id,
+            'status' => 'active',
+        ]);
+
+        $first = $this->actingAs($marketing)
+            ->postJson("/api/chat/conversations/{$conversation->id}/messages", [
+                'message' => 'The original reply.',
+                'client_temp_id' => 'tmp-dedupe-1',
+            ])
+            ->assertCreated()
+            ->json();
+
+        $second = $this->actingAs($marketing)
+            ->postJson("/api/chat/conversations/{$conversation->id}/messages", [
+                'message' => 'A duplicate retry with changed text.',
+                'client_temp_id' => 'tmp-dedupe-1',
+            ])
+            ->assertOk()
+            ->assertJsonPath('id', $first['id'])
+            ->assertJsonPath('message', 'The original reply.')
+            ->json();
+
+        $this->assertSame($first['client_temp_id'], $second['client_temp_id']);
+        $this->assertSame(1, Message::where('conversation_id', $conversation->id)->count());
+    }
+
+    public function test_chat_messages_support_newest_page_before_and_after_cursors(): void
+    {
+        $client = $this->user('Client');
+        $marketing = $this->user('Marketing');
+        $conversation = Conversation::create([
+            'client_id' => $client->id,
+            'staff_id' => $marketing->id,
+            'status' => 'active',
+        ]);
+
+        $messages = collect(range(1, 25))->map(fn ($number) => Message::create([
+            'conversation_id' => $conversation->id,
+            'sender_id' => $client->id,
+            'receiver_id' => $marketing->id,
+            'message' => "Message {$number}",
+        ]));
+
+        $latestPage = $this->actingAs($marketing)
+            ->getJson("/api/chat/conversations/{$conversation->id}/messages")
+            ->assertOk()
+            ->assertJsonCount(20, 'data')
+            ->json();
+
+        $this->assertSame($messages[5]->id, $latestPage['data'][0]['id']);
+        $this->assertSame($messages[24]->id, $latestPage['data'][19]['id']);
+        $this->assertTrue($latestPage['pagination']['has_more']);
+
+        $olderPage = $this->actingAs($marketing)
+            ->getJson("/api/chat/conversations/{$conversation->id}/messages?limit=20&before_id={$latestPage['pagination']['before_id']}")
+            ->assertOk()
+            ->assertJsonCount(5, 'data')
+            ->json();
+
+        $this->assertSame($messages[0]->id, $olderPage['data'][0]['id']);
+        $this->assertSame($messages[4]->id, $olderPage['data'][4]['id']);
+
+        $deltaPage = $this->actingAs($marketing)
+            ->getJson("/api/chat/conversations/{$conversation->id}/messages?after_id={$messages[20]->id}")
+            ->assertOk()
+            ->assertJsonCount(4, 'data')
+            ->json();
+
+        $this->assertSame($messages[21]->id, $deltaPage['data'][0]['id']);
+        $this->assertSame($messages[24]->id, $deltaPage['data'][3]['id']);
     }
 
     public function test_preparation_board_supports_lightweight_pages_and_detail_loading(): void

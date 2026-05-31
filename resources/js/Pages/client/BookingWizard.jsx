@@ -1,15 +1,10 @@
-import { useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import { Head, router, Link } from '@inertiajs/react';
 import axios from 'axios';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import useBookingDraft, { saveBookingDraft } from '../../hooks/useBookingDraft';
-import CalendarView from '../../Components/client/CalendarView';
 import EventIdentity from '../../Components/client/EventIdentity';
-import GuestLogistics from '../../Components/client/GuestLogistics';
-import MenuBuilder from '../../Components/client/MenuBuilder';
-import EventSurcharges from '../../Components/client/EventSurcharges';
-import FoodTastingStep from '../../Components/client/FoodTastingStep';
 import BlueprintPanel from '../../Components/client/BlueprintPanel';
 import Modal from '../../Components/common/Modal';
 import ClientNavbar from '../../Components/common/ClientNavbar';
@@ -20,6 +15,19 @@ import csrfFetch from '../../utils/csrf';
 import { dashboardHrefForUser, isStaffUser } from '../../utils/dashboardLinks';
 
 const totalSteps = 7;
+const CalendarView = lazy(() => import('../../Components/client/CalendarView'));
+const GuestLogistics = lazy(() => import('../../Components/client/GuestLogistics'));
+const MenuBuilder = lazy(() => import('../../Components/client/MenuBuilder'));
+const EventSurcharges = lazy(() => import('../../Components/client/EventSurcharges'));
+const FoodTastingStep = lazy(() => import('../../Components/client/FoodTastingStep'));
+const stepPreloaders = {
+    2: () => import('../../Components/client/CalendarView'),
+    3: () => import('../../Components/client/GuestLogistics'),
+    4: () => import('../../Components/client/MenuBuilder'),
+    5: () => import('../../Components/client/MenuBuilder'),
+    6: () => import('../../Components/client/EventSurcharges'),
+    7: () => import('../../Components/client/FoodTastingStep'),
+};
 
 const stepLabels = [
     { step: 1, label: 'Vision' },
@@ -104,7 +112,29 @@ const menuRowsFromBooking = (data = {}) => Object.values(data.customMenu || {})
         cost: dish.includedInPackage ? 0 : Number(dish.costPerHead || dish.priceAdj || 0) * Number(data.pax || 0),
     }));
 
-const BookingWizard = () => {
+const StepFallback = () => (
+    <div className="booking-step">
+        <div className="booking-step-grid">
+            <section className="booking-step-panel">
+                <div className="h-5 w-24 animate-pulse rounded-full bg-[#720101]/10" />
+                <div className="mt-4 h-10 w-4/5 animate-pulse rounded-2xl bg-[#720101]/10" />
+                <div className="mt-4 h-5 w-full animate-pulse rounded-full bg-slate-200" />
+                <div className="mt-2 h-5 w-2/3 animate-pulse rounded-full bg-slate-200" />
+            </section>
+            <section className="booking-choice-area">
+                <div className="grid gap-3 sm:grid-cols-2">
+                    {[0, 1, 2, 3].map((item) => (
+                        <div key={item} className="h-28 animate-pulse rounded-2xl border border-[#720101]/10 bg-white">
+                            <div className="h-full rounded-2xl bg-gradient-to-r from-[#fffaf3] via-white to-[#f1e5dc]" />
+                        </div>
+                    ))}
+                </div>
+            </section>
+        </div>
+    </div>
+);
+
+const BookingWizard = ({ initialEventTypes = [] }) => {
     const { user } = useAuth();
     const toast = useToast();
     const dashboardHref = dashboardHrefForUser(user, '/');
@@ -151,6 +181,25 @@ const BookingWizard = () => {
             },
         });
     }, [currentStep]);
+
+    useEffect(() => {
+        if (typeof window === 'undefined') return undefined;
+
+        const preloadNextStep = () => {
+            stepPreloaders[currentStep + 1]?.();
+            if (currentStep === 1 && bookingData.eventType) {
+                stepPreloaders[3]?.();
+            }
+        };
+
+        if ('requestIdleCallback' in window) {
+            const idleId = window.requestIdleCallback(preloadNextStep, { timeout: 1500 });
+            return () => window.cancelIdleCallback?.(idleId);
+        }
+
+        const timer = window.setTimeout(preloadNextStep, 800);
+        return () => window.clearTimeout(timer);
+    }, [bookingData.eventType, currentStep]);
 
     const showModal = (type, title, message, onConfirm = null, confirmText = null) => {
         setModal({ isOpen: true, type, title, message, onConfirm, confirmText });
@@ -343,7 +392,7 @@ const BookingWizard = () => {
 
     const renderStep = () => {
         if (currentStep === 1) {
-            return <EventIdentity bookingData={bookingData} updateBooking={updateBooking} onNext={nextStep} />;
+            return <EventIdentity bookingData={bookingData} updateBooking={updateBooking} onNext={nextStep} initialEventTypes={initialEventTypes} />;
         }
         if (currentStep === 2) {
             return <CalendarView bookingData={bookingData} updateBooking={updateBooking} onNext={nextStep} onBack={prevStep} />;
@@ -536,7 +585,9 @@ const BookingWizard = () => {
 
                     <RevealOnScroll as="section" delay="rv-d1" className="mx-auto max-w-7xl px-4 py-5 sm:px-6 lg:px-8">
                         <div key={currentStep} className="animate-fadeIn">
-                            {renderStep()}
+                            <Suspense fallback={<StepFallback />}>
+                                {renderStep()}
+                            </Suspense>
                         </div>
                     </RevealOnScroll>
                 </main>
@@ -544,6 +595,7 @@ const BookingWizard = () => {
                 <BlueprintPanel
                     bookingData={bookingData}
                     collapsed={summaryCollapsed}
+                    deferCatalog={currentStep < 4}
                     onToggle={() => setSummaryCollapsed(prev => !prev)}
                 />
             </div>
