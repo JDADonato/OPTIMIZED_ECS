@@ -15,6 +15,7 @@ import NextActionPanel from '../Components/staff/NextActionPanel';
 import RoleSettingsPanel from '../Components/staff/RoleSettingsPanel';
 import StaffStatusBadge from '../Components/staff/StaffStatusBadge';
 import StaffSkeleton, { StaffWorkspaceSkeleton } from '../Components/staff/StaffSkeleton';
+import { StaffDecisionBrief, StaffOpsListRow, StaffOpsMetricStrip, StaffOpsPanel, StaffOpsSearchBar } from '../Components/staff/StaffOpsUI';
 import { bookingStatusLabel, reviewStatusLabel } from '../utils/statusLabels';
 import useSmartRefresh from '../hooks/useSmartRefresh';
 import useStaffWorkspaceState from '../hooks/useStaffWorkspaceState';
@@ -1135,59 +1136,96 @@ const DashboardMarketing = () => {
             setActiveTab('bookings');
         };
 
-        const WorkSection = ({ kicker, title, emptyTitle, emptyMessage, rows, actionLabel, onAction, tone = 'muted' }) => (
-            <section className="staff-work-surface">
-                <div className="staff-surface-head">
-                    <div>
-                        <p className="marketing-kicker">{kicker}</p>
-                        <h3 className="mt-1 text-lg font-black text-slate-950">{title}</h3>
-                    </div>
-                    {onAction && (
-                        <button type="button" onClick={onAction} className="staff-row-action">
-                            {actionLabel || 'Open'}
-                        </button>
-                    )}
-                </div>
+        const WorkSection = ({ kicker, title, emptyTitle, emptyMessage, rows, actionLabel, onAction, tone = 'neutral', delay = '' }) => (
+            <StaffOpsPanel
+                eyebrow={kicker}
+                title={title}
+                actionLabel={actionLabel || 'Open'}
+                onAction={onAction}
+                tone={tone}
+                delay={delay}
+            >
                 {rows.length === 0 ? (
                     <StaffEmptyState title={emptyTitle} message={emptyMessage} />
                 ) : (
-                    <div className="p-4 staff-priority-list">
+                    <div className="staff-ops-workspace">
                         {rows.map((booking) => {
                             const status = bookingStatusLabel(booking.status);
                             return (
-                                <button key={booking.id} type="button" onClick={() => setSelectedBooking(booking)} className="staff-priority-item">
-                                    <div>
-                                        <h3>{eventDisplayName(booking)}</h3>
-                                        <p>{formatDate(booking.event_date)} / {booking.pax || 0} guests / {bookingContactName(booking)}</p>
-                                    </div>
-                                    <StaffStatusBadge tone={tone === 'danger' ? 'danger' : status.tone === 'success' ? 'good' : status.tone === 'warning' ? 'warn' : 'muted'}>{status.label}</StaffStatusBadge>
-                                </button>
+                                <StaffOpsListRow
+                                    key={booking.id}
+                                    eyebrow={`Booking #${booking.id}`}
+                                    title={eventDisplayName(booking)}
+                                    detail={`${formatDate(booking.event_date)} / ${booking.pax || 0} guests / ${bookingContactName(booking)}`}
+                                    tone={tone === 'danger' ? 'danger' : status.tone === 'warning' ? 'warning' : 'neutral'}
+                                    status={<StaffStatusBadge tone={tone === 'danger' ? 'danger' : status.tone === 'success' ? 'good' : status.tone === 'warning' ? 'warn' : 'muted'}>{status.label}</StaffStatusBadge>}
+                                    actionLabel="Open brief"
+                                    onClick={() => setSelectedBooking(booking)}
+                                />
                             );
                         })}
                     </div>
                 )}
-            </section>
+            </StaffOpsPanel>
         );
 
         return (
-            <div className="space-y-5">
-                <div className="marketing-panel flex flex-col gap-4 p-5 lg:flex-row lg:items-center lg:justify-between">
-                    <div>
-                        <p className="marketing-kicker">Walk-in and phone support</p>
-                        <h3 className="mt-1 text-xl font-black text-slate-950">Create booking for customer</h3>
-                        <p className="mt-1 text-sm font-semibold text-slate-500">Link an existing customer or create a walk-in client account while preparing the booking.</p>
-                    </div>
-                    <button type="button" onClick={openAssistedBookingModal} className="marketing-primary-btn px-5 py-3 text-sm">
-                        Create booking for customer
-                    </button>
-                </div>
+            <div className="staff-ops-workspace">
+                <StaffOpsMetricStrip
+                    metrics={[
+                        {
+                            label: 'Booking reviews',
+                            value: marketingSummary.pending,
+                            description: `${marketingSummary.needsDetails} waiting on customer details`,
+                            actionLabel: 'Open bookings',
+                            onAction: () => openBookingsView('needs-action'),
+                            tone: marketingSummary.pending > 0 ? 'warning' : 'neutral',
+                        },
+                        {
+                            label: 'Urgent work',
+                            value: urgentRows.length,
+                            description: 'Transfers, replies, and near-date blockers',
+                            actionLabel: 'Review now',
+                            onAction: () => openBookingsView('needs-action'),
+                            tone: urgentRows.length > 0 ? 'danger' : 'neutral',
+                        },
+                        {
+                            label: 'Handoff',
+                            value: marketingSummary.upcoming,
+                            description: 'Confirmed events moving to operations',
+                            actionLabel: 'Open handoff',
+                            onAction: () => setActiveTab('handoff'),
+                        },
+                        {
+                            label: 'Follow-ups',
+                            value: (leadData.summary?.open || 0) + (feedbackSummary.followUps || 0),
+                            description: 'Guest inquiries and feedback follow-ups',
+                            actionLabel: 'Open leads',
+                            onAction: () => setActiveTab('leads'),
+                        },
+                    ]}
+                />
+                <StaffOpsPanel
+                    eyebrow="Walk-in and phone support"
+                    title="Create booking for customer"
+                    description="Link an existing customer or create a walk-in client account while preparing the booking."
+                    actionLabel="Create booking"
+                    onAction={openAssistedBookingModal}
+                />
+                <StaffDecisionBrief
+                    source="Marketing read"
+                    finding={urgentRows.length > 0 ? 'Marketing has work that can block event progress.' : 'Marketing queues are under control.'}
+                    signal={urgentRows.length > 0 ? `${urgentRows.length} transfer, reply, or near-event item needs attention before the queue moves smoothly.` : 'No urgent transfer, reply, or near-event blockers are currently waiting.'}
+                    nextMove={urgentRows.length > 0 ? 'Open needs action and clear the oldest customer-facing blocker first.' : 'Keep reviewing new booking submissions and follow-ups as they arrive.'}
+                    tone={urgentRows.length > 0 ? 'danger' : 'neutral'}
+                />
                 <NextActionPanel
                     title="Marketing work needing action"
                     actions={marketingNextActions}
                     emptyTitle="No Marketing actions waiting"
                     emptyMessage="Claim requests, customer replies, guest inquiries, and feedback follow-ups will appear here."
                 />
-                <div className="grid gap-5 xl:grid-cols-2">
+                <div className="staff-ops-grid-three">
                     <WorkSection
                         kicker="Urgent"
                         title="Transfers, replies, and near events"
@@ -1197,6 +1235,7 @@ const DashboardMarketing = () => {
                         actionLabel="Open needs action"
                         onAction={() => openBookingsView('needs-action')}
                         tone="danger"
+                        delay="rv-d1"
                     />
                     <WorkSection
                         kicker="Booking intake"
@@ -1206,6 +1245,8 @@ const DashboardMarketing = () => {
                         rows={[...unclaimedRows, ...ownedRows].slice(0, 6)}
                         actionLabel="Open bookings"
                         onAction={() => openBookingsView('needs-action')}
+                        tone="warning"
+                        delay="rv-d2"
                     />
                     <WorkSection
                         kicker="Upcoming handoff"
@@ -1215,34 +1256,19 @@ const DashboardMarketing = () => {
                         rows={handoffRows}
                         actionLabel="Open handoff"
                         onAction={() => setActiveTab('handoff')}
+                        delay="rv-d3"
                     />
-                    <section className="staff-work-surface">
-                        <div className="staff-surface-head">
-                            <div>
-                                <p className="marketing-kicker">Follow-up</p>
-                                <h3 className="mt-1 text-lg font-black text-slate-950">Leads, messages, and feedback</h3>
-                            </div>
-                        </div>
-                        <div className="grid gap-3 p-4 sm:grid-cols-4">
-                            <button type="button" onClick={() => setActiveTab('leads')} className="rounded-xl border border-amber-100 bg-white p-4 text-left hover:bg-[#fffaf3]">
-                                <p className="text-2xl font-black text-slate-950">{leadData.summary?.open || 0}</p>
-                                <p className="mt-1 text-xs font-black uppercase tracking-widest text-slate-500">Guest inquiries</p>
-                            </button>
-                            <button type="button" onClick={() => setActiveTab('messages')} className="rounded-xl border border-amber-100 bg-white p-4 text-left hover:bg-[#fffaf3]">
-                                <p className="text-2xl font-black text-slate-950">Inbox</p>
-                                <p className="mt-1 text-xs font-black uppercase tracking-widest text-slate-500">Customer messages</p>
-                            </button>
-                            <button type="button" onClick={() => setActiveTab('history')} className="rounded-xl border border-amber-100 bg-white p-4 text-left hover:bg-[#fffaf3]">
-                                <p className="text-2xl font-black text-slate-950">{feedbackSummary.followUps || 0}</p>
-                                <p className="mt-1 text-xs font-black uppercase tracking-widest text-slate-500">Feedback follow-ups</p>
-                            </button>
-                            <button type="button" onClick={() => setActiveTab('tastings')} className="rounded-xl border border-amber-100 bg-white p-4 text-left hover:bg-[#fffaf3]">
-                                <p className="text-2xl font-black text-slate-950">Queue</p>
-                                <p className="mt-1 text-xs font-black uppercase tracking-widest text-slate-500">Food tastings</p>
-                            </button>
-                        </div>
-                    </section>
                 </div>
+                <StaffOpsPanel eyebrow="Follow-up" title="Leads, messages, and feedback" delay="rv-d1">
+                    <StaffOpsMetricStrip
+                        metrics={[
+                            { label: 'Guest inquiries', value: leadData.summary?.open || 0, actionLabel: 'Open leads', onAction: () => setActiveTab('leads') },
+                            { label: 'Messages', value: 'Inbox', actionLabel: 'Open messages', onAction: () => setActiveTab('messages') },
+                            { label: 'Feedback', value: feedbackSummary.followUps || 0, actionLabel: 'Review history', onAction: () => setActiveTab('history') },
+                            { label: 'Tastings', value: 'Queue', actionLabel: 'Open tastings', onAction: () => setActiveTab('tastings') },
+                        ]}
+                    />
+                </StaffOpsPanel>
             </div>
         );
     };
@@ -1882,17 +1908,14 @@ const DashboardMarketing = () => {
             });
         const pagedPendingBookings = pendingBookings.slice((inquiryPage - 1) * inquiryPerPage, inquiryPage * inquiryPerPage);
         return (
-            <div className="space-y-4">
-                <div className="marketing-panel flex flex-col gap-3 p-5 lg:flex-row lg:items-center lg:justify-between">
-                    <div>
-                        <p className="marketing-kicker">Assisted intake</p>
-                        <h3 className="text-lg font-black text-slate-950">Booking for a walk-in, call, or direct customer?</h3>
-                        <p className="text-sm font-semibold text-slate-500">Create the customer account and booking together so payments, chat, receipts, and feedback still work.</p>
-                    </div>
-                    <button type="button" onClick={openAssistedBookingModal} className="marketing-primary-btn px-5 py-3 text-sm">
-                        Create booking for customer
-                    </button>
-                </div>
+            <div className="staff-ops-workspace">
+                <StaffOpsPanel
+                    eyebrow="Assisted intake"
+                    title="Booking for a walk-in, call, or direct customer?"
+                    description="Create the customer account and booking together so payments, chat, receipts, and feedback still work."
+                    actionLabel="Create booking"
+                    onAction={openAssistedBookingModal}
+                />
                 <div className="marketing-panel flex flex-wrap gap-2 p-2">
                     {BOOKING_WORK_VIEWS.map(option => (
                         <button
@@ -1933,8 +1956,11 @@ const DashboardMarketing = () => {
                         </div>
                     </div>
                 )}
-                <div className="marketing-panel staff-filter-bar">
-                    <input value={inquirySearch} onChange={(event) => setInquirySearch(event.target.value)} placeholder="Search booking, customer, phone, or city" className="staff-control" />
+                <StaffOpsSearchBar
+                    value={inquirySearch}
+                    onChange={(event) => setInquirySearch(event.target.value)}
+                    placeholder="Search booking, customer, phone, or city"
+                >
                     <select value={inquiryStatusFilter} onChange={(event) => setInquiryStatusFilter(event.target.value)} className="staff-control">
                         <option value="all">All statuses</option>
                         <option value="submitted">Submitted</option>
@@ -1952,7 +1978,7 @@ const DashboardMarketing = () => {
                     </select>
                     <input type="date" value={inquiryDateFrom} onChange={(event) => setInquiryDateFrom(event.target.value)} className="staff-control" />
                     <input type="date" value={inquiryDateTo} onChange={(event) => setInquiryDateTo(event.target.value)} className="staff-control" />
-                </div>
+                </StaffOpsSearchBar>
 
                 {(
                     <div className="marketing-panel overflow-hidden">

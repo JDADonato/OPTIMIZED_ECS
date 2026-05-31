@@ -19,6 +19,7 @@ import NextActionPanel from '../Components/staff/NextActionPanel';
 import StaffStatusBadge from '../Components/staff/StaffStatusBadge';
 import RoleSettingsPanel from '../Components/staff/RoleSettingsPanel';
 import StaffSkeleton, { StaffWorkspaceSkeleton } from '../Components/staff/StaffSkeleton';
+import { StaffDecisionBrief, StaffOpsListRow, StaffOpsMetricStrip, StaffOpsPanel, StaffOpsSearchBar } from '../Components/staff/StaffOpsUI';
 import { staffPaymentStatus } from '../utils/statusLabels';
 import csrfFetch from '../utils/csrf';
 import { clearSmartCacheForPrefix, fetchSmartResource, getUserScopedCacheKey, readSmartCache } from '../utils/smartResource';
@@ -957,14 +958,11 @@ const DashboardAccounting = () => {
                     </button>
                 ))}
             </div>
-            <div className="staff-filter-bar">
-                <input
-                    type="text"
-                    placeholder="Search booking contact or booking number"
-                    value={bookingSearchQuery}
-                    onChange={(e) => setBookingSearchQuery(e.target.value)}
-                    className="staff-control"
-                />
+            <StaffOpsSearchBar
+                value={bookingSearchQuery}
+                onChange={(e) => setBookingSearchQuery(e.target.value)}
+                placeholder="Search booking contact or booking number"
+            >
                 <select value={bookingSortOrder} onChange={(e) => setBookingSortOrder(e.target.value)} className="staff-control">
                     <option value="eventDateSoonest">Event date soonest</option>
                     <option value="eventDateLatest">Event date latest</option>
@@ -978,7 +976,7 @@ const DashboardAccounting = () => {
                     <option value="pending">Pending</option>
                     <option value="complete">Complete</option>
                 </select>
-            </div>
+            </StaffOpsSearchBar>
             {paymentSegment === 'exceptions' ? renderPaymentExceptions() : loading && visibleBookings.length === 0 ? (
                 <StaffSkeleton rows={6} />
             ) : visibleBookings.length === 0 ? (
@@ -1086,44 +1084,80 @@ const DashboardAccounting = () => {
                 />
 
                 {activeTab === 'today' && (
-                    <div className="staff-today-grid">
+                    <div className="staff-ops-workspace">
+                        <StaffOpsMetricStrip
+                            metrics={[
+                                {
+                                    label: 'Collected',
+                                    value: `P${toMoneyNumber(dashboardSummary.collected).toLocaleString()}`,
+                                    description: 'Verified finance records in the current ledger view',
+                                    actionLabel: 'Open ledger',
+                                    onAction: () => setActiveTab('ledger'),
+                                },
+                                {
+                                    label: 'Pending',
+                                    value: dashboardSummary.pending,
+                                    description: 'Payment records still waiting for review',
+                                    actionLabel: 'Verify',
+                                    onAction: () => { setPaymentSegment('needs_verification'); setActiveTab('payments'); },
+                                    tone: dashboardSummary.pending > 0 ? 'warning' : 'neutral',
+                                },
+                                {
+                                    label: 'Overdue',
+                                    value: dashboardSummary.overdue,
+                                    description: 'Balances past their due date',
+                                    actionLabel: 'Follow up',
+                                    onAction: () => { setPaymentSegment('overdue'); setActiveTab('payments'); },
+                                    tone: dashboardSummary.overdue > 0 ? 'danger' : 'neutral',
+                                },
+                                {
+                                    label: 'Exceptions',
+                                    value: dashboardSummary.exceptions + dashboardSummary.refunds,
+                                    description: 'Provider issues and refund cases',
+                                    actionLabel: 'Resolve',
+                                    onAction: () => { setPaymentSegment('exceptions'); setActiveTab('payments'); },
+                                    tone: dashboardSummary.exceptions + dashboardSummary.refunds > 0 ? 'danger' : 'neutral',
+                                },
+                            ]}
+                        />
+                        <StaffDecisionBrief
+                            source="Finance read"
+                            finding={dashboardSummary.overdue + dashboardSummary.exceptions > 0 ? 'Finance has collection or provider risk to clear.' : 'Finance queues are currently stable.'}
+                            signal={dashboardSummary.overdue + dashboardSummary.exceptions > 0 ? `${dashboardSummary.overdue} overdue balance(s) and ${dashboardSummary.exceptions} provider exception(s) need review.` : 'No overdue balances or provider exceptions are currently blocking finance work.'}
+                            nextMove={dashboardSummary.exceptions > 0 ? 'Open exceptions first, then follow up overdue balances.' : dashboardSummary.overdue > 0 ? 'Open overdue payments and send reminders for the oldest balances.' : 'Keep monitoring payment verification and refund queues.'}
+                            tone={dashboardSummary.overdue + dashboardSummary.exceptions > 0 ? 'danger' : 'neutral'}
+                        />
                         <NextActionPanel
                             title="Finance actions"
                             actions={financeNextActions}
                             emptyTitle="No finance actions waiting"
                             emptyMessage="Payment reviews, overdue balances, refunds, and reconciliation issues will appear here."
                         />
-                        <section className="staff-work-surface">
-                            <div className="staff-surface-head">
-                                <div>
-                                    <p className="marketing-kicker">Finance priority desk</p>
-                                    <h3 className="mt-1 text-lg font-black text-slate-950">Work that needs Accounting today</h3>
-                                </div>
-                                {(reconciliationItems.length > 0 || todayQueues.pendingBookings.length > 0) && (
-                                    <button type="button" onClick={() => { setPaymentSegment('exceptions'); setActiveTab('payments'); }} className="staff-row-action">
-                                        Open payments
-                                    </button>
-                                )}
-                            </div>
+                        <StaffOpsPanel
+                            eyebrow="Finance priority desk"
+                            title="Work that needs Accounting today"
+                            actionLabel="Open payments"
+                            onAction={() => { setPaymentSegment('exceptions'); setActiveTab('payments'); }}
+                        >
                             {todayQueues.urgent.length === 0 && todayQueues.pendingBookings.length === 0 && todayQueues.upcomingBookings.length === 0 && todayQueues.refunds.length === 0 ? (
                                 <StaffEmptyState title="No finance work waiting" message="Payment reviews, overdue balances, refund cases, and provider issues will appear here." />
                             ) : (
-                                <div className="grid gap-4">
+                                <div className="staff-ops-grid-two">
                                     {[
-                                        ['Urgent', todayQueues.urgent, 'exceptions'],
-                                        ['Payment verification', todayQueues.pendingBookings, 'needs_verification'],
-                                        ['Due soon', todayQueues.upcomingBookings, 'upcoming'],
-                                        ['Follow-up', todayQueues.refunds, 'refunds'],
+                                        ['Urgent', todayQueues.urgent, 'exceptions', 'danger'],
+                                        ['Payment verification', todayQueues.pendingBookings, 'needs_verification', 'warning'],
+                                        ['Due soon', todayQueues.upcomingBookings, 'upcoming', 'neutral'],
+                                        ['Follow-up', todayQueues.refunds, 'refunds', 'warning'],
                                     ].map(([label, items, target]) => (
-                                        <div key={label} className="rounded-xl border border-[#720101]/10 bg-white p-4">
-                                            <div className="mb-3 flex items-center justify-between">
-                                                <h4 className="text-sm font-black uppercase tracking-widest text-slate-500">{label}</h4>
+                                        <div key={label} className="staff-ops-queue-group">
+                                            <div className="staff-ops-queue-head">
+                                                <h4>{label}</h4>
                                                 <StaffStatusBadge tone={items.length > 0 ? (label === 'Urgent' ? 'danger' : 'warn') : 'good'}>{items.length}</StaffStatusBadge>
                                             </div>
                                             {items.length === 0 ? (
-                                                <p className="text-sm font-semibold text-slate-400">Nothing waiting here.</p>
+                                                <p className="staff-ops-muted">Nothing waiting here.</p>
                                             ) : (
-                                                <div className="staff-provider-list">
+                                                <div className="staff-ops-workspace">
                                                     {items.slice(0, 3).map((item) => {
                                                         const isRefund = target === 'refunds';
                                                         const isException = Boolean(item.exceptions);
@@ -1136,9 +1170,8 @@ const DashboardAccounting = () => {
                                                                 : `${formatAccountingDate(item.event_date)} / ${(item.payments || []).length} payment terms`;
 
                                                         return (
-                                                            <button
+                                                            <StaffOpsListRow
                                                                 key={itemKey}
-                                                                type="button"
                                                                 onClick={() => {
                                                                     if (isRefund) {
                                                                         setActiveTab('refunds');
@@ -1147,21 +1180,20 @@ const DashboardAccounting = () => {
                                                                         setActiveTab('payments');
                                                                     }
                                                                 }}
-                                                                className="staff-provider-item"
+                                                                eyebrow={label}
+                                                                title={title}
+                                                                detail={detail}
+                                                                tone={label === 'Urgent' ? 'danger' : 'warning'}
+                                                                actionLabel={isRefund ? 'Open refunds' : 'Open payments'}
                                                             >
-                                                                <div className="staff-provider-main">
-                                                                    <span className="staff-item-kicker">{label}</span>
-                                                                    <h3>{title}</h3>
-                                                                    <p>{detail}</p>
-                                                                </div>
-                                                                {isException && (
-                                                                    <div className="staff-provider-tags">
+                                                                {isException && (item.exceptions || []).length > 0 && (
+                                                                    <div className="staff-provider-tags mt-2 justify-start">
                                                                         {(item.exceptions || []).slice(0, 2).map((exception) => (
                                                                             <span key={exception}>{exceptionLabels[exception] || exception}</span>
                                                                         ))}
                                                                     </div>
                                                                 )}
-                                                            </button>
+                                                            </StaffOpsListRow>
                                                         );
                                                     })}
                                                 </div>
@@ -1170,7 +1202,7 @@ const DashboardAccounting = () => {
                                     ))}
                                 </div>
                             )}
-                        </section>
+                        </StaffOpsPanel>
                     </div>
                 )}
 
