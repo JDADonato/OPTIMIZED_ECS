@@ -18,8 +18,7 @@ class BookingLiveStatusUpdate extends Mailable implements ShouldQueue
         public Booking $booking,
         public string $liveStatus,
         public ?User $updatedBy = null
-    ) {
-    }
+    ) {}
 
     public function build(): self
     {
@@ -36,7 +35,7 @@ class BookingLiveStatusUpdate extends Mailable implements ShouldQueue
                 'emailTitle' => 'Event live status update',
                 'headline' => $copy['headline'],
                 'preheader' => $copy['preheader'],
-                'greeting' => 'Hello ' . ($this->booking->client_full_name ?: $this->booking->user?->username ?: 'there') . ',',
+                'greeting' => 'Hello '.($this->booking->client_full_name ?: $this->booking->user?->username ?: 'there').',',
                 'lines' => $copy['lines'],
                 'details' => [
                     'Current status' => $this->liveStatus,

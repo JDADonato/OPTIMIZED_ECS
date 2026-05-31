@@ -8,6 +8,8 @@ import logoImg from '../../../images/ECS_LOGO.png';
 import ClientNavbar from '../../Components/common/ClientNavbar';
 import ConfirmModal from '../../Components/common/ConfirmModal';
 import SmartImage from '../../Components/common/SmartImage';
+import StaffPreviewBanner from '../../Components/common/StaffPreviewBanner';
+import { dashboardHrefForUser, isStaffUser } from '../../utils/dashboardLinks';
 
 const CATEGORY_LIMITS = { starter: 3, main: 4, side: 4, dessert: 4, drink: 3 };
 const STORAGE_KEY = 'ecs_booking_draft';
@@ -22,6 +24,7 @@ const MenuGallery = () => {
     const { auth } = usePage().props;
     const user = auth?.user || null;
     const toast = useToast();
+    const dashboardHref = dashboardHrefForUser(user, '/');
     const [activeCategory, setActiveCategory] = useState('all');
     const [priceFilter, setPriceFilter] = useState('all');
     const [sortOrder, setSortOrder] = useState('default');
@@ -167,15 +170,6 @@ const MenuGallery = () => {
         });
     };
 
-    const isDishInPackage = (dishId) => Object.values(packageSelections).some(arr => arr.includes(dishId));
-
-    const getDishCategory = (dishId) => {
-        for (const [cat, items] of Object.entries(mergedDishes)) {
-            if (items.some(d => d.id === dishId)) return cat;
-        }
-        return null;
-    };
-
     const buildMenuPayload = () => {
         const fullMenuSelection = {};
         const selectedDishesMap = {};
@@ -290,11 +284,12 @@ const MenuGallery = () => {
     const maxPrice = Math.max(...allPrices);
 
     return (
-        <div className="min-h-screen bg-white pt-[68px]">
+        <div className={`min-h-screen bg-white ${isStaffUser(user) ? 'pt-[104px]' : 'pt-[68px]'}`}>
             <Head title="Menu Gallery | Eloquente Catering">
                 <meta name="description" content="Browse Eloquente Catering dishes, best sellers, price indicators, and build a custom menu package before booking." />
             </Head>
             <ClientNavbar user={user} />
+            <StaffPreviewBanner user={user} label="customer-facing menu page" />
             {/* Navbar */}
             <nav className="hidden bg-brand-red shadow-lg py-4 relative z-50">
                 <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -324,7 +319,7 @@ const MenuGallery = () => {
                                     <NotificationBell variant="light" />
                                     <UserDropdown 
                                         user={user} 
-                                        dashLink={user.role === 'Client' ? '/dashboard/client' : user.role === 'Marketing' ? '/dashboard/marketing' : user.role === 'Accounting' ? '/dashboard/accounting' : '/dashboard/admin'} 
+                                        dashLink={dashboardHref}
                                     />
                                 </div>
                             ) : (
@@ -376,7 +371,7 @@ const MenuGallery = () => {
                             ))}
                             {user ? (
                                 <>
-                                    <Link href={user.role === 'Client' ? '/dashboard/client' : user.role === 'Marketing' ? '/dashboard/marketing' : user.role === 'Accounting' ? '/dashboard/accounting' : '/dashboard/admin'} className="block text-white hover:bg-red-700 px-3 py-2 rounded-md text-base font-medium" onClick={() => setIsMobileMenuOpen(false)}>
+                                    <Link href={dashboardHref} className="block text-white hover:bg-red-700 px-3 py-2 rounded-md text-base font-medium" onClick={() => setIsMobileMenuOpen(false)}>
                                         Dashboard
                                     </Link>
                                     <Link href="/profile" className="block text-white hover:bg-red-700 px-3 py-2 rounded-md text-base font-medium" onClick={() => setIsMobileMenuOpen(false)}>

@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Events\PaymentProcessed;
+use App\Exceptions\ExternalServiceException;
 use App\Models\Booking;
 use App\Models\Payment;
 use App\Services\ConversionEventService;
@@ -28,7 +29,7 @@ class PaymentController extends Controller
 
     public function initializeCheckout(Request $request, PayMongoService $payMongo, PaymentCalculationService $paymentCalculation)
     {
-        if (!$request->user()?->email_verified_at) {
+        if (! $request->user()?->email_verified_at) {
             return back()->with('error', 'Please verify your email before making a payment.');
         }
 
@@ -48,7 +49,7 @@ class PaymentController extends Controller
         $payment = $booking->payments
             ->firstWhere('id', (int) $validated['payment_id']);
 
-        if (!$payment) {
+        if (! $payment) {
             return back()->with('error', 'Payment milestone not found for this booking.');
         }
 
@@ -81,6 +82,20 @@ class PaymentController extends Controller
                 ],
                 booking: $booking
             );
+        } catch (ExternalServiceException $exception) {
+            Log::error('PayMongo checkout initialization failed', [
+                'booking_id' => $booking->id,
+                'payment_id' => $payment->id,
+                'external' => $exception->safePayload(),
+                'context' => $exception->context,
+            ]);
+
+            return back()->with(
+                'error',
+                config('app.debug')
+                    ? $exception->getMessage()
+                    : 'Unable to create PayMongo checkout. Please try again in a moment. Reference: '.$exception->referenceCode()
+            );
         } catch (RuntimeException $exception) {
             Log::error('PayMongo checkout initialization failed', [
                 'booking_id' => $booking->id,
@@ -88,12 +103,7 @@ class PaymentController extends Controller
                 'message' => $exception->getMessage(),
             ]);
 
-            return back()->with(
-                'error',
-                config('app.debug')
-                    ? $exception->getMessage()
-                    : 'Unable to create PayMongo checkout. Please try again in a moment.'
-            );
+            return back()->with('error', 'Unable to create PayMongo checkout. Please try again in a moment.');
         }
 
         $payment->forceFill([
@@ -170,7 +180,7 @@ class PaymentController extends Controller
                 $checkout = $payMongo->retrieveCheckoutSession($payment->paymongo_checkout_session_id);
 
                 if ($this->checkoutSessionIsPaid($checkout) && $this->checkoutAmountMatches($checkout, $payment)) {
-                    DB::transaction(function () use ($payment, $checkout) {
+                    DB::transaction(function () use ($payment, $checkout, $paymentCalculation) {
                         $payment->refresh();
                         $payment->loadMissing('booking.payments');
 
@@ -222,7 +232,7 @@ class PaymentController extends Controller
 
                     $syncStatus = 'Paid';
                     $syncMessage = 'Payment confirmed through PayMongo.';
-                } elseif (!$this->checkoutAmountMatches($checkout, $payment)) {
+                } elseif (! $this->checkoutAmountMatches($checkout, $payment)) {
                     $syncMessage = 'PayMongo returned a different amount, so payment was not auto-confirmed.';
                     Log::warning('PayMongo checkout success amount mismatch.', [
                         'payment_id' => $payment->id,
@@ -233,6 +243,16 @@ class PaymentController extends Controller
                 } else {
                     $syncMessage = 'PayMongo has not marked this checkout as paid yet.';
                 }
+            } catch (ExternalServiceException $exception) {
+                Log::warning('PayMongo checkout success confirmation failed.', [
+                    'payment_id' => $payment->id,
+                    'checkout_session_id' => $payment->paymongo_checkout_session_id,
+                    'external' => $exception->safePayload(),
+                ]);
+
+                $syncMessage = config('app.debug')
+                    ? $exception->getMessage()
+                    : 'Payment is still pending PayMongo confirmation.';
             } catch (RuntimeException $exception) {
                 Log::warning('PayMongo checkout success confirmation failed.', [
                     'payment_id' => $payment->id,
@@ -240,9 +260,7 @@ class PaymentController extends Controller
                     'message' => $exception->getMessage(),
                 ]);
 
-                $syncMessage = config('app.debug')
-                    ? $exception->getMessage()
-                    : 'Payment is still pending PayMongo confirmation.';
+                $syncMessage = 'Payment is still pending PayMongo confirmation.';
             }
         }
 
@@ -254,11 +272,11 @@ class PaymentController extends Controller
 
     private function validatePayableMilestone(Booking $booking, Payment $payment): ?string
     {
-        if (!in_array($payment->payment_type, ['Reservation', 'DownPayment', 'Final'], true)) {
+        if (! in_array($payment->payment_type, ['Reservation', 'DownPayment', 'Final'], true)) {
             return 'Only configured payment milestones can be paid online.';
         }
 
-        if (!in_array($payment->status, ['Pending', 'Failed', 'Rejected'], true)) {
+        if (! in_array($payment->status, ['Pending', 'Failed', 'Rejected'], true)) {
             return 'This payment milestone is not payable.';
         }
 
@@ -287,7 +305,7 @@ class PaymentController extends Controller
     {
         $eventName = $booking->event_type ?: 'Event';
         $percentage = $this->milestonePercentage($booking, $payment);
-        $label = trim($percentage . '% ' . self::MILESTONE_LABELS[$payment->payment_type]);
+        $label = trim($percentage.'% '.self::MILESTONE_LABELS[$payment->payment_type]);
 
         return sprintf(
             '%s for %s Booking #%d',
@@ -381,5 +399,4 @@ class PaymentController extends Controller
             ?? Arr::get($checkout, 'data.attributes.payment_method_used')
             ?? 'PayMongo';
     }
-
 }

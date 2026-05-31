@@ -9,6 +9,7 @@ return new class extends Migration
     {
         if (DB::connection()->getDriverName() !== 'pgsql') {
             DB::table('business_rules')->update(['maximum_capacity_per_day' => 7]);
+
             return;
         }
 
@@ -141,7 +142,7 @@ return new class extends Migration
             $clauses[] = "with check ({$check})";
         }
 
-        DB::statement("create policy {$name} on public.{$table} {$command} " . implode(' ', $clauses));
+        DB::statement("create policy {$name} on public.{$table} {$command} ".implode(' ', $clauses));
     }
 
     private function tables(): array

@@ -11,8 +11,10 @@ use App\Models\ConversationParticipant;
 use App\Models\Message;
 use App\Models\User;
 use App\Notifications\NewChatMessageNotification;
+use App\Services\ChatModerationService;
 use App\Services\NotificationRecipientService;
 use App\Services\OperationalBroadcastService;
+use App\Support\CustomerIdentity;
 use App\Support\ResourceVersion;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -108,6 +110,7 @@ class ChatController extends Controller
     public function myChats(Request $request)
     {
         $user = Auth::user();
+
         return response()->json($this->getMyActiveChats($user, $this->pageLimit($request)));
     }
 
@@ -168,9 +171,11 @@ class ChatController extends Controller
     {
         $request->validate([
             'message' => 'required|string|max:5000',
+            'client_temp_id' => 'nullable|string|max:80',
         ]);
 
         $user = Auth::user();
+        $clientTempId = $this->clientTempId($request);
         $this->authorizeConversationAccess($user, $conversation);
 
         if ($this->hasInactiveClient($conversation)) {
@@ -180,10 +185,14 @@ class ChatController extends Controller
         }
 
         // Staff can only send if they own, collaborate on, or observe this conversation.
-        if (in_array($user->role, ['Marketing', 'Admin']) && !$this->canReplyToConversation($user, $conversation)) {
+        if (in_array($user->role, ['Marketing', 'Admin']) && ! $this->canReplyToConversation($user, $conversation)) {
             return response()->json([
                 'error' => 'You must claim this conversation before sending messages.',
             ], 403);
+        }
+
+        if ($response = $this->blockedChatMessageResponse($request->input('message'))) {
+            return $response;
         }
 
         $message = Message::create([
@@ -208,7 +217,7 @@ class ChatController extends Controller
             if ($client && $client->isReachableForNotifications()) {
                 $cacheKey = "chat_email_cooldown:{$conversation->id}";
 
-                if (!Cache::has($cacheKey)) {
+                if (! Cache::has($cacheKey)) {
                     // Dispatch the queued email notification
                     app(NotificationRecipientService::class)
                         ->sendToUser($client, new NewChatMessageNotification($message, $conversation, $user), 'chat_message_email');
@@ -219,7 +228,7 @@ class ChatController extends Controller
             }
         }
 
-        return response()->json($this->formatMessage($message, $user), 201);
+        return response()->json($this->formatMessage($message, $user, $clientTempId), 201);
     }
 
     // ─────────────────────────────────────────────
@@ -237,21 +246,27 @@ class ChatController extends Controller
         $request->validate([
             'message' => 'required|string|max:5000',
             'booking_id' => 'nullable|integer|exists:bookings,id',
+            'client_temp_id' => 'nullable|string|max:80',
         ]);
 
         $user = Auth::user();
+        $clientTempId = $this->clientTempId($request);
 
         if ($user->role !== 'Client') {
             return response()->json(['error' => 'Only clients can start conversations.'], 403);
         }
 
-        if (!$user->isActive()) {
+        if (! $user->isActive()) {
             return response()->json(['error' => 'This account is deactivated.'], 403);
         }
 
         $bookingId = $request->input('booking_id');
-        if ($bookingId && !Booking::where('id', $bookingId)->where('user_id', $user->id)->exists()) {
+        if ($bookingId && ! Booking::where('id', $bookingId)->where('user_id', $user->id)->exists()) {
             return response()->json(['error' => 'Choose one of your own bookings for this conversation.'], 422);
+        }
+
+        if ($response = $this->blockedChatMessageResponse($request->input('message'))) {
+            return $response;
         }
 
         // Check if the client already has an active conversation for this booking or general inquiry.
@@ -261,7 +276,7 @@ class ChatController extends Controller
             ->first();
 
         $isNew = false;
-        if (!$conversation) {
+        if (! $conversation) {
             $conversation = Conversation::create([
                 'client_id' => $user->id,
                 'booking_id' => $bookingId,
@@ -282,7 +297,7 @@ class ChatController extends Controller
 
         // Broadcast events. Fail softly so an offline Reverb server does not block chat.
         if ($isNew) {
-            $conversation->load('client:id,username,email');
+            $conversation->load('client:id,full_name,username,email');
             $this->broadcastSafely(new ConversationCreated($conversation));
         }
         $this->broadcastSafely(new MessageSent($message), true);
@@ -297,7 +312,7 @@ class ChatController extends Controller
                 'booking_id' => $conversation->booking_id,
                 'status' => $conversation->status,
             ],
-            'message' => $this->formatMessage($message, $user),
+            'message' => $this->formatMessage($message, $user, $clientTempId),
         ], $isNew ? 201 : 200);
     }
 
@@ -315,7 +330,7 @@ class ChatController extends Controller
     {
         $user = Auth::user();
 
-        if (!in_array($user->role, ['Marketing', 'Admin'])) {
+        if (! in_array($user->role, ['Marketing', 'Admin'])) {
             return response()->json(['error' => 'Only staff can claim conversations.'], 403);
         }
 
@@ -325,7 +340,7 @@ class ChatController extends Controller
 
         if ($conversation->isClaimed()) {
             return response()->json([
-                'error' => 'This conversation has already been claimed by ' . ($conversation->staff->username ?? 'another staff member') . '.',
+                'error' => 'This conversation has already been claimed by '.($conversation->staff->username ?? 'another staff member').'.',
             ], 409); // 409 Conflict
         }
 
@@ -334,7 +349,7 @@ class ChatController extends Controller
             ->whereNull('staff_id')
             ->update(['staff_id' => $user->id]);
 
-        if (!$updated) {
+        if (! $updated) {
             return response()->json([
                 'error' => 'This conversation was just claimed by another staff member.',
             ], 409);
@@ -342,7 +357,7 @@ class ChatController extends Controller
 
         $conversation->refresh();
         $this->upsertParticipant($conversation, $user->id, 'owner', $user->id);
-        $conversation->load(['client:id,username,email', 'staff:id,username', 'participants.user:id,username,full_name,role']);
+        $conversation->load(['client:id,full_name,username,email', 'staff:id,username', 'participants.user:id,username,full_name,role']);
 
         // Broadcast to all staff and the client. Fail softly when Reverb is offline.
         $this->broadcastSafely(new ConversationClaimed($conversation));
@@ -364,11 +379,11 @@ class ChatController extends Controller
     {
         $user = Auth::user();
 
-        if (!in_array($user->role, ['Marketing', 'Admin'])) {
+        if (! in_array($user->role, ['Marketing', 'Admin'])) {
             return response()->json(['error' => 'Only staff can resolve conversations.'], 403);
         }
 
-        if (!$this->canResolveConversation($user, $conversation)) {
+        if (! $this->canResolveConversation($user, $conversation)) {
             return response()->json(['error' => 'You can only resolve your own claimed conversations.'], 403);
         }
 
@@ -387,7 +402,7 @@ class ChatController extends Controller
         $user = Auth::user();
         $this->authorizeConversationAccess($user, $conversation);
 
-        if (!in_array($user->role, ['Marketing', 'Admin']) && $user->id !== $conversation->client_id) {
+        if (! in_array($user->role, ['Marketing', 'Admin']) && $user->id !== $conversation->client_id) {
             return response()->json(['error' => 'You cannot reopen this conversation.'], 403);
         }
 
@@ -445,7 +460,7 @@ class ChatController extends Controller
     {
         $user = Auth::user();
 
-        if (!in_array($user->role, ['Marketing', 'Admin'])) {
+        if (! in_array($user->role, ['Marketing', 'Admin'])) {
             return response()->json(['error' => 'Only staff can update internal notes.'], 403);
         }
 
@@ -479,11 +494,11 @@ class ChatController extends Controller
 
         $user = Auth::user();
 
-        if (!in_array($user->role, ['Marketing', 'Admin'])) {
+        if (! in_array($user->role, ['Marketing', 'Admin'])) {
             return response()->json(['error' => 'Only staff can transfer conversations.'], 403);
         }
 
-        if (!$this->canTransferConversation($user, $conversation)) {
+        if (! $this->canTransferConversation($user, $conversation)) {
             return response()->json(['error' => 'Only the owner or an admin can transfer this conversation.'], 403);
         }
 
@@ -492,7 +507,7 @@ class ChatController extends Controller
             return response()->json(['error' => 'This conversation is archived because the customer account is deactivated.'], 403);
         }
 
-        if ($newStaff->role !== 'Marketing' || !$newStaff->isActive()) {
+        if ($newStaff->role !== 'Marketing' || ! $newStaff->isActive()) {
             return response()->json(['error' => 'Can only transfer ownership to Marketing staff.'], 422);
         }
 
@@ -523,7 +538,7 @@ class ChatController extends Controller
         });
 
         $conversation->refresh();
-        $conversation->load(['client:id,username,email', 'staff:id,username', 'participants.user:id,username,full_name,role']);
+        $conversation->load(['client:id,full_name,username,email', 'staff:id,username', 'participants.user:id,username,full_name,role']);
 
         // Broadcast claim event so UI updates for everyone. Fail softly when Reverb is offline.
         $this->broadcastSafely(new ConversationClaimed($conversation));
@@ -545,7 +560,7 @@ class ChatController extends Controller
 
         $user = Auth::user();
 
-        if (!$this->canInviteConversation($user, $conversation)) {
+        if (! $this->canInviteConversation($user, $conversation)) {
             return response()->json(['error' => 'Only the owner or an admin can invite staff.'], 403);
         }
 
@@ -554,7 +569,7 @@ class ChatController extends Controller
             return response()->json(['error' => 'This conversation is archived because the customer account is deactivated.'], 403);
         }
 
-        if ($staff->role !== 'Marketing' || !$staff->isActive()) {
+        if ($staff->role !== 'Marketing' || ! $staff->isActive()) {
             return response()->json(['error' => 'Only Marketing staff can be added as collaborators.'], 422);
         }
 
@@ -577,7 +592,7 @@ class ChatController extends Controller
     {
         $currentUser = Auth::user();
 
-        if (!$this->canInviteConversation($currentUser, $conversation) && (int) $currentUser->id !== (int) $user->id) {
+        if (! $this->canInviteConversation($currentUser, $conversation) && (int) $currentUser->id !== (int) $user->id) {
             return response()->json(['error' => 'You cannot remove this collaborator.'], 403);
         }
 
@@ -624,6 +639,10 @@ class ChatController extends Controller
             'message' => ['required', 'string', 'max:5000'],
         ]);
 
+        if ($response = $this->blockedChatMessageResponse($request->input('message'))) {
+            return $response;
+        }
+
         $message->update([
             'message' => $request->input('message'),
             'edited_at' => now(),
@@ -645,7 +664,7 @@ class ChatController extends Controller
         $isOwnRecentMessage = $message->sender_id === $user->id && $message->created_at->gte(now()->subMinutes(15));
         $isModerator = $user->role === 'Admin' || ($user->role === 'Marketing' && (int) $message->conversation->staff_id === (int) $user->id);
 
-        if (!$isOwnRecentMessage && !$isModerator) {
+        if (! $isOwnRecentMessage && ! $isModerator) {
             return response()->json(['error' => 'You cannot delete this message.'], 403);
         }
 
@@ -677,7 +696,7 @@ class ChatController extends Controller
     public function availableStaff()
     {
         $user = Auth::user();
-        if (!in_array($user->role, ['Marketing', 'Admin'])) {
+        if (! in_array($user->role, ['Marketing', 'Admin'])) {
             return response()->json([]);
         }
 
@@ -702,44 +721,45 @@ class ChatController extends Controller
         if ($user->role === 'Client') {
             // Count unread messages in the client's active conversations
             $count = Message::whereIn('conversation_id', function ($q) use ($user) {
-                    $q->select('id')
-                      ->from('conversations')
-                      ->where('client_id', $user->id)
-                      ->where('status', 'active')
-                      ->whereExists(function ($client) {
-                          $client->selectRaw('1')
-                              ->from('users')
-                              ->whereColumn('users.id', 'conversations.client_id')
-                              ->where(fn ($account) => $account
-                                  ->whereNull('users.account_status')
-                                  ->orWhere('users.account_status', 'active'));
-                      });
-                })
+                $q->select('id')
+                    ->from('conversations')
+                    ->where('client_id', $user->id)
+                    ->where('status', 'active')
+                    ->whereExists(function ($client) {
+                        $client->selectRaw('1')
+                            ->from('users')
+                            ->whereColumn('users.id', 'conversations.client_id')
+                            ->where(fn ($account) => $account
+                                ->whereNull('users.account_status')
+                                ->orWhere('users.account_status', 'active'));
+                    });
+            })
                 ->where('sender_id', '!=', $user->id)
                 ->whereNull('read_at')
                 ->count();
         } else {
             // Staff: count unread across their claimed conversations
             $count = Message::whereIn('conversation_id', function ($q) use ($user) {
-                    $q->select('id')
-                      ->from('conversations')
-                      ->where('staff_id', $user->id)
-                      ->where('status', 'active')
-                      ->whereExists(function ($client) {
-                          $client->selectRaw('1')
-                              ->from('users')
-                              ->whereColumn('users.id', 'conversations.client_id')
-                              ->where(fn ($account) => $account
-                                  ->whereNull('users.account_status')
-                                  ->orWhere('users.account_status', 'active'));
-                      });
-                })
+                $q->select('id')
+                    ->from('conversations')
+                    ->where('staff_id', $user->id)
+                    ->where('status', 'active')
+                    ->whereExists(function ($client) {
+                        $client->selectRaw('1')
+                            ->from('users')
+                            ->whereColumn('users.id', 'conversations.client_id')
+                            ->where(fn ($account) => $account
+                                ->whereNull('users.account_status')
+                                ->orWhere('users.account_status', 'active'));
+                    });
+            })
                 ->where('sender_id', '!=', $user->id)
                 ->whereNull('read_at')
                 ->count();
 
             // Also count total unassigned conversations as "pending attention"
             $unassignedCount = Conversation::unassigned()->count();
+
             return response()->json([
                 'count' => $count,
                 'unassigned_count' => $unassignedCount,
@@ -764,6 +784,7 @@ class ChatController extends Controller
 
         // Issue 4: Exclude cancelled and expired bookings from the chat share dropdown
         $bookings = Booking::where('user_id', $user->id)
+            ->with('user:id,full_name,username,email,phone,account_status')
             ->whereNotIn('status', ['Cancelled', 'Canceled', 'Expired'])
             ->orderBy('event_date', 'desc')
             ->get()
@@ -777,6 +798,7 @@ class ChatController extends Controller
                 'total_cost' => $b->total_cost,
                 'venue_city' => $b->venue_city,
                 'client_full_name' => $b->client_full_name,
+                ...CustomerIdentity::forBooking($b),
             ]);
 
         return response()->json($bookings);
@@ -800,7 +822,7 @@ class ChatController extends Controller
         $isStaffViewingUnassigned = in_array($user->role, ['Marketing', 'Admin']) && is_null($conversation->staff_id);
         $isAdmin = $user->role === 'Admin';
 
-        if (!$isClient && !$isAssignedStaff && !$isParticipant && !$isStaffViewingUnassigned && !$isAdmin) {
+        if (! $isClient && ! $isAssignedStaff && ! $isParticipant && ! $isStaffViewingUnassigned && ! $isAdmin) {
             abort(403, 'You do not have access to this conversation.');
         }
     }
@@ -808,12 +830,12 @@ class ChatController extends Controller
     /**
      * Format a message for JSON response.
      */
-    private function formatMessage($msg, $currentUser): array
+    private function formatMessage($msg, $currentUser, ?string $clientTempId = null): array
     {
         // Convert created_at to Asia/Manila for display
         $localTime = $msg->created_at->setTimezone('Asia/Manila');
 
-        return [
+        $payload = [
             'id' => $msg->id,
             'conversation_id' => $msg->conversation_id,
             'sender_id' => $msg->sender_id,
@@ -830,6 +852,31 @@ class ChatController extends Controller
             'sender_role' => $msg->sender->role ?? 'Unknown',
             'is_booking_card' => str_starts_with($msg->message, '📋 BOOKING DETAILS'),
         ];
+
+        if ($clientTempId) {
+            $payload['client_temp_id'] = $clientTempId;
+        }
+
+        return $payload;
+    }
+
+    private function clientTempId(Request $request): ?string
+    {
+        $clientTempId = trim((string) $request->input('client_temp_id', ''));
+
+        return $clientTempId !== '' ? $clientTempId : null;
+    }
+
+    private function blockedChatMessageResponse(?string $message)
+    {
+        $moderation = app(ChatModerationService::class);
+        $result = $moderation->inspect($message);
+
+        if (! ($result['blocked'] ?? false)) {
+            return null;
+        }
+
+        return response()->json($moderation->blockedPayload(Auth::user(), $result), 422);
     }
 
     private function broadcastSafely(object $event, bool $toOthers = false): void
@@ -881,20 +928,29 @@ class ChatController extends Controller
         $booking = $conv->booking;
         $owner = $conv->staff;
         $client = $conv->client;
-        $clientIsDeactivated = $client && !$client->isActive();
-        $clientEmail = $client && !$client->hasPlaceholderEmail() ? $client->email : null;
+        $clientIsDeactivated = $client && ! $client->isActive();
+        $clientEmail = $client && ! $client->hasPlaceholderEmail() ? $client->email : null;
+        $customerAccount = CustomerIdentity::accountForUser($client, $conv->client_id);
+        $bookingContact = $booking ? CustomerIdentity::contactForBooking($booking, $customerAccount) : null;
 
         return [
             'id' => $conv->id,
             'client_id' => $conv->client_id,
-            'client_name' => $client->username ?? 'Unknown',
+            'client_name' => $customerAccount['name'],
             'client_email' => $clientEmail,
+            'client_phone' => $client->phone ?? null,
+            'customer_account' => [
+                ...$customerAccount,
+                'email' => $clientEmail,
+            ],
+            'booking_contact' => $bookingContact,
+            'has_different_booking_contact' => $bookingContact ? CustomerIdentity::differs($customerAccount, $bookingContact) : false,
             'client_account_status' => $client->account_status ?? 'active',
             'client_is_deactivated' => $clientIsDeactivated,
             'client_status_label' => $clientIsDeactivated ? 'Deactivated customer' : null,
             'staff_id' => $conv->staff_id,
             'staff_name' => $conv->staff
-                ? ($conv->staff->isActive() ? $conv->staff->username : 'Former staff: ' . $conv->staff->username)
+                ? ($conv->staff->isActive() ? $conv->staff->username : 'Former staff: '.$conv->staff->username)
                 : null,
             'owner' => $this->participantUser($owner, 'owner'),
             'collaborators' => $this->participantUsers($conv, 'collaborator'),
@@ -902,10 +958,10 @@ class ChatController extends Controller
             'former_participants' => $currentUser->role === 'Admin'
                 ? $this->formerParticipantUsers($conv)
                 : [],
-            'can_reply' => !$clientIsDeactivated && $this->canReplyToConversation($currentUser, $conv),
-            'can_transfer' => !$clientIsDeactivated && $this->canTransferConversation($currentUser, $conv),
-            'can_resolve' => !$clientIsDeactivated && $this->canResolveConversation($currentUser, $conv),
-            'can_invite' => !$clientIsDeactivated && $this->canInviteConversation($currentUser, $conv),
+            'can_reply' => ! $clientIsDeactivated && $this->canReplyToConversation($currentUser, $conv),
+            'can_transfer' => ! $clientIsDeactivated && $this->canTransferConversation($currentUser, $conv),
+            'can_resolve' => ! $clientIsDeactivated && $this->canResolveConversation($currentUser, $conv),
+            'can_invite' => ! $clientIsDeactivated && $this->canInviteConversation($currentUser, $conv),
             'booking_id' => $conv->booking_id,
             'booking_label' => $booking ? ($booking->event_name ?: $booking->event_type ?: "Booking #{$booking->id}") : 'General inquiry',
             'booking_event_date' => $booking?->event_date,
@@ -916,6 +972,10 @@ class ChatController extends Controller
             'last_message' => $conv->latestMessage
                 ? Str::limit($conv->latestMessage->deleted_at ? 'Message deleted' : $conv->latestMessage->message, 60)
                 : '',
+            'last_message_id' => $conv->latestMessage?->id,
+            'last_message_created_at' => $conv->latestMessage
+                ? $conv->latestMessage->created_at?->toIso8601String()
+                : $conv->created_at?->toIso8601String(),
             'last_message_time' => $conv->latestMessage
                 ? $conv->latestMessage->created_at->diffForHumans()
                 : $conv->created_at->diffForHumans(),
@@ -934,7 +994,7 @@ class ChatController extends Controller
     private function getUnassignedQueue(int $limit = 25): array
     {
         return Conversation::unassigned()
-            ->with(['client:id,username,email,account_status,deactivated_at', 'booking:id,event_name,event_type,event_date,status', 'latestMessage.sender:id,username', 'participants.user:id,username,full_name,role'])
+            ->with(['client:id,full_name,username,email,phone,account_status,deactivated_at', 'booking:id,user_id,event_name,event_type,event_date,status,client_full_name,client_email,client_phone', 'latestMessage.sender:id,username', 'participants.user:id,username,full_name,role'])
             ->withCount(['messages as unread_count' => function ($q) {
                 $q->whereNull('read_at');
             }])
@@ -951,7 +1011,7 @@ class ChatController extends Controller
     private function getMyActiveChats($user, int $limit = 25): array
     {
         return Conversation::claimedBy($user->id)
-            ->with(['client:id,username,email,account_status,deactivated_at', 'staff:id,username,full_name,role,account_status', 'booking:id,event_name,event_type,event_date,status', 'latestMessage.sender:id,username', 'participants.user:id,username,full_name,role,account_status'])
+            ->with(['client:id,full_name,username,email,phone,account_status,deactivated_at', 'staff:id,username,full_name,role,account_status', 'booking:id,user_id,event_name,event_type,event_date,status,client_full_name,client_email,client_phone', 'latestMessage.sender:id,username', 'participants.user:id,username,full_name,role,account_status'])
             ->withCount(['messages as unread_count' => function ($q) use ($user) {
                 $q->where('sender_id', '!=', $user->id)->whereNull('read_at');
             }])
@@ -969,7 +1029,7 @@ class ChatController extends Controller
     {
         return Conversation::where('client_id', $user->id)
             ->where('status', 'active')
-            ->with(['client:id,username,email,account_status,deactivated_at', 'staff:id,username,full_name,role,account_status', 'booking:id,event_name,event_type,event_date,status', 'latestMessage.sender:id,username', 'participants.user:id,username,full_name,role,account_status'])
+            ->with(['client:id,full_name,username,email,phone,account_status,deactivated_at', 'staff:id,username,full_name,role,account_status', 'booking:id,user_id,event_name,event_type,event_date,status,client_full_name,client_email,client_phone', 'latestMessage.sender:id,username', 'participants.user:id,username,full_name,role,account_status'])
             ->withCount(['messages as unread_count' => function ($q) use ($user) {
                 $q->where('sender_id', '!=', $user->id)->whereNull('read_at');
             }])
@@ -984,7 +1044,7 @@ class ChatController extends Controller
     {
         return Conversation::query()
             ->withActiveClient()
-            ->with(['client:id,username,email,account_status,deactivated_at', 'staff:id,username,full_name,role,account_status', 'booking:id,event_name,event_type,event_date,status', 'latestMessage.sender:id,username', 'participants.user:id,username,full_name,role,account_status'])
+            ->with(['client:id,full_name,username,email,phone,account_status,deactivated_at', 'staff:id,username,full_name,role,account_status', 'booking:id,user_id,event_name,event_type,event_date,status,client_full_name,client_email,client_phone', 'latestMessage.sender:id,username', 'participants.user:id,username,full_name,role,account_status'])
             ->withCount(['messages as unread_count' => function ($q) use ($user) {
                 $q->where('sender_id', '!=', $user->id)->whereNull('read_at');
             }])
@@ -997,7 +1057,7 @@ class ChatController extends Controller
 
     private function getAdminOversightChats($user, int $limit = 25): array
     {
-        $baseRelations = ['client:id,username,email,account_status,deactivated_at', 'staff:id,username,full_name,role,account_status', 'booking:id,event_name,event_type,event_date,status', 'latestMessage.sender:id,username', 'participants.user:id,username,full_name,role,account_status'];
+        $baseRelations = ['client:id,full_name,username,email,phone,account_status,deactivated_at', 'staff:id,username,full_name,role,account_status', 'booking:id,user_id,event_name,event_type,event_date,status,client_full_name,client_email,client_phone', 'latestMessage.sender:id,username', 'participants.user:id,username,full_name,role,account_status'];
         $unreadCount = function ($q) use ($user) {
             $q->where('sender_id', '!=', $user->id)->whereNull('read_at');
         };
@@ -1075,7 +1135,7 @@ class ChatController extends Controller
             ->map(function ($participant) {
                 $user = $this->participantUser($participant->user, $participant->role);
 
-                if (!$user) {
+                if (! $user) {
                     return null;
                 }
 
@@ -1101,7 +1161,7 @@ class ChatController extends Controller
 
     private function canReplyToConversation($user, Conversation $conversation): bool
     {
-        if (!$user) {
+        if (! $user) {
             return false;
         }
 
@@ -1139,7 +1199,7 @@ class ChatController extends Controller
 
     private function participantUser(?User $user, string $role): ?array
     {
-        if (!$user) {
+        if (! $user) {
             return null;
         }
 
@@ -1147,7 +1207,7 @@ class ChatController extends Controller
 
         return [
             'id' => $user->id,
-            'name' => $user->isActive() ? $name : 'Former staff: ' . $name,
+            'name' => $user->isActive() ? $name : 'Former staff: '.$name,
             'username' => $user->username,
             'role' => $role,
             'user_role' => $user->role,
@@ -1170,6 +1230,6 @@ class ChatController extends Controller
     {
         $conversation->loadMissing('client');
 
-        return $conversation->client && !$conversation->client->isActive();
+        return $conversation->client && ! $conversation->client->isActive();
     }
 }

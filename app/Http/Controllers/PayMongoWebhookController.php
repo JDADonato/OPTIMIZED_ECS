@@ -26,7 +26,7 @@ class PayMongoWebhookController extends Controller
         $payload = $request->getContent();
         $signatureHeader = (string) $request->header('Paymongo-Signature', '');
 
-        if (!$this->hasValidSignature($payload, $signatureHeader)) {
+        if (! $this->hasValidSignature($payload, $signatureHeader)) {
             Log::warning('Rejected PayMongo webhook with invalid signature.', [
                 'signature_present' => $signatureHeader !== '',
             ]);
@@ -36,14 +36,14 @@ class PayMongoWebhookController extends Controller
 
         $event = json_decode($payload, true);
 
-        if (!is_array($event)) {
+        if (! is_array($event)) {
             return response()->json(['message' => 'Invalid JSON payload.'], Response::HTTP_BAD_REQUEST);
         }
 
         $eventType = (string) Arr::get($event, 'data.attributes.type');
         $eventId = (string) Arr::get($event, 'data.id');
 
-        if (!in_array($eventType, self::PAID_EVENTS, true)) {
+        if (! in_array($eventType, self::PAID_EVENTS, true)) {
             return response()->json([
                 'message' => 'Webhook received. Event ignored.',
                 'event_type' => $eventType,
@@ -54,7 +54,7 @@ class PayMongoWebhookController extends Controller
             $result = DB::transaction(function () use ($event, $eventType, $eventId, $paymentCalculation) {
                 $payment = $this->resolvePayment($event, $eventType);
 
-                if (!$payment) {
+                if (! $payment) {
                     Log::warning('PayMongo paid webhook could not be matched to a local payment.', [
                         'event_id' => $eventId,
                         'event_type' => $eventType,
@@ -81,7 +81,7 @@ class PayMongoWebhookController extends Controller
 
                 $payment->loadMissing('booking.payments');
 
-                if (!$this->amountAndCurrencyMatch($event, $payment)) {
+                if (! $this->amountAndCurrencyMatch($event, $payment)) {
                     Log::warning('PayMongo webhook amount/currency mismatch.', [
                         'event_id' => $eventId,
                         'payment_id' => $payment->id,
@@ -109,7 +109,7 @@ class PayMongoWebhookController extends Controller
 
                 $this->storeProviderReferences($payment, $event, $eventType, $eventId);
 
-                if (!in_array($payment->status, ['Paid', 'Verified'], true)) {
+                if (! in_array($payment->status, ['Paid', 'Verified'], true)) {
                     $payment->forceFill([
                         'status' => 'Paid',
                         'payment_method' => $this->resourcePaymentMethod($event) ?: 'PayMongo',
@@ -185,7 +185,7 @@ class PayMongoWebhookController extends Controller
 
         $timestamp = (string) $parts->get('t', '');
 
-        if ($timestamp === '' || !ctype_digit($timestamp)) {
+        if ($timestamp === '' || ! ctype_digit($timestamp)) {
             return false;
         }
 
@@ -195,7 +195,7 @@ class PayMongoWebhookController extends Controller
             return false;
         }
 
-        $expected = hash_hmac('sha256', $timestamp . '.' . $payload, $secret);
+        $expected = hash_hmac('sha256', $timestamp.'.'.$payload, $secret);
 
         foreach (['te', 'li'] as $signatureKey) {
             $provided = (string) $parts->get($signatureKey, '');

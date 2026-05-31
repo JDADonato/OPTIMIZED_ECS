@@ -1,28 +1,29 @@
 <?php
 
+use App\Http\Controllers\AccountingController;
 use App\Http\Controllers\AdminController;
 use App\Http\Controllers\AnnouncementController;
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\BookingController;
 use App\Http\Controllers\CalendarAvailabilityController;
+use App\Http\Controllers\ChatController;
 use App\Http\Controllers\ClientDashboardController;
+use App\Http\Controllers\ClientErrorController;
 use App\Http\Controllers\ContactInquiryController;
 use App\Http\Controllers\ConversionEventController;
 use App\Http\Controllers\DocumentController;
 use App\Http\Controllers\EventTypeController;
-use App\Http\Controllers\FileUploadController;
-use App\Http\Controllers\AccountingController;
 use App\Http\Controllers\FeedbackController;
+use App\Http\Controllers\FileUploadController;
 use App\Http\Controllers\FoodTastingController;
-use App\Http\Controllers\MenuController;
-use App\Http\Controllers\ChatController;
-use App\Http\Controllers\NotificationController;
 use App\Http\Controllers\MarketingController;
+use App\Http\Controllers\MenuController;
+use App\Http\Controllers\NotificationController;
+use App\Http\Controllers\OperationsController;
 use App\Http\Controllers\PackageController;
 use App\Http\Controllers\PaymentController;
 use App\Http\Controllers\PayMongoWebhookController;
 use App\Http\Controllers\ProfileController;
-use App\Http\Controllers\OperationsController;
 use App\Http\Controllers\ReportController;
 use App\Http\Controllers\SettingsController;
 use App\Http\Controllers\StaffEventHistoryController;
@@ -31,18 +32,6 @@ use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
-
-/*
-|--------------------------------------------------------------------------
-| Web Routes
-|--------------------------------------------------------------------------
-| Ported from: server/index.js
-| All routes translated from Express API to Laravel Inertia routes.
-| Page names match the original client/src file structure.
-|--------------------------------------------------------------------------
-*/
-
-// Public routes
 
 Route::get('/', fn () => Inertia::render('LandingPage'))->name('home');
 Route::get('/about', fn () => Inertia::render('About'))->name('about');
@@ -67,6 +56,7 @@ Route::get('/sitemap.xml', function () {
 Route::get('/api/announcements', [AnnouncementController::class, 'publicIndex'])->middleware('cache.headers:public;max_age=60;etag');
 Route::post('/api/contact-inquiries', [ContactInquiryController::class, 'store'])->middleware('throttle:10,1');
 Route::post('/webhook/paymongo', PayMongoWebhookController::class)->name('webhook.paymongo');
+Route::post('/api/client-errors', [ClientErrorController::class, 'store'])->middleware('throttle:client-errors');
 
 Route::middleware('guest')->group(function () {
     Route::get('/login', fn () => Inertia::render('Login'))->name('login');
@@ -117,9 +107,10 @@ Route::middleware('auth')->group(function () {
     // Notification routes
     Route::get('/api/notifications', [NotificationController::class, 'index']);
     Route::get('/api/notifications/unread-count', [NotificationController::class, 'unreadCount']);
-    Route::put('/api/notifications/{id}/read', [NotificationController::class, 'markAsRead']);
-    Route::put('/api/notifications/read-all', [NotificationController::class, 'markAllAsRead']);
-    Route::delete('/api/notifications/{id}', [NotificationController::class, 'destroy']);
+    Route::put('/api/notifications/{id}/read', [NotificationController::class, 'markAsRead'])->middleware('throttle:notification-mutation');
+    Route::put('/api/notifications/read-all', [NotificationController::class, 'markAllAsRead'])->middleware('throttle:notification-mutation');
+    Route::delete('/api/notifications/read', [NotificationController::class, 'destroyRead'])->middleware('throttle:notification-mutation');
+    Route::delete('/api/notifications/{id}', [NotificationController::class, 'destroy'])->middleware('throttle:notification-mutation');
     Route::post('/api/conversion-events', [ConversionEventController::class, 'store'])->middleware('throttle:60,1');
     // Legacy messaging routes (kept for backward compatibility)
     $legacyMessagesGone = fn () => response()->json([
@@ -133,24 +124,24 @@ Route::middleware('auth')->group(function () {
     Route::post('/api/messages', $legacyMessagesGone);
     // Chat routes (WebSocket/Ticket System)
     Route::get('/api/chat/conversations', [ChatController::class, 'conversations']);
-    Route::post('/api/chat/conversations', [ChatController::class, 'startConversation']);
+    Route::post('/api/chat/conversations', [ChatController::class, 'startConversation'])->middleware('throttle:chat-mutation');
     Route::get('/api/chat/unassigned', [ChatController::class, 'unassigned']);
     Route::get('/api/chat/my-chats', [ChatController::class, 'myChats']);
     Route::get('/api/chat/unread-count', [ChatController::class, 'unreadCount']);
     Route::get('/api/chat/my-bookings', [ChatController::class, 'myBookings']);
     Route::get('/api/chat/conversations/{conversation}/messages', [ChatController::class, 'messages']);
-    Route::post('/api/chat/conversations/{conversation}/messages', [ChatController::class, 'sendMessage']);
-    Route::patch('/api/chat/messages/{message}', [ChatController::class, 'updateMessage']);
-    Route::delete('/api/chat/messages/{message}', [ChatController::class, 'deleteMessage']);
-    Route::post('/api/chat/conversations/{conversation}/claim', [ChatController::class, 'claim']);
-    Route::post('/api/chat/conversations/{conversation}/resolve', [ChatController::class, 'resolve']);
-    Route::post('/api/chat/conversations/{conversation}/reopen', [ChatController::class, 'reopen']);
-    Route::post('/api/chat/conversations/{conversation}/join', [ChatController::class, 'adminJoin']);
-    Route::post('/api/chat/conversations/{conversation}/internal-notes', [ChatController::class, 'internalNotes']);
-    Route::post('/api/chat/conversations/{conversation}/collaborators', [ChatController::class, 'addCollaborator']);
-    Route::delete('/api/chat/conversations/{conversation}/collaborators/{user}', [ChatController::class, 'removeCollaborator']);
-    Route::post('/api/chat/conversations/{conversation}/transfer-owner', [ChatController::class, 'transferOwner']);
-    Route::post('/api/chat/conversations/{conversation}/transfer', [ChatController::class, 'transfer']);
+    Route::post('/api/chat/conversations/{conversation}/messages', [ChatController::class, 'sendMessage'])->middleware('throttle:chat-mutation');
+    Route::patch('/api/chat/messages/{message}', [ChatController::class, 'updateMessage'])->middleware('throttle:chat-mutation');
+    Route::delete('/api/chat/messages/{message}', [ChatController::class, 'deleteMessage'])->middleware('throttle:chat-mutation');
+    Route::post('/api/chat/conversations/{conversation}/claim', [ChatController::class, 'claim'])->middleware('throttle:chat-mutation');
+    Route::post('/api/chat/conversations/{conversation}/resolve', [ChatController::class, 'resolve'])->middleware('throttle:chat-mutation');
+    Route::post('/api/chat/conversations/{conversation}/reopen', [ChatController::class, 'reopen'])->middleware('throttle:chat-mutation');
+    Route::post('/api/chat/conversations/{conversation}/join', [ChatController::class, 'adminJoin'])->middleware('throttle:chat-mutation');
+    Route::post('/api/chat/conversations/{conversation}/internal-notes', [ChatController::class, 'internalNotes'])->middleware('throttle:chat-mutation');
+    Route::post('/api/chat/conversations/{conversation}/collaborators', [ChatController::class, 'addCollaborator'])->middleware('throttle:chat-mutation');
+    Route::delete('/api/chat/conversations/{conversation}/collaborators/{user}', [ChatController::class, 'removeCollaborator'])->middleware('throttle:chat-mutation');
+    Route::post('/api/chat/conversations/{conversation}/transfer-owner', [ChatController::class, 'transferOwner'])->middleware('throttle:chat-mutation');
+    Route::post('/api/chat/conversations/{conversation}/transfer', [ChatController::class, 'transfer'])->middleware('throttle:chat-mutation');
     Route::get('/api/chat/staff/available', [ChatController::class, 'availableStaff']);
 });
 
@@ -165,7 +156,6 @@ Route::post('/api/food-tasting', [FoodTastingController::class, 'store'])->middl
 
 // Booking availability is public (calendar needs it without auth sometimes)
 Route::get('/api/bookings/availability/{date}', [BookingController::class, 'checkAvailability'])->middleware('cache.headers:public;max_age=60;etag');
-// Issue 3: Pre-fetch all blocked dates for the calendar UI
 Route::get('/api/bookings/disabled-dates', [BookingController::class, 'getDisabledDates'])->middleware('cache.headers:public;max_age=60;etag');
 
 // Menu API endpoints (database-backed)
@@ -205,13 +195,12 @@ Route::middleware(['auth', 'role:Client'])->group(function () {
             ->route('dashboard.client')
             ->with('error', 'The manual payment page has been retired. Please use Secure Checkout from your dashboard so PayMongo or Accounting can confirm the payment safely.');
     })->name('payment.page');
-    Route::post('/checkout/initialize', [PaymentController::class, 'initializeCheckout'])->middleware('throttle:10,1')->name('checkout.initialize');
+    Route::post('/checkout/initialize', [PaymentController::class, 'initializeCheckout'])->middleware('throttle:payment-checkout')->name('checkout.initialize');
     Route::get('/checkout/secure', [PaymentController::class, 'showSecureCheckout'])->middleware('signed')->name('checkout.secure');
     Route::post('/checkout/process', [PaymentController::class, 'processPayment'])->name('checkout.process');
     Route::get('/checkout/success', [PaymentController::class, 'success'])->name('checkout.success');
     Route::get('/checkout/cancelled', fn () => Inertia::render('client/PaymentCancelled'))->name('checkout.cancelled');
 
-    // Dashboard data API (used by original ClientDashboard.jsx fetch calls)
     Route::get('/api/dashboard/client', [ClientDashboardController::class, 'apiData']);
     Route::get('/api/customer/journey-tracker', [ClientDashboardController::class, 'journeyTracker']);
 
@@ -277,6 +266,7 @@ Route::middleware(['auth', 'role:Marketing,Admin'])->group(function () {
     Route::patch('/api/marketing/feedback-responses/{response}', [FeedbackController::class, 'staffUpdate']);
     Route::get('/api/operations/preparation-board', [OperationsController::class, 'preparationBoard']);
     Route::get('/api/operations/preparation-board/summary', [OperationsController::class, 'preparationBoardSummary']);
+    Route::get('/api/operations/preparation-board/{booking}', [OperationsController::class, 'preparationBoardDetail']);
     Route::patch('/api/operations/preparation-tasks/{task}', [OperationsController::class, 'updatePreparationTask']);
     Route::get('/api/calendar-availability', [CalendarAvailabilityController::class, 'index']);
     Route::put('/api/calendar-availability/{date}', [CalendarAvailabilityController::class, 'upsert']);
@@ -288,13 +278,13 @@ Route::middleware(['auth', 'role:Marketing,Admin'])->group(function () {
     Route::delete('/api/settings/event-types/{id}', [SettingsController::class, 'deleteEventType']);
     Route::put('/api/settings/menu-items/{id}/pricing', [SettingsController::class, 'updateDishPricing']);
     Route::get('/api/admin/announcements', [AnnouncementController::class, 'index']);
-    Route::post('/api/admin/announcements', [AnnouncementController::class, 'store']);
+    Route::post('/api/admin/announcements', [AnnouncementController::class, 'store'])->middleware('throttle:announcement-action');
     Route::get('/api/admin/announcement-audience-users', [AnnouncementController::class, 'audienceUsers']);
-    Route::patch('/api/admin/announcements/{announcement}', [AnnouncementController::class, 'update']);
-    Route::post('/api/admin/announcements/{announcement}/publish', [AnnouncementController::class, 'publish']);
-    Route::post('/api/admin/announcements/{announcement}/archive', [AnnouncementController::class, 'archive']);
-    Route::post('/api/admin/announcements/{announcement}/send-test', [AnnouncementController::class, 'sendTest']);
-    Route::delete('/api/admin/announcements/{announcement}', [AnnouncementController::class, 'destroy']);
+    Route::patch('/api/admin/announcements/{announcement}', [AnnouncementController::class, 'update'])->middleware('throttle:announcement-action');
+    Route::post('/api/admin/announcements/{announcement}/publish', [AnnouncementController::class, 'publish'])->middleware('throttle:announcement-action');
+    Route::post('/api/admin/announcements/{announcement}/archive', [AnnouncementController::class, 'archive'])->middleware('throttle:announcement-action');
+    Route::post('/api/admin/announcements/{announcement}/send-test', [AnnouncementController::class, 'sendTest'])->middleware('throttle:announcement-action');
+    Route::delete('/api/admin/announcements/{announcement}', [AnnouncementController::class, 'destroy'])->middleware('throttle:announcement-action');
 });
 
 // Accounting routes
@@ -311,8 +301,8 @@ Route::middleware(['auth', 'role:Accounting,Admin'])->group(function () {
     Route::get('/api/accounting/reconciliation', [AccountingController::class, 'getReconciliation']);
     Route::post('/api/accounting/remind/{paymentId}', [AccountingController::class, 'remindClient']);
     Route::get('/api/accounting/refunds/queue', [AccountingController::class, 'getRefundQueue']);
-    Route::post('/api/accounting/refund/{bookingId}', [AccountingController::class, 'processRefund']);
-    Route::post('/api/accounting/refund/{bookingId}/{action}', [AccountingController::class, 'refundAction']);
+    Route::post('/api/accounting/refund/{bookingId}', [AccountingController::class, 'processRefund'])->middleware('throttle:refund-action');
+    Route::post('/api/accounting/refund/{bookingId}/{action}', [AccountingController::class, 'refundAction'])->middleware('throttle:refund-action');
 });
 
 // Admin routes
@@ -320,13 +310,13 @@ Route::middleware(['auth', 'role:Accounting,Admin'])->group(function () {
 Route::middleware(['auth', 'role:Admin'])->group(function () {
     Route::get('/dashboard/admin', fn () => Inertia::render('DashboardAdmin'))->name('dashboard.admin');
     Route::get('/api/admin/employees', [AdminController::class, 'getEmployees']);
-    Route::post('/api/admin/employees', [AdminController::class, 'createEmployee']);
+    Route::post('/api/admin/employees', [AdminController::class, 'createEmployee'])->middleware('throttle:admin-sensitive');
     Route::put('/api/admin/employees/{id}', [AdminController::class, 'updateEmployee']);
     Route::delete('/api/admin/employees/{id}', [AdminController::class, 'deleteEmployee']);
-    Route::post('/api/admin/employees/{id}/reset-password', [AdminController::class, 'resetEmployeePassword']);
-    Route::post('/api/admin/employees/{id}/temporary-password/reveal', [AdminController::class, 'revealTemporaryPassword']);
-    Route::post('/api/admin/employees/{id}/force-password-change', [AdminController::class, 'forceEmployeePasswordChange']);
-    Route::post('/api/admin/employees/{id}/reactivate', [AdminController::class, 'reactivateEmployee']);
+    Route::post('/api/admin/employees/{id}/reset-password', [AdminController::class, 'resetEmployeePassword'])->middleware('throttle:admin-sensitive');
+    Route::post('/api/admin/employees/{id}/temporary-password/reveal', [AdminController::class, 'revealTemporaryPassword'])->middleware('throttle:admin-sensitive');
+    Route::post('/api/admin/employees/{id}/force-password-change', [AdminController::class, 'forceEmployeePasswordChange'])->middleware('throttle:admin-sensitive');
+    Route::post('/api/admin/employees/{id}/reactivate', [AdminController::class, 'reactivateEmployee'])->middleware('throttle:admin-sensitive');
     Route::get('/api/admin/system-delivery', [AdminController::class, 'deliveryDiagnostics']);
     Route::post('/api/admin/system-delivery/test-email', [AdminController::class, 'sendDiagnosticEmail']);
     Route::get('/api/admin/customers', [AdminController::class, 'getCustomers']);
@@ -353,18 +343,18 @@ Route::middleware(['auth', 'role:Admin'])->group(function () {
     Route::get('/api/admin/analytics/forecasts', [AdminController::class, 'getAnalyticsForecasts']);
     Route::get('/api/admin/analytics/advanced', [AdminController::class, 'getAnalyticsAdvanced']);
     Route::get('/api/admin/report-widgets', [ReportController::class, 'widgets']);
-    Route::post('/api/admin/report-preview', [ReportController::class, 'preview']);
+    Route::post('/api/admin/report-preview', [ReportController::class, 'preview'])->middleware('throttle:report-heavy');
     Route::get('/api/admin/report-templates', [ReportController::class, 'templates']);
     Route::post('/api/admin/report-templates', [ReportController::class, 'storeTemplate']);
     Route::patch('/api/admin/report-templates/{template}', [ReportController::class, 'updateTemplate']);
     Route::patch('/api/admin/report-templates/{template}/archive', [ReportController::class, 'archiveTemplate']);
     Route::delete('/api/admin/report-templates/{template}', [ReportController::class, 'destroyTemplate']);
-    Route::post('/api/admin/report-templates/{template}/run', [ReportController::class, 'run']);
-    Route::get('/api/admin/report-runs/{run}/export', [ReportController::class, 'export']);
+    Route::post('/api/admin/report-templates/{template}/run', [ReportController::class, 'run'])->middleware('throttle:report-heavy');
+    Route::get('/api/admin/report-runs/{run}/export', [ReportController::class, 'export'])->middleware('throttle:report-heavy');
     Route::get('/api/admin/audits', [AdminController::class, 'getAudits']);
     Route::get('/api/admin/refunds/queue', [AccountingController::class, 'getRefundQueue']);
-    Route::post('/api/admin/refund/{bookingId}', [AccountingController::class, 'processRefund']);
-    Route::post('/api/admin/refund/{bookingId}/{action}', [AccountingController::class, 'refundAction']);
+    Route::post('/api/admin/refund/{bookingId}', [AccountingController::class, 'processRefund'])->middleware('throttle:refund-action');
+    Route::post('/api/admin/refund/{bookingId}/{action}', [AccountingController::class, 'refundAction'])->middleware('throttle:refund-action');
 
     // Menu items CRUD
     Route::post('/api/admin/menu-items', [AdminController::class, 'createMenuItem']);

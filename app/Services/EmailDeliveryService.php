@@ -20,7 +20,7 @@ class EmailDeliveryService
             return $this->result('skipped_no_email', 'No email address was set, so no email was sent.');
         }
 
-        if (!$allowInactiveRecipient && method_exists($notifiable, 'isReachableForNotifications') && !$notifiable->isReachableForNotifications()) {
+        if (! $allowInactiveRecipient && method_exists($notifiable, 'isReachableForNotifications') && ! $notifiable->isReachableForNotifications()) {
             return $this->result('skipped_unreachable_account', 'The account is not reachable for operational email.');
         }
 
@@ -63,11 +63,11 @@ class EmailDeliveryService
 
     public function sendToAddress(?string $email, Notification $notification, string $context = 'email', bool $shouldSend = true): array
     {
-        if (!$shouldSend) {
+        if (! $shouldSend) {
             return $this->result('skipped_by_admin', 'Email notification was skipped by admin.');
         }
 
-        if (!$email || str_ends_with($email, '@eloquente.invalid')) {
+        if (! $email || str_ends_with($email, '@eloquente.invalid')) {
             return $this->result('skipped_no_email', 'No reachable email address was set, so no email was sent.');
         }
 
@@ -169,13 +169,13 @@ class EmailDeliveryService
                 'ca_bundle_exists' => is_file((string) Config::get('mail.mailers.smtp.stream.ssl.cafile')),
                 'openssl_cafile' => ini_get('openssl.cafile') ?: null,
                 'openssl_cafile_exists' => ini_get('openssl.cafile') ? is_file((string) ini_get('openssl.cafile')) : null,
-                'configured' => !$this->mailIsNotConfigured(),
+                'configured' => ! $this->mailIsNotConfigured(),
                 'is_log_mailer' => $mailer === 'log',
                 'is_array_mailer' => $mailer === 'array',
             ],
             'queue' => [
                 'connection' => $queue,
-                'worker_required' => !in_array($queue, ['sync', 'deferred', 'background'], true),
+                'worker_required' => ! in_array($queue, ['sync', 'deferred', 'background'], true),
                 'failed_jobs_count' => $failedJobsCount,
             ],
             'operations' => [
@@ -185,8 +185,8 @@ class EmailDeliveryService
                     'description' => 'Laravel scheduler must run in production for scheduled announcements and recurring maintenance.',
                 ],
                 'queue_worker' => [
-                    'configured' => !in_array($queue, ['sync', 'deferred', 'background'], true),
-                    'status' => !in_array($queue, ['sync', 'deferred', 'background'], true) ? 'Requires deployment verification' : 'Synchronous in this environment',
+                    'configured' => ! in_array($queue, ['sync', 'deferred', 'background'], true),
+                    'status' => ! in_array($queue, ['sync', 'deferred', 'background'], true) ? 'Requires deployment verification' : 'Synchronous in this environment',
                     'description' => 'Queue workers must run when background mail, notifications, or jobs are enabled.',
                 ],
                 'reverb' => [
@@ -213,7 +213,7 @@ class EmailDeliveryService
     {
         $mailer = (string) Config::get('mail.default');
 
-        if ($notification instanceof ShouldQueue && !in_array((string) Config::get('queue.default'), ['sync', 'deferred', 'background'], true)) {
+        if ($notification instanceof ShouldQueue && ! in_array((string) Config::get('queue.default'), ['sync', 'deferred', 'background'], true)) {
             return $this->result('queued', 'Email is waiting for the queue worker.');
         }
 
@@ -246,13 +246,14 @@ class EmailDeliveryService
 
         $from = (string) Config::get('mail.from.address', '');
 
-        if (!$from || Str::contains($from, ['example.com', 'your-domain.example'])) {
+        if (! $from || Str::contains($from, ['example.com', 'your-domain.example'])) {
             return true;
         }
 
         if ($mailer === 'smtp') {
             $host = (string) Config::get('mail.mailers.smtp.host', '');
-            return !$host || in_array($host, ['127.0.0.1', 'localhost', 'smtp.your-mail-provider.example'], true);
+
+            return ! $host || in_array($host, ['127.0.0.1', 'localhost', 'smtp.your-mail-provider.example'], true);
         }
 
         return false;
@@ -267,12 +268,12 @@ class EmailDeliveryService
         }
 
         $caBundle = (string) Config::get('mail.mailers.smtp.stream.ssl.cafile', '');
-        if ($mailer === 'smtp' && (!$caBundle || !is_file($caBundle))) {
+        if ($mailer === 'smtp' && (! $caBundle || ! is_file($caBundle))) {
             $items[] = 'Mail certificate bundle is missing or points to the wrong path.';
         }
 
         $opensslCafile = (string) ini_get('openssl.cafile');
-        if ($mailer === 'smtp' && $opensslCafile && !is_file($opensslCafile)) {
+        if ($mailer === 'smtp' && $opensslCafile && ! is_file($opensslCafile)) {
             $items[] = 'The running PHP process has an invalid openssl.cafile path. Restart the local server after fixing php.ini.';
         }
 
@@ -280,7 +281,7 @@ class EmailDeliveryService
             $items[] = 'Local log mailer writes emails to storage logs instead of sending inbox mail.';
         }
 
-        if (!in_array($queue, ['sync', 'deferred', 'background'], true)) {
+        if (! in_array($queue, ['sync', 'deferred', 'background'], true)) {
             $items[] = 'Run php artisan queue:work so queued notifications leave the jobs table.';
         }
 

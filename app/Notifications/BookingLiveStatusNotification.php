@@ -11,9 +11,7 @@ class BookingLiveStatusNotification extends Notification
 {
     use Queueable;
 
-    public function __construct(public Booking $booking, public string $liveStatus)
-    {
-    }
+    public function __construct(public Booking $booking, public string $liveStatus) {}
 
     public function via(object $notifiable): array
     {

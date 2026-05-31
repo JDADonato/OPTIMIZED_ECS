@@ -13,7 +13,16 @@ const OTPModal = () => {
     const [resendAvailableAt, setResendAvailableAt] = useState(user?.otp_resend_available_at || null);
     const [remainingSeconds, setRemainingSeconds] = useState(0);
     const [resendSeconds, setResendSeconds] = useState(0);
+    const [isResending, setIsResending] = useState(false);
     const inputRefs = useRef([]);
+
+    const secondsUntil = (dateValue) => {
+        if (!dateValue) return 0;
+        const timestamp = new Date(dateValue).getTime();
+        if (Number.isNaN(timestamp)) return 0;
+
+        return Math.max(0, Math.ceil((timestamp - Date.now()) / 1000));
+    };
 
     // Initialize refs array
     useEffect(() => {
@@ -21,10 +30,20 @@ const OTPModal = () => {
     }, []);
 
     useEffect(() => {
+        setExpiresAt(user?.otp_expires_at || null);
+        setResendAvailableAt(user?.otp_resend_available_at || null);
+        setRemainingSeconds(secondsUntil(user?.otp_expires_at));
+        setResendSeconds(secondsUntil(user?.otp_resend_available_at));
+        setOtpValues(Array(6).fill(''));
+    }, [user?.id, user?.otp_expires_at, user?.otp_resend_available_at]);
+
+    useEffect(() => {
+        setRemainingSeconds(secondsUntil(expiresAt));
+        setResendSeconds(secondsUntil(resendAvailableAt));
+
         const timer = window.setInterval(() => {
-            const now = Date.now();
-            setRemainingSeconds(expiresAt ? Math.max(0, Math.ceil((new Date(expiresAt).getTime() - now) / 1000)) : 0);
-            setResendSeconds(resendAvailableAt ? Math.max(0, Math.ceil((new Date(resendAvailableAt).getTime() - now) / 1000)) : 0);
+            setRemainingSeconds(secondsUntil(expiresAt));
+            setResendSeconds(secondsUntil(resendAvailableAt));
         }, 1000);
 
         return () => window.clearInterval(timer);
@@ -107,25 +126,44 @@ const OTPModal = () => {
     };
 
     const handleResend = async () => {
-        const response = await csrfFetch('/resend-otp', {
-            method: 'POST',
-        });
-        const payload = await response.json().catch(() => ({}));
-        if (!response.ok) {
-            toast.error(payload.error || 'Please wait before requesting another code.');
-            if (payload.retry_after_seconds) {
-                setResendAvailableAt(new Date(Date.now() + Number(payload.retry_after_seconds) * 1000).toISOString());
+        setIsResending(true);
+        try {
+            const response = await csrfFetch('/resend-otp', {
+                method: 'POST',
+                headers: { Accept: 'application/json' },
+            });
+            const payload = await response.json().catch(() => ({}));
+            if (!response.ok) {
+                toast.error(payload.error || 'Please wait before requesting another code.');
+                if (payload.expires_at) {
+                    setExpiresAt(payload.expires_at);
+                }
+                if (payload.retry_after_seconds) {
+                    setResendAvailableAt(new Date(Date.now() + Number(payload.retry_after_seconds) * 1000).toISOString());
+                }
+                return;
             }
-            return;
+
+            if (payload.expires_at) setExpiresAt(payload.expires_at);
+            if (payload.retry_after_seconds) setResendAvailableAt(new Date(Date.now() + Number(payload.retry_after_seconds) * 1000).toISOString());
+            setOtpValues(Array(6).fill(''));
+            toast.success('Verification code resent!');
+        } catch (error) {
+            toast.error('We could not send a verification code right now. Please try again.');
+        } finally {
+            setIsResending(false);
         }
-        if (payload.expires_at) setExpiresAt(payload.expires_at);
-        if (payload.retry_after_seconds) setResendAvailableAt(new Date(Date.now() + Number(payload.retry_after_seconds) * 1000).toISOString());
-        toast.success('Verification code resent!');
     };
 
     const isComplete = otpValues.every(val => val !== '');
-    const expired = expiresAt && remainingSeconds <= 0;
-    const countdown = remainingSeconds > 0 ? `${Math.floor(remainingSeconds / 60)}:${String(remainingSeconds % 60).padStart(2, '0')}` : 'expired';
+    const hasUsableExpiry = Boolean(expiresAt) && !Number.isNaN(new Date(expiresAt).getTime());
+    const expired = hasUsableExpiry && remainingSeconds <= 0;
+    const countdown = remainingSeconds > 0 ? `${Math.floor(remainingSeconds / 60)}:${String(remainingSeconds % 60).padStart(2, '0')}` : null;
+    const codeStatusText = !hasUsableExpiry
+        ? 'Verification code needed'
+        : expired
+            ? 'Code expired'
+            : `Code expires in ${countdown}`;
 
     return (
         <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm" style={{ animation: 'fadeIn .3s ease' }}>
@@ -136,9 +174,10 @@ const OTPModal = () => {
                     </div>
                     <h3 className="text-white font-display font-bold text-xl mb-2">Verify Your Email</h3>
                     <p className="text-red-100/80 text-sm">We've sent a 6-digit verification code to <br/><strong className="text-yellow-400">{user.email}</strong></p>
-                    <p className="mt-3 text-xs font-bold uppercase tracking-widest text-yellow-100">Code {expired ? 'expired' : `expires in ${countdown}`}</p>
+                    <p className="mt-3 text-xs font-bold uppercase tracking-widest text-yellow-100">{codeStatusText}</p>
                 </div>
                 <div className="p-6 bg-white space-y-6 text-center">
+                    {!hasUsableExpiry && <p className="rounded-xl bg-amber-50 px-4 py-3 text-sm font-bold text-amber-800">Request a new verification code to continue.</p>}
                     {expired && <p className="rounded-xl bg-amber-50 px-4 py-3 text-sm font-bold text-amber-800">This code has expired. Please request a new one.</p>}
                     <form onSubmit={handleSubmit} className="space-y-6">
                         <div className="flex justify-center gap-2 sm:gap-3" onPaste={handlePaste}>
@@ -159,7 +198,7 @@ const OTPModal = () => {
                         </div>
                         <button 
                             type="submit" 
-                            disabled={isSubmitting || !isComplete || expired}
+                            disabled={isSubmitting || !isComplete || !hasUsableExpiry || expired}
                             className="w-full py-3 px-4 rounded-xl font-bold text-white bg-[#720101] hover:bg-red-900 shadow-lg transition-all active:scale-95 disabled:opacity-50 disabled:active:scale-100 flex justify-center items-center gap-2"
                         >
                             {isSubmitting ? (
@@ -177,8 +216,8 @@ const OTPModal = () => {
                     </form>
                     <p className="text-sm text-gray-500">
                         Didn't receive the code?{' '}
-                        <button type="button" disabled={resendSeconds > 0} onClick={handleResend} className="text-[#720101] font-bold hover:underline transition-colors disabled:text-gray-400 disabled:no-underline">
-                            {resendSeconds > 0 ? `Resend in ${resendSeconds}s` : 'Resend Code'}
+                        <button type="button" disabled={isResending || resendSeconds > 0} onClick={handleResend} className="text-[#720101] font-bold hover:underline transition-colors disabled:text-gray-400 disabled:no-underline">
+                            {isResending ? 'Sending...' : resendSeconds > 0 ? `Resend in ${resendSeconds}s` : 'Resend Code'}
                         </button>
                     </p>
                     <p className="text-xs text-gray-400 mt-4">

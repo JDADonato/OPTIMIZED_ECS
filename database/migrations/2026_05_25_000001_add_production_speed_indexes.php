@@ -37,7 +37,7 @@ return new class extends Migration
             'conversations_status_staff_updated_idx',
             'conversations_client_status_updated_idx',
         ] as $index) {
-            DB::statement('DROP INDEX IF EXISTS ' . $index);
+            DB::statement('DROP INDEX IF EXISTS '.$index);
         }
     }
 };

@@ -16,9 +16,7 @@ use Inertia\Inertia;
 
 class AnnouncementController extends Controller
 {
-    public function __construct(private AnnouncementService $service)
-    {
-    }
+    public function __construct(private AnnouncementService $service) {}
 
     public function index(Request $request)
     {
@@ -145,7 +143,7 @@ class AnnouncementController extends Controller
             ->select('id', 'username', 'email', 'role')
             ->reachableForNotifications()
             ->when($search !== '', function ($query) use ($search) {
-                $term = '%' . mb_strtolower($search) . '%';
+                $term = '%'.mb_strtolower($search).'%';
                 $query->where(function ($q) use ($term) {
                     $q->whereRaw('LOWER(username) LIKE ?', [$term])
                         ->orWhereRaw('LOWER(email) LIKE ?', [$term])
@@ -291,6 +289,6 @@ class AnnouncementController extends Controller
             return $path;
         }
 
-        return '/storage/' . ltrim($path, '/');
+        return '/storage/'.ltrim($path, '/');
     }
 }

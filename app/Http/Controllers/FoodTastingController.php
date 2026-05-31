@@ -23,34 +23,34 @@ class FoodTastingController extends Controller
     public function store(Request $request)
     {
         $request->validate([
-            'guest_name'     => 'required|string',
-            'guest_email'    => 'required|email',
-            'guest_phone'    => 'nullable|string',
+            'guest_name' => 'required|string',
+            'guest_email' => 'required|email',
+            'guest_phone' => 'nullable|string',
             'preferred_date' => 'required|date',
             'preferred_time' => 'required|string',
-            'notes'          => 'nullable|string',
-            'website'        => 'nullable|prohibited',
+            'notes' => 'nullable|string',
+            'website' => 'nullable|prohibited',
         ]);
 
         $userId = Auth::check() ? Auth::id() : null;
         $duplicateUser = $this->findDuplicateUser($request->guest_email, $request->guest_phone);
 
         $tasting = FoodTasting::create([
-            'user_id'        => $userId,
-            'guest_name'     => $request->guest_name,
-            'guest_email'    => $request->guest_email,
-            'guest_phone'    => $request->guest_phone,
+            'user_id' => $userId,
+            'guest_name' => $request->guest_name,
+            'guest_email' => $request->guest_email,
+            'guest_phone' => $request->guest_phone,
             'preferred_date' => $request->preferred_date,
             'preferred_time' => $request->preferred_time,
-            'notes'          => $request->notes,
+            'notes' => $request->notes,
             'duplicate_user_id' => $duplicateUser?->id,
         ]);
         app(OperationalBroadcastService::class)
             ->staffQueueChanged('food_tastings', 'food_tasting', $tasting->id, 'created', 'New food tasting request.');
 
         return response()->json([
-            'success'   => true,
-            'message'   => 'Food tasting scheduled successfully!',
+            'success' => true,
+            'message' => 'Food tasting scheduled successfully!',
             'tastingId' => $tasting->id,
         ], 201);
     }
@@ -71,18 +71,18 @@ class FoodTastingController extends Controller
     public function update(Request $request, $id)
     {
         $tasting = FoodTasting::where('id', $id)->where('user_id', Auth::id())->firstOrFail();
-        
+
         $request->validate([
-            'guest_name'     => 'required|string',
-            'guest_email'    => 'required|email',
-            'guest_phone'    => 'nullable|string',
+            'guest_name' => 'required|string',
+            'guest_email' => 'required|email',
+            'guest_phone' => 'nullable|string',
             'preferred_date' => 'required|date',
             'preferred_time' => 'required|string',
-            'notes'          => 'nullable|string',
+            'notes' => 'nullable|string',
         ]);
 
         $tasting->update($request->only([
-            'guest_name', 'guest_email', 'guest_phone', 'preferred_date', 'preferred_time', 'notes'
+            'guest_name', 'guest_email', 'guest_phone', 'preferred_date', 'preferred_time', 'notes',
         ]));
         app(OperationalBroadcastService::class)
             ->staffQueueChanged('food_tastings', 'food_tasting', $tasting->id, 'updated', 'Food tasting request updated.');
@@ -98,7 +98,7 @@ class FoodTastingController extends Controller
     public function cancel($id)
     {
         $tasting = FoodTasting::where('id', $id)->where('user_id', Auth::id())->firstOrFail();
-        
+
         $tasting->update(['status' => 'Cancelled']);
         app(OperationalBroadcastService::class)
             ->staffQueueChanged('food_tastings', 'food_tasting', $tasting->id, 'cancelled', 'Food tasting request cancelled.');
@@ -151,7 +151,7 @@ class FoodTastingController extends Controller
                 'name' => $tasting->duplicateUser->full_name ?: $tasting->duplicateUser->username,
                 'email' => $this->safeDuplicateEmail($tasting->duplicateUser),
                 'account_status' => $tasting->duplicateUser->account_status ?? 'active',
-                'is_deactivated' => !$tasting->duplicateUser->isActive(),
+                'is_deactivated' => ! $tasting->duplicateUser->isActive(),
             ] : null,
         ];
 
@@ -195,17 +195,17 @@ class FoodTastingController extends Controller
             'handled_by' => Auth::id(),
         ]);
 
-        if (in_array($status, ['Approved', 'Confirmed'], true) && !$tasting->confirmed_at) {
+        if (in_array($status, ['Approved', 'Confirmed'], true) && ! $tasting->confirmed_at) {
             $tasting->confirmed_at = now();
         }
 
-        if ($status === 'Completed' && !$tasting->completed_at) {
+        if ($status === 'Completed' && ! $tasting->completed_at) {
             $tasting->completed_at = now();
         }
 
-        if (in_array($status, ['Archived', 'Spam'], true) && !$tasting->archived_at) {
+        if (in_array($status, ['Archived', 'Spam'], true) && ! $tasting->archived_at) {
             $tasting->archived_at = now();
-        } elseif (!in_array($status, ['Archived', 'Spam'], true)) {
+        } elseif (! in_array($status, ['Archived', 'Spam'], true)) {
             $tasting->archived_at = null;
         }
 
@@ -224,7 +224,7 @@ class FoodTastingController extends Controller
         $email = filled($email) ? strtolower(trim($email)) : null;
         $phone = filled($phone) ? preg_replace('/\D+/', '', $phone) : null;
 
-        if (!$email && !$phone) {
+        if (! $email && ! $phone) {
             return null;
         }
 

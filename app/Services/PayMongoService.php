@@ -2,12 +2,13 @@
 
 namespace App\Services;
 
+use App\Exceptions\ExternalServiceException;
 use App\Models\Booking;
+use App\Support\SensitiveDataRedactor;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\RequestException;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\Http;
-use RuntimeException;
 
 class PayMongoService
 {
@@ -73,18 +74,16 @@ class PayMongoService
         } catch (ConnectionException $exception) {
             report($exception);
 
-            throw new RuntimeException(
+            throw $this->externalFailure(
+                'checkout_create',
                 'Unable to connect securely to PayMongo. Please verify the configured CA bundle and internet connection.',
-                previous: $exception
+                $exception,
+                retryable: true
             );
         } catch (RequestException $exception) {
             report($exception);
 
-            $message = Arr::get($exception->response?->json() ?? [], 'errors.0.detail')
-                ?? Arr::get($exception->response?->json() ?? [], 'errors.0.code')
-                ?? 'PayMongo rejected the checkout request.';
-
-            throw new RuntimeException($message, previous: $exception);
+            throw $this->requestFailure('checkout_create', $exception, 'PayMongo rejected the checkout request.');
         }
 
         $checkoutUrl = Arr::get($response, 'data.attributes.checkout_url')
@@ -92,8 +91,15 @@ class PayMongoService
             ?? Arr::get($response, 'data.checkout_url')
             ?? Arr::get($response, 'data.url');
 
-        if (!$checkoutUrl) {
-            throw new RuntimeException('PayMongo did not return a checkout URL.');
+        if (! $checkoutUrl) {
+            throw new ExternalServiceException(
+                service: 'paymongo',
+                operation: 'checkout_create',
+                safeMessage: 'PayMongo did not return a checkout URL.',
+                providerCode: 'missing_checkout_url',
+                retryable: true,
+                context: ['response_keys' => array_keys((array) $response)]
+            );
         }
 
         return [
@@ -105,8 +111,14 @@ class PayMongoService
 
     public function assertConfigured(): void
     {
-        if (!config('services.paymongo.secret_key')) {
-            throw new RuntimeException('PayMongo secret key is not configured.');
+        if (! config('services.paymongo.secret_key')) {
+            throw new ExternalServiceException(
+                service: 'paymongo',
+                operation: 'configuration',
+                safeMessage: 'PayMongo is not configured for this environment.',
+                providerCode: 'missing_secret_key',
+                retryable: false
+            );
         }
     }
 
@@ -128,18 +140,16 @@ class PayMongoService
         } catch (ConnectionException $exception) {
             report($exception);
 
-            throw new RuntimeException(
+            throw $this->externalFailure(
+                'checkout_retrieve',
                 'Unable to connect securely to PayMongo to confirm checkout status.',
-                previous: $exception
+                $exception,
+                retryable: true
             );
         } catch (RequestException $exception) {
             report($exception);
 
-            $message = Arr::get($exception->response?->json() ?? [], 'errors.0.detail')
-                ?? Arr::get($exception->response?->json() ?? [], 'errors.0.code')
-                ?? 'PayMongo rejected the checkout status request.';
-
-            throw new RuntimeException($message, previous: $exception);
+            throw $this->requestFailure('checkout_retrieve', $exception, 'PayMongo rejected the checkout status request.');
         }
 
         return $response ?? [];
@@ -174,11 +184,11 @@ class PayMongoService
     {
         $path = config('services.paymongo.ca_bundle');
 
-        if (!$path) {
+        if (! $path) {
             return true;
         }
 
-        if (!preg_match('/^[A-Za-z]:[\\\\\\/]/', $path) && !str_starts_with($path, DIRECTORY_SEPARATOR)) {
+        if (! preg_match('/^[A-Za-z]:[\\\\\\/]/', $path) && ! str_starts_with($path, DIRECTORY_SEPARATOR)) {
             $path = base_path($path);
         }
 
@@ -215,18 +225,16 @@ class PayMongoService
         } catch (ConnectionException $exception) {
             report($exception);
 
-            throw new RuntimeException(
+            throw $this->externalFailure(
+                'refund_create',
                 'Unable to connect securely to PayMongo to process refund. Please verify internet connection.',
-                previous: $exception
+                $exception,
+                retryable: true
             );
         } catch (RequestException $exception) {
             report($exception);
 
-            $message = Arr::get($exception->response?->json() ?? [], 'errors.0.detail')
-                ?? Arr::get($exception->response?->json() ?? [], 'errors.0.code')
-                ?? 'PayMongo rejected the refund request.';
-
-            throw new RuntimeException($message, previous: $exception);
+            throw $this->requestFailure('refund_create', $exception, 'PayMongo rejected the refund request.');
         }
 
         return [
@@ -240,5 +248,44 @@ class PayMongoService
     private function toCentavos(float $amount): int
     {
         return (int) round($amount * 100);
+    }
+
+    private function requestFailure(string $operation, RequestException $exception, string $fallback): ExternalServiceException
+    {
+        $body = $exception->response?->json() ?? [];
+        $providerCode = Arr::get($body, 'errors.0.code');
+        $message = Arr::get($body, 'errors.0.detail')
+            ?? $providerCode
+            ?? $fallback;
+
+        return new ExternalServiceException(
+            service: 'paymongo',
+            operation: $operation,
+            safeMessage: SensitiveDataRedactor::redact($message),
+            providerCode: $providerCode,
+            retryable: $exception->response?->serverError() ?? true,
+            context: [
+                'status' => $exception->response?->status(),
+                'provider_code' => $providerCode,
+                'operation' => $operation,
+            ],
+            previous: $exception
+        );
+    }
+
+    private function externalFailure(
+        string $operation,
+        string $message,
+        \Throwable $exception,
+        bool $retryable,
+    ): ExternalServiceException {
+        return new ExternalServiceException(
+            service: 'paymongo',
+            operation: $operation,
+            safeMessage: $message,
+            providerCode: $exception::class,
+            retryable: $retryable,
+            previous: $exception
+        );
     }
 }

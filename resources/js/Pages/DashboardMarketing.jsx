@@ -19,16 +19,17 @@ import { bookingStatusLabel, reviewStatusLabel } from '../utils/statusLabels';
 import useSmartRefresh from '../hooks/useSmartRefresh';
 import useStaffWorkspaceState from '../hooks/useStaffWorkspaceState';
 import AssistedBookingWizard from '../Components/marketing/AssistedBookingWizard';
+import { MARKETING_WORKSPACE_NAV_GROUPS, withNavCounts } from '../utils/staffWorkspaceNav';
 import {
     formatDate,
     formatMoney,
     formatTime,
     getBookingValue,
-    getDateKey,
     getDaysInMonth,
     getFirstDayOfMonth,
     titleCase,
 } from '../utils/dashboardUtils';
+import { bookingContactEmail, bookingContactName, bookingContactPhone, customerAccountEmail, customerAccountName, customerAccountPhone } from '../utils/customerIdentity';
 
 const StaffMessaging = lazy(() => import('../Components/common/StaffMessaging'));
 const AnnouncementManager = lazy(() => import('../Components/content/AnnouncementManager'));
@@ -145,7 +146,7 @@ const shiftMonthValue = (value, offset) => {
 };
 
 const DashboardMarketing = () => {
-    const { user, logout } = useAuth();
+    const { user } = useAuth();
     const toast = useToast();
     const marketingWorkspacePrefs = user?.profile_preferences?.staff_workspace?.marketing || {};
     const marketingDefaultTab = MARKETING_WORKSPACE_TABS.includes(marketingWorkspacePrefs.default_tab) ? marketingWorkspacePrefs.default_tab : 'today';
@@ -929,12 +930,12 @@ const DashboardMarketing = () => {
     const getCalendarEventLabel = (booking) => {
         const time = formatTime(booking.event_time);
         const eventType = titleCase(booking.event_type || booking.package_type || booking.type) || 'Event';
-        const client = booking.client_full_name || booking.username || 'Unnamed client';
+        const client = bookingContactName(booking) || 'Unnamed contact';
         return `${time} / ${eventType} / ${client}`;
     };
 
     const getCompactClientName = (booking) => {
-        const name = booking.client_full_name || booking.username || 'Client';
+        const name = bookingContactName(booking) || 'Booking contact';
         const parts = String(name).trim().split(/\s+/);
         return parts.length > 1 ? parts[parts.length - 1] : name;
     };
@@ -1157,7 +1158,7 @@ const DashboardMarketing = () => {
                                 <button key={booking.id} type="button" onClick={() => setSelectedBooking(booking)} className="staff-priority-item">
                                     <div>
                                         <h3>{eventDisplayName(booking)}</h3>
-                                        <p>{formatDate(booking.event_date)} / {booking.pax || 0} guests / {booking.client_full_name || booking.username || 'Customer'}</p>
+                                        <p>{formatDate(booking.event_date)} / {booking.pax || 0} guests / {bookingContactName(booking)}</p>
                                     </div>
                                     <StaffStatusBadge tone={tone === 'danger' ? 'danger' : status.tone === 'success' ? 'good' : status.tone === 'warning' ? 'warn' : 'muted'}>{status.label}</StaffStatusBadge>
                                 </button>
@@ -1306,7 +1307,7 @@ const DashboardMarketing = () => {
                             <td className="px-4 py-3 font-bold text-slate-700">{formatDate(booking.event_date)} {formatTime(booking.event_time)}</td>
                             <td className="px-4 py-3">
                                 <div className="font-black text-slate-950">{eventDisplayName(booking)}</div>
-                                <div className="text-xs font-bold text-slate-500">{booking.client_full_name || 'Client'}</div>
+                                <div className="text-xs font-bold text-slate-500">{bookingContactName(booking)}</div>
                             </td>
                             <td className="px-4 py-3 font-bold text-slate-600">{booking.pax || 0}</td>
                             <td className="px-4 py-3 font-bold text-slate-600">{booking.venue_city || 'Venue pending'}</td>
@@ -1859,10 +1860,12 @@ const DashboardMarketing = () => {
                     String(booking.id),
                     booking.event_name,
                     booking.event_type,
-                    booking.client_full_name,
-                    booking.username,
-                    booking.client_email,
-                    booking.client_phone,
+                    bookingContactName(booking),
+                    bookingContactEmail(booking),
+                    bookingContactPhone(booking),
+                    customerAccountName(booking),
+                    customerAccountEmail(booking),
+                    customerAccountPhone(booking),
                     booking.venue_city,
                     booking.assigned_name,
                 ].filter(Boolean).join(' ').toLowerCase().includes(query);
@@ -2559,29 +2562,13 @@ const DashboardMarketing = () => {
             onNavigate={setActiveTab}
             onLogout={handleLogout}
             roleKey="marketing"
-            navGroups={[
-                {
-                    label: 'Daily work',
-                     items: [
-                        { id: 'today', label: 'Today', count: marketingSummary.pending + marketingSummary.needsDetails },
-                        { id: 'bookings', label: 'Bookings', count: dashboardSummary.pending },
-                        { id: 'leads', label: 'Guest Inquiries', count: leadData.summary?.open || 0 },
-                        { id: 'tastings', label: 'Food Tastings' },
-                         { id: 'calendar', label: 'Calendar', count: dashboardSummary.monthEvents },
-                        { id: 'handoff', label: 'Event Handoff', count: marketingSummary.upcoming },
-                        { id: 'messages', label: 'Messages' },
-                    ],
-                },
-                {
-                    label: 'Operations',
-                    items: [
-                        { id: 'public-content', label: 'Public Content' },
-                        { id: 'availability', label: 'Availability' },
-                        { id: 'settings', label: 'Settings' },
-                        { id: 'history', label: 'Event History' },
-                    ],
-                },
-            ]}
+            navGroups={withNavCounts(MARKETING_WORKSPACE_NAV_GROUPS, {
+                today: marketingSummary.pending + marketingSummary.needsDetails,
+                bookings: dashboardSummary.pending,
+                leads: leadData.summary?.open || 0,
+                calendar: dashboardSummary.monthEvents,
+                handoff: marketingSummary.upcoming,
+            })}
         >
                 <StaffPageHeader
                     eyebrow={activeTab === 'today' ? 'Today' : 'Marketing workflow'}

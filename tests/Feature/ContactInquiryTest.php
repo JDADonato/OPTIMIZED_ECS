@@ -48,8 +48,8 @@ class ContactInquiryTest extends TestCase
 
         $marketing = User::create([
             'full_name' => 'Marketing Tester',
-            'username' => 'marketing_' . uniqid(),
-            'email' => uniqid('marketing_') . '@example.test',
+            'username' => 'marketing_'.uniqid(),
+            'email' => uniqid('marketing_').'@example.test',
             'password' => 'password',
             'phone' => '09170000000',
             'role' => 'Marketing',
@@ -77,8 +77,8 @@ class ContactInquiryTest extends TestCase
     {
         $marketing = User::create([
             'full_name' => 'Marketing Tester',
-            'username' => 'marketing_' . uniqid(),
-            'email' => uniqid('marketing_') . '@example.test',
+            'username' => 'marketing_'.uniqid(),
+            'email' => uniqid('marketing_').'@example.test',
             'password' => 'password',
             'phone' => '09170000000',
             'role' => 'Marketing',

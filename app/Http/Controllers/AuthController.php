@@ -2,18 +2,20 @@
 
 namespace App\Http\Controllers;
 
+use App\Mail\VerifyEmailOTP;
 use App\Models\User;
+use App\Notifications\PasswordResetLinkNotification;
+use App\Rules\BalancedPassword;
+use App\Support\PasswordPolicy;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use Inertia\Inertia;
-use Illuminate\Support\Facades\Mail;
-use App\Mail\VerifyEmailOTP;
-use App\Notifications\PasswordResetLinkNotification;
-use Illuminate\Support\Facades\Log;
 
 /**
  * Ported from: server/controllers/authController.js
@@ -52,9 +54,9 @@ class AuthController extends Controller
 
         $user = User::where('username', $request->username)->first();
 
-        if (!$user || !Hash::check($request->password, $user->password)) {
+        if (! $user || ! Hash::check($request->password, $user->password)) {
             throw ValidationException::withMessages([
-                'username' => ['Invalid Credentials'],
+                'username' => ['The username or password is incorrect.'],
             ]);
         }
 
@@ -88,16 +90,16 @@ class AuthController extends Controller
         // unauthenticated API fetches can store /api/* as the intended URL,
         // which makes Inertia receive plain JSON instead of a page response.
         return redirect($this->getDashboardRoute($user->role))
-            ->with('message', 'Welcome back, ' . $user->username . '! We\'re glad to see you again.');
+            ->with('message', 'Welcome back, '.$user->username.'! We\'re glad to see you again.');
     }
 
     public function register(Request $request)
     {
         $request->validate([
             'username' => 'required|string|unique:users,username',
-            'password' => 'required|string|min:6',
-            'email'    => 'required|email|unique:users,email',
-            'phone'    => 'nullable|string',
+            'password' => ['required', 'string', new BalancedPassword($request->input('username'), $request->input('email'))],
+            'email' => 'required|email|unique:users,email',
+            'phone' => 'nullable|string',
         ]);
 
         $otp = str_pad(random_int(0, 999999), 6, '0', STR_PAD_LEFT);
@@ -105,19 +107,24 @@ class AuthController extends Controller
         $user = User::create([
             'username' => $request->username,
             'password' => $request->password, // Auto-hashed by User model cast
-            'role'     => 'Client', // Public registration is always Client
-            'email'    => $request->email,
-            'phone'    => $request->phone,
+            'role' => 'Client', // Public registration is always Client
+            'email' => $request->email,
+            'phone' => $request->phone,
             'otp_code' => Hash::make($otp),
             'otp_expires_at' => now()->addMinutes(15),
             'otp_resend_available_at' => now()->addSeconds(60),
             'otp_resend_attempts' => 0,
+            'password_changed_at' => now(),
+            'password_policy_version' => PasswordPolicy::CURRENT_VERSION,
         ]);
+
+        $otpEmailSent = true;
 
         try {
             Mail::to($user->email)->send(new VerifyEmailOTP($otp));
             Log::info('OTP verification email sent.', ['user_id' => $user->id]);
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
+            $otpEmailSent = false;
             Log::error('Failed to send OTP email.', [
                 'user_id' => $user->id,
                 'error' => $e->getMessage(),
@@ -127,9 +134,13 @@ class AuthController extends Controller
         Auth::login($user);
         $request->session()->regenerate();
 
-        return redirect('/')
-            ->with('message', 'Please check your email for the verification code.')
-            ->with('requires_otp', true);
+        $redirect = redirect('/')->with('requires_otp', true);
+
+        if (! $otpEmailSent) {
+            return $redirect->with('error', 'We could not send the first verification code. Please use Resend Code to try again.');
+        }
+
+        return $redirect->with('message', 'Please check your email for the verification code.');
     }
 
     public function verifyOtp(Request $request)
@@ -140,7 +151,7 @@ class AuthController extends Controller
 
         $user = Auth::user();
 
-        if (!$user) {
+        if (! $user) {
             return response()->json(['error' => 'Unauthenticated'], 401);
         }
 
@@ -148,7 +159,7 @@ class AuthController extends Controller
             return response()->json(['message' => 'Already verified']);
         }
 
-        if (!$this->otpMatches($user->otp_code, $request->otp)) {
+        if (! $this->otpMatches($user->otp_code, $request->otp)) {
             throw ValidationException::withMessages([
                 'otp' => ['Invalid verification code.'],
             ]);
@@ -175,7 +186,7 @@ class AuthController extends Controller
     public function resendOtp(Request $request)
     {
         $user = Auth::user();
-        if (!$user) {
+        if (! $user) {
             return response()->json(['error' => 'Unauthenticated'], 401);
         }
 
@@ -185,6 +196,7 @@ class AuthController extends Controller
 
         if ($user->otp_resend_available_at && now()->isBefore($user->otp_resend_available_at)) {
             $seconds = now()->diffInSeconds($user->otp_resend_available_at);
+
             return response()->json([
                 'error' => 'Please wait before requesting another code.',
                 'retry_after_seconds' => $seconds,
@@ -208,14 +220,32 @@ class AuthController extends Controller
             'otp_resend_attempts' => (int) ($user->otp_resend_attempts ?? 0) + 1,
         ]);
 
+        $otpEmailSent = true;
+
         try {
             Mail::to($user->email)->send(new VerifyEmailOTP($otp));
             Log::info('OTP verification email resent.', ['user_id' => $user->id]);
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
+            $otpEmailSent = false;
             Log::error('Failed to resend OTP email.', [
                 'user_id' => $user->id,
                 'error' => $e->getMessage(),
             ]);
+        }
+
+        if (! $otpEmailSent) {
+            $payload = [
+                'error' => 'We could not send a verification code right now. Please try again.',
+                'expires_at' => $user->otp_expires_at?->toIso8601String(),
+                'expires_in_seconds' => $user->otp_expires_at ? now()->diffInSeconds($user->otp_expires_at, false) : 0,
+                'retry_after_seconds' => now()->diffInSeconds($user->otp_resend_available_at),
+            ];
+
+            if ($request->expectsJson()) {
+                return response()->json($payload, 500);
+            }
+
+            return back()->with('error', $payload['error']);
         }
 
         if ($request->expectsJson()) {
@@ -251,11 +281,11 @@ class AuthController extends Controller
         }
 
         $request->validate([
-            'password' => ['required', 'string', 'min:8', 'confirmed'],
+            'password' => ['required', 'string', 'confirmed', new BalancedPassword($request->user()?->username, $request->user()?->email)],
         ]);
 
         $user = $request->user();
-        if (!$user) {
+        if (! $user) {
             abort(401);
         }
 
@@ -265,6 +295,7 @@ class AuthController extends Controller
             'temporary_password_expires_at' => null,
             'temporary_password_secret' => null,
             'password_changed_at' => now(),
+            'password_policy_version' => PasswordPolicy::CURRENT_VERSION,
         ])->save();
 
         DB::table('users')
@@ -288,6 +319,7 @@ class AuthController extends Controller
         if ($request->header('X-Inertia')) {
             $response = Inertia::location($dashboardRoute);
             $response->headers->set('X-ECS-Debug-Request', 'password-change');
+
             return $response;
         }
 
@@ -328,7 +360,7 @@ class AuthController extends Controller
             );
 
             try {
-                $user->notify(new PasswordResetLinkNotification(url('/reset-password/' . $token . '?email=' . urlencode($user->email))));
+                $user->notify(new PasswordResetLinkNotification(url('/reset-password/'.$token.'?email='.urlencode($user->email))));
             } catch (\Throwable $e) {
                 Log::warning('Password reset email failed.', ['user_id' => $user->id, 'message' => $e->getMessage()]);
             }
@@ -350,18 +382,18 @@ class AuthController extends Controller
         $data = $request->validate([
             'email' => ['required', 'email'],
             'token' => ['required', 'string'],
-            'password' => ['required', 'string', 'min:8', 'confirmed'],
+            'password' => ['required', 'string', 'confirmed', new BalancedPassword(null, $request->input('email'))],
         ]);
 
         $record = DB::table('password_reset_tokens')->where('email', $data['email'])->first();
         $user = User::where('email', $data['email'])->first();
 
         if (
-            !$record ||
-            !$user ||
+            ! $record ||
+            ! $user ||
             ($user->account_status ?? 'active') !== 'active' ||
             now()->subMinutes(60)->greaterThan($record->created_at) ||
-            !Hash::check($data['token'], $record->token)
+            ! Hash::check($data['token'], $record->token)
         ) {
             throw ValidationException::withMessages([
                 'email' => ['This reset link is invalid or expired. Please request a new one.'],
@@ -373,6 +405,7 @@ class AuthController extends Controller
             'must_change_password' => false,
             'temporary_password_expires_at' => null,
             'password_changed_at' => now(),
+            'password_policy_version' => PasswordPolicy::CURRENT_VERSION,
             'remember_token' => Str::random(60),
         ])->save();
 
@@ -399,17 +432,17 @@ class AuthController extends Controller
     private function getDashboardRoute(string $role): string
     {
         return match ($role) {
-            'Client'     => '/',
-            'Marketing'  => '/dashboard/marketing',
+            'Client' => '/',
+            'Marketing' => '/dashboard/marketing',
             'Accounting' => '/dashboard/accounting',
-            'Admin'      => '/dashboard/admin',
-            default      => '/',
+            'Admin' => '/dashboard/admin',
+            default => '/',
         };
     }
 
     private function otpMatches(?string $storedOtp, string $submittedOtp): bool
     {
-        if (!$storedOtp) {
+        if (! $storedOtp) {
             return false;
         }
 

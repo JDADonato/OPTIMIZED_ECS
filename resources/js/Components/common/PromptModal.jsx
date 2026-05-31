@@ -26,7 +26,7 @@ const PromptModal = ({
     const canSubmit = trimmed.length >= minLength && !busy;
 
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4 backdrop-blur-sm">
+        <div className="fixed inset-0 z-[130] flex items-center justify-center bg-black/55 p-4 backdrop-blur-sm">
             <div className="w-full max-w-lg overflow-hidden rounded-2xl border border-[#720101]/10 bg-[#fffaf3] shadow-2xl">
                 <div className="px-7 pt-7">
                     <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-[#fff7e8] text-[#720101] ring-1 ring-[#720101]/12">

@@ -14,8 +14,7 @@ class StaffMenuUpdatedNotification extends Notification
         public Booking $booking,
         public $newTotal = null,
         public $oldTotal = null,
-    ) {
-    }
+    ) {}
 
     public function via(object $notifiable): array
     {
@@ -24,8 +23,8 @@ class StaffMenuUpdatedNotification extends Notification
 
     public function toArray(object $notifiable): array
     {
-        $oldTotal = is_numeric($this->oldTotal) ? 'PHP ' . number_format((float) $this->oldTotal, 2) : 'previous total';
-        $newTotal = is_numeric($this->newTotal) ? 'PHP ' . number_format((float) $this->newTotal, 2) : 'updated total';
+        $oldTotal = is_numeric($this->oldTotal) ? 'PHP '.number_format((float) $this->oldTotal, 2) : 'previous total';
+        $newTotal = is_numeric($this->newTotal) ? 'PHP '.number_format((float) $this->newTotal, 2) : 'updated total';
 
         $message = "Menu updated by customer for Booking #{$this->booking->id}. Total changed from {$oldTotal} to {$newTotal}.";
         if ($notifiable->role === 'Accounting') {

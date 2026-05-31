@@ -4,9 +4,11 @@ import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import ClientNavbar from '../Components/common/ClientNavbar';
 import Footer from '../Components/common/Footer';
+import StaffPreviewBanner from '../Components/common/StaffPreviewBanner';
 import csrfFetch from '../utils/csrf';
 import { FieldError, FormErrorSummary } from '../Components/common/FormFeedback';
 import { focusFirstInvalidField } from '../utils/validation';
+import { dashboardHrefForUser, isStaffUser } from '../utils/dashboardLinks';
 
 const initialForm = (user) => ({
     full_name: user?.full_name || user?.username || '',
@@ -44,6 +46,8 @@ const Contact = () => {
     const [errors, setErrors] = useState({});
     const [submitting, setSubmitting] = useState(false);
     const [sentInquiryId, setSentInquiryId] = useState(null);
+    const dashboardHref = dashboardHrefForUser(user, '/');
+    const activeChatHref = user?.role === 'Client' ? '/dashboard/client?tab=messages' : dashboardHref;
 
     const canSubmit = useMemo(() => (
         form.full_name.trim() && form.email.trim() && form.subject.trim() && form.message.trim()
@@ -99,7 +103,8 @@ const Contact = () => {
             </Head>
 
             <ClientNavbar user={user} logout={logout} activePath="/contact" />
-            <main className="pt-[68px]">
+            <StaffPreviewBanner user={user} label="public contact page" />
+            <main className={isStaffUser(user) ? 'pt-[104px]' : 'pt-[68px]'}>
                 <section className="bg-[#1a1a1a] text-white">
                     <div className="mx-auto max-w-7xl px-5 py-12 sm:px-8">
                         <div className="max-w-4xl">
@@ -134,8 +139,8 @@ const Contact = () => {
                             <p className="text-xs font-black uppercase tracking-widest text-[#720101]">Fastest path</p>
                             <p className="mt-2 text-sm font-medium leading-6 text-gray-600">For active bookings, use dashboard chat so your event context stays attached. General planning questions can still start here.</p>
                             {user && (
-                                <Link href="/dashboard/client?tab=messages" className="mt-4 inline-flex rounded-xl bg-[#720101] px-4 py-2 text-xs font-black uppercase tracking-widest text-white">
-                                    Open Dashboard Chat
+                                <Link href={activeChatHref} className="mt-4 inline-flex rounded-xl bg-[#720101] px-4 py-2 text-xs font-black uppercase tracking-widest text-white">
+                                    {user.role === 'Client' ? 'Open Dashboard Chat' : 'Open Dashboard'}
                                 </Link>
                             )}
                         </div>

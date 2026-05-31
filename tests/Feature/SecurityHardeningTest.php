@@ -7,13 +7,16 @@ use App\Models\Booking;
 use App\Models\FoodTasting;
 use App\Models\UploadedFile as UploadedFileRecord;
 use App\Models\User;
+use App\Support\PasswordPolicy;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
+use Symfony\Component\Finder\Finder;
 use Tests\TestCase;
 
 class SecurityHardeningTest extends TestCase
@@ -29,7 +32,7 @@ class SecurityHardeningTest extends TestCase
             'username' => 'secure_client',
             'email' => 'secure-client@example.test',
             'phone' => '09170000000',
-            'password' => 'password123',
+            'password' => 'StrongPass123!',
         ])->assertRedirect('/');
 
         $user = User::where('username', 'secure_client')->firstOrFail();
@@ -43,6 +46,57 @@ class SecurityHardeningTest extends TestCase
                 && ($context['user_id'] ?? null) === $user->id);
 
         $this->assertOtpLoggingStringsWereRemoved();
+    }
+
+    public function test_registration_keeps_account_when_initial_otp_email_fails(): void
+    {
+        Log::spy();
+        Mail::shouldReceive('to')
+            ->once()
+            ->with('mail-failure@example.test')
+            ->andThrow(new \RuntimeException('SMTP unavailable'));
+
+        $this->post('/register', [
+            'username' => 'mail_failure_client',
+            'email' => 'mail-failure@example.test',
+            'phone' => '09170000010',
+            'password' => 'StrongPass123!',
+        ])
+            ->assertRedirect('/')
+            ->assertSessionHas('error', 'We could not send the first verification code. Please use Resend Code to try again.');
+
+        $user = User::where('username', 'mail_failure_client')->firstOrFail();
+
+        $this->assertAuthenticatedAs($user);
+        $this->assertNotNull($user->otp_code);
+        $this->assertNotNull($user->otp_expires_at);
+        $this->assertNull($user->email_verified_at);
+
+        Log::shouldHaveReceived('error')
+            ->withArgs(fn ($message, $context = []) => $message === 'Failed to send OTP email.'
+                && ($context['user_id'] ?? null) === $user->id);
+    }
+
+    public function test_registration_rejects_weak_passwords_and_marks_current_policy_for_strong_passwords(): void
+    {
+        $this->post('/register', [
+            'username' => 'weak_client',
+            'email' => 'weak-client@example.test',
+            'phone' => '09170000001',
+            'password' => 'password123',
+        ])->assertSessionHasErrors('password');
+
+        $this->post('/register', [
+            'username' => 'strong_client',
+            'email' => 'strong-client@example.test',
+            'phone' => '09170000002',
+            'password' => 'StrongPass123!',
+        ])->assertRedirect('/');
+
+        $this->assertDatabaseHas('users', [
+            'username' => 'strong_client',
+            'password_policy_version' => PasswordPolicy::CURRENT_VERSION,
+        ]);
     }
 
     public function test_resend_otp_does_not_log_the_new_secret_code(): void
@@ -74,6 +128,46 @@ class SecurityHardeningTest extends TestCase
                 && ($context['user_id'] ?? null) === $user->id);
 
         $this->assertOtpLoggingStringsWereRemoved();
+    }
+
+    public function test_resend_otp_reports_delivery_failure_without_claiming_success(): void
+    {
+        Log::spy();
+
+        $user = User::create([
+            'username' => 'resend_failure_client',
+            'email' => 'resend-failure@example.test',
+            'password' => 'password123',
+            'role' => 'Client',
+            'otp_code' => Hash::make('111111'),
+            'otp_expires_at' => now()->addMinutes(15),
+            'otp_resend_available_at' => now()->subSecond(),
+            'otp_resend_attempts' => 0,
+        ]);
+
+        Mail::shouldReceive('to')
+            ->once()
+            ->with('resend-failure@example.test')
+            ->andThrow(new \RuntimeException('SMTP unavailable'));
+
+        $this->actingAs($user)
+            ->postJson('/resend-otp')
+            ->assertStatus(500)
+            ->assertJson([
+                'error' => 'We could not send a verification code right now. Please try again.',
+            ])
+            ->assertJsonStructure(['expires_at', 'expires_in_seconds', 'retry_after_seconds']);
+
+        $user->refresh();
+
+        $this->assertSame(1, $user->otp_resend_attempts);
+        $this->assertNotNull($user->otp_code);
+        $this->assertNotNull($user->otp_expires_at);
+        $this->assertNull($user->email_verified_at);
+
+        Log::shouldHaveReceived('error')
+            ->withArgs(fn ($message, $context = []) => $message === 'Failed to resend OTP email.'
+                && ($context['user_id'] ?? null) === $user->id);
     }
 
     public function test_resend_otp_enforces_cooldown_and_exposes_retry_seconds(): void
@@ -116,9 +210,16 @@ class SecurityHardeningTest extends TestCase
 
         $token = 'known-reset-token';
         DB::table('password_reset_tokens')->where('email', $user->email)->update([
-            'token' => \Illuminate\Support\Facades\Hash::make($token),
+            'token' => Hash::make($token),
             'created_at' => now(),
         ]);
+
+        $this->post('/reset-password', [
+            'email' => $user->email,
+            'token' => $token,
+            'password' => 'password123',
+            'password_confirmation' => 'password123',
+        ])->assertSessionHasErrors('password');
 
         $this->post('/reset-password', [
             'email' => $user->email,
@@ -128,7 +229,8 @@ class SecurityHardeningTest extends TestCase
         ])->assertRedirect('/login');
 
         $this->assertDatabaseMissing('password_reset_tokens', ['email' => $user->email]);
-        $this->assertTrue(\Illuminate\Support\Facades\Hash::check('new-password-123', $user->fresh()->password));
+        $this->assertTrue(Hash::check('new-password-123', $user->fresh()->password));
+        $this->assertSame(PasswordPolicy::CURRENT_VERSION, $user->fresh()->password_policy_version);
 
         $this->post('/reset-password', [
             'email' => $user->email,
@@ -136,6 +238,25 @@ class SecurityHardeningTest extends TestCase
             'password' => 'another-password-123',
             'password_confirmation' => 'another-password-123',
         ])->assertSessionHasErrors('email');
+    }
+
+    public function test_existing_weak_password_accounts_can_still_log_in(): void
+    {
+        $user = User::create([
+            'username' => 'legacy_password_client',
+            'email' => 'legacy-password@example.test',
+            'password' => 'password',
+            'role' => 'Client',
+            'account_status' => 'active',
+            'password_policy_version' => 1,
+        ]);
+
+        $this->post('/login', [
+            'username' => $user->username,
+            'password' => 'password',
+        ])->assertRedirect('/');
+
+        $this->assertAuthenticatedAs($user);
     }
 
     public function test_deactivated_account_does_not_receive_reset_token(): void
@@ -325,12 +446,55 @@ class SecurityHardeningTest extends TestCase
         ])->assertTooManyRequests();
     }
 
+    public function test_staff_role_blocked_from_client_dashboard_gets_request_reference(): void
+    {
+        $staff = $this->user('Marketing');
+
+        $response = $this->actingAs($staff)->get('/dashboard/client');
+
+        $response->assertForbidden();
+        $this->assertNotEmpty($response->headers->get('X-Request-ID'));
+    }
+
+    public function test_client_error_endpoint_redacts_sensitive_payloads(): void
+    {
+        Log::spy();
+
+        $requestId = (string) Str::uuid();
+
+        $this->withHeader('X-Request-ID', $requestId)
+            ->postJson('/api/client-errors', [
+                'message' => 'Failed with sk_test_secretvalue and pay_providerid',
+                'stack' => 'Authorization: Bearer secret-token',
+                'url' => 'https://example.test/login',
+                'context' => [
+                    'password' => 'PlaintextPass123!',
+                    'paymongo_payment_id' => 'pay_abc123',
+                    'safe' => 'visible',
+                ],
+            ])
+            ->assertAccepted()
+            ->assertHeader('X-Request-ID', $requestId);
+
+        Log::shouldHaveReceived('warning')
+            ->withArgs(function ($message, $context = []) use ($requestId) {
+                return $message === 'Client runtime error reported.'
+                    && ($context['request_id'] ?? null) === $requestId
+                    && ($context['context']['password'] ?? null) === '[redacted]'
+                    && ($context['context']['paymongo_payment_id'] ?? null) === '[redacted]'
+                    && ($context['context']['safe'] ?? null) === 'visible'
+                    && ! str_contains((string) ($context['message'] ?? ''), 'sk_test_secretvalue')
+                    && ! str_contains((string) ($context['stack'] ?? ''), 'secret-token');
+            });
+    }
+
     public function test_api_routes_are_not_globally_exempted_from_csrf(): void
     {
         $bootstrap = file_get_contents(base_path('bootstrap/app.php'));
 
         $this->assertStringNotContainsString("'api/*'", $bootstrap);
         $this->assertStringContainsString("'webhook/paymongo'", $bootstrap);
+        $this->assertStringContainsString("'api/client-errors'", $bootstrap);
     }
 
     public function test_public_honeypots_block_contact_and_food_tasting_submissions(): void
@@ -391,16 +555,26 @@ class SecurityHardeningTest extends TestCase
         $routes = file_get_contents(base_path('routes/web.php'));
         $this->assertStringContainsString("sendAbandonedReminder'])->middleware('throttle:3,1')", $routes);
         $this->assertStringContainsString("recordPayment'])->middleware('throttle:3,1')", $routes);
+        $this->assertStringContainsString('throttle:chat-mutation', $routes);
+        $this->assertStringContainsString('throttle:notification-mutation', $routes);
+        $this->assertStringContainsString('throttle:report-heavy', $routes);
+        $this->assertStringContainsString('throttle:refund-action', $routes);
+        $this->assertStringContainsString('throttle:admin-sensitive', $routes);
+        $this->assertStringContainsString('throttle:announcement-action', $routes);
 
-        $jsFiles = collect(\Symfony\Component\Finder\Finder::create()->files()->in(resource_path('js'))->name('*.jsx')->name('*.js'))
+        $jsFiles = collect(Finder::create()->files()->in(resource_path('js'))->name('*.jsx')->name('*.js'))
             ->map(fn ($file) => $file->getRealPath());
-        $combined = $jsFiles->map(fn ($path) => file_get_contents($path))->implode("\n");
 
-        $this->assertDoesNotMatchRegularExpression('/\\b(window\\.)?(alert|prompt|confirm)\\s*\\(/', $combined);
-        $this->assertStringNotContainsString('PaymentPage', $combined);
-        $this->assertStringNotContainsString('bg-indigo', $combined);
-        $this->assertStringNotContainsString('text-indigo', $combined);
-        $this->assertStringNotContainsString('border-indigo', $combined);
+        foreach ($jsFiles as $path) {
+            $contents = file_get_contents($path);
+            $label = str_replace(base_path().DIRECTORY_SEPARATOR, '', $path);
+
+            $this->assertFalse((bool) preg_match('/\\b(window\\.)?(alert|prompt|confirm)\\s*\\(/', $contents), "{$label} uses a native browser dialog.");
+            $this->assertFalse((bool) preg_match('/(import\\s+PaymentPage|<PaymentPage\\b|PaymentPage\\.jsx|\\/PaymentPage)/', $contents), "{$label} references the retired PaymentPage component.");
+            $this->assertFalse(str_contains($contents, 'bg-indigo'), "{$label} contains bg-indigo.");
+            $this->assertFalse(str_contains($contents, 'text-indigo'), "{$label} contains text-indigo.");
+            $this->assertFalse(str_contains($contents, 'border-indigo'), "{$label} contains border-indigo.");
+        }
     }
 
     public function test_frontend_fetch_wrapper_adds_csrf_header_for_same_origin_mutations(): void
@@ -414,15 +588,15 @@ class SecurityHardeningTest extends TestCase
         $this->assertStringContainsString("headers.set('X-Requested-With', 'XMLHttpRequest');", $bootstrapJs);
         $this->assertStringContainsString('/api/session/csrf-token', $bootstrapJs);
         $this->assertStringContainsString('__csrfRetry: true', $bootstrapJs);
-        $this->assertStringContainsString("config.__csrfRetry = true", $bootstrapJs);
+        $this->assertStringContainsString('config.__csrfRetry = true', $bootstrapJs);
     }
 
     private function user(string $role): User
     {
         return User::create([
             'full_name' => "{$role} Tester",
-            'username' => strtolower($role) . '_' . uniqid(),
-            'email' => uniqid(strtolower($role) . '_') . '@example.test',
+            'username' => strtolower($role).'_'.uniqid(),
+            'email' => uniqid(strtolower($role).'_').'@example.test',
             'password' => 'password',
             'phone' => '09170000000',
             'role' => $role,

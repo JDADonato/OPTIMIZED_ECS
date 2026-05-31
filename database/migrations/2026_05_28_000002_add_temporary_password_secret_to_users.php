@@ -9,7 +9,7 @@ return new class extends Migration
     public function up(): void
     {
         Schema::table('users', function (Blueprint $table) {
-            if (!Schema::hasColumn('users', 'temporary_password_secret')) {
+            if (! Schema::hasColumn('users', 'temporary_password_secret')) {
                 $table->text('temporary_password_secret')->nullable()->after('temporary_password_expires_at');
             }
         });

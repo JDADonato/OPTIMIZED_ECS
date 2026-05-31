@@ -1,4 +1,5 @@
-import React from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+import { ChevronDown } from 'lucide-react';
 
 const StaffPagination = ({
     page = 1,
@@ -8,6 +9,8 @@ const StaffPagination = ({
     onPerPageChange,
     perPageOptions = [10, 25, 50],
 }) => {
+    const [perPageMenuOpen, setPerPageMenuOpen] = useState(false);
+    const perPageMenuRef = useRef(null);
     const pageCount = Math.max(1, Math.ceil(total / perPage));
     const start = total === 0 ? 0 : ((page - 1) * perPage) + 1;
     const end = Math.min(total, page * perPage);
@@ -16,6 +19,26 @@ const StaffPagination = ({
         (_, index) => Math.max(1, Math.min(pageCount - Math.min(4, pageCount - 1), page - 2)) + index
     ).filter((value, index, list) => value <= pageCount && list.indexOf(value) === index);
 
+    useEffect(() => {
+        if (!perPageMenuOpen) return undefined;
+
+        const handlePointerDown = (event) => {
+            if (!perPageMenuRef.current?.contains(event.target)) {
+                setPerPageMenuOpen(false);
+            }
+        };
+        const handleKeyDown = (event) => {
+            if (event.key === 'Escape') setPerPageMenuOpen(false);
+        };
+
+        document.addEventListener('pointerdown', handlePointerDown);
+        document.addEventListener('keydown', handleKeyDown);
+        return () => {
+            document.removeEventListener('pointerdown', handlePointerDown);
+            document.removeEventListener('keydown', handleKeyDown);
+        };
+    }, [perPageMenuOpen]);
+
     return (
         <div className="staff-pagination">
             <div className="text-xs font-bold text-slate-500">
@@ -23,15 +46,37 @@ const StaffPagination = ({
             </div>
             <div className="flex items-center gap-2">
                 {onPerPageChange && (
-                    <select
-                        value={perPage}
-                        onChange={(event) => onPerPageChange(Number(event.target.value))}
-                        className="staff-control w-auto py-1.5 text-xs"
-                    >
-                        {perPageOptions.map((option) => (
-                            <option key={option} value={option}>{option} / page</option>
-                        ))}
-                    </select>
+                    <div className="staff-page-size-menu" ref={perPageMenuRef}>
+                        <button
+                            type="button"
+                            className="staff-page-size-button"
+                            aria-haspopup="listbox"
+                            aria-expanded={perPageMenuOpen}
+                            onClick={() => setPerPageMenuOpen((open) => !open)}
+                        >
+                            <span>{perPage} / page</span>
+                            <ChevronDown className="h-4 w-4" aria-hidden="true" />
+                        </button>
+                        {perPageMenuOpen && (
+                            <div className="staff-page-size-list" role="listbox" aria-label="Rows per page">
+                                {perPageOptions.map((option) => (
+                                    <button
+                                        key={option}
+                                        type="button"
+                                        role="option"
+                                        aria-selected={option === perPage}
+                                        className={`staff-page-size-option ${option === perPage ? 'is-active' : ''}`}
+                                        onClick={() => {
+                                            onPerPageChange(Number(option));
+                                            setPerPageMenuOpen(false);
+                                        }}
+                                    >
+                                        {option} / page
+                                    </button>
+                                ))}
+                            </div>
+                        )}
+                    </div>
                 )}
                 <button
                     type="button"

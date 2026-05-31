@@ -57,7 +57,7 @@ class AccountLifecycleService
 
     public function releaseStaffOwnership(User $staff, ?int $actorId = null): array
     {
-        if (!in_array($staff->role, ['Marketing', 'Accounting'], true)) {
+        if (! in_array($staff->role, ['Marketing', 'Accounting'], true)) {
             return [
                 'conversations' => 0,
                 'bookings' => 0,

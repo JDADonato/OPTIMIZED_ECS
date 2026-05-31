@@ -33,6 +33,7 @@ class EventTypeController extends Controller
     public function show($id)
     {
         $type = EventType::whereRaw('is_active is true')->findOrFail($id);
+
         return response()->json($type);
     }
 
@@ -42,6 +43,7 @@ class EventTypeController extends Controller
     public function bySlug($slug)
     {
         $type = EventType::where('slug', $slug)->whereRaw('is_active is true')->firstOrFail();
+
         return response()->json($type);
     }
 }

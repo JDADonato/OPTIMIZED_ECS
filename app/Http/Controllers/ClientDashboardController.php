@@ -71,6 +71,7 @@ class ClientDashboardController extends Controller
                 $bookingArray['canEditSupplementary'] = $bookingService->canEditSupplementary($booking);
                 $bookingArray['canEditMenu'] = $bookingService->canEditMenu($booking);
                 $bookingArray['cancellationImpact'] = $this->calculateCancellationImpactFromLoadedPayments($booking);
+
                 return $bookingArray;
             });
 
@@ -80,7 +81,7 @@ class ClientDashboardController extends Controller
             ->values();
         $historyBookings = $allBookings
             ->filter(fn ($booking) => in_array($booking['status'] ?? null, $historyStatuses, true))
-            ->reject(fn ($booking) => !empty($booking['hidden_from_customer_history_at']))
+            ->reject(fn ($booking) => ! empty($booking['hidden_from_customer_history_at']))
             ->values();
 
         $tastings = FoodTasting::where('user_id', $userId)
@@ -101,6 +102,7 @@ class ClientDashboardController extends Controller
                 $data['event_type'] = $p->booking->event_type ?? null;
                 $data['client_full_name'] = $p->booking->client_full_name ?? null;
                 $data['total_cost'] = $p->booking->total_cost ?? null;
+
                 return $data;
             });
 
@@ -143,10 +145,10 @@ class ClientDashboardController extends Controller
             'non_refundable_amount' => $nonRefundableAmount,
             'refundable_amount' => $refundableAmount,
             'message' => $refundableAmount > 0
-                ? "Warning: Because your event is more than 7 days away, the 10% Reservation Fee (PHP " . number_format($reservationFee, 2) . ") is forfeited. The remaining PHP " . number_format($refundableAmount, 2) . " will be flagged for refund."
+                ? 'Warning: Because your event is more than 7 days away, the 10% Reservation Fee (PHP '.number_format($reservationFee, 2).') is forfeited. The remaining PHP '.number_format($refundableAmount, 2).' will be flagged for refund.'
                 : ($daysUntilEvent <= 7
-                    ? "Warning: Because your event is within 7 days, all payments (PHP " . number_format($nonRefundableAmount, 2) . ") are strictly non-refundable."
-                    : "Warning: Your 10% Reservation Fee is non-refundable. Your paid amount does not exceed this fee."),
+                    ? 'Warning: Because your event is within 7 days, all payments (PHP '.number_format($nonRefundableAmount, 2).') are strictly non-refundable.'
+                    : 'Warning: Your 10% Reservation Fee is non-refundable. Your paid amount does not exceed this fee.'),
         ];
     }
 

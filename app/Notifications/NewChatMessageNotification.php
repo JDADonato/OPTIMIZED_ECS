@@ -9,6 +9,7 @@ use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Notifications\Messages\MailMessage;
 use Illuminate\Notifications\Notification;
+use Illuminate\Support\Str;
 
 /**
  * Phase 2 Step 4: Email notification sent to a client when a staff member
@@ -42,11 +43,11 @@ class NewChatMessageNotification extends Notification implements ShouldQueue
     public function toMail(object $notifiable): MailMessage
     {
         $staffName = $this->staffMember->username;
-        $preview = \Illuminate\Support\Str::limit($this->message->message, 120);
+        $preview = Str::limit($this->message->message, 120);
         $appUrl = config('app.url', 'http://localhost:8080');
 
         return (new MailMessage)
-            ->subject("New Message from Eloquente Catering")
+            ->subject('New Message from Eloquente Catering')
             ->view('emails.new_message', [
                 'clientName' => $notifiable->username,
                 'staffName' => $staffName,
@@ -64,7 +65,7 @@ class NewChatMessageNotification extends Notification implements ShouldQueue
             'type' => 'chat_reply',
             'conversation_id' => $this->conversation->id,
             'staff_name' => $this->staffMember->username,
-            'message_preview' => \Illuminate\Support\Str::limit($this->message->message, 100),
+            'message_preview' => Str::limit($this->message->message, 100),
             'message' => "{$this->staffMember->username} replied to your inquiry.",
         ];
     }

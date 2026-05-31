@@ -11,9 +11,7 @@ class CustomerAccountLifecycleNotification extends Notification implements Shoul
 {
     use Queueable;
 
-    public function __construct(private readonly string $event)
-    {
-    }
+    public function __construct(private readonly string $event) {}
 
     public function via(object $notifiable): array
     {

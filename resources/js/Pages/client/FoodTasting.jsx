@@ -5,6 +5,8 @@ import { useAuth } from '../../context/AuthContext';
 import csrfFetch from '../../utils/csrf';
 import { FieldError, FormErrorSummary } from '../../Components/common/FormFeedback';
 import { focusFirstInvalidField, firstErrorMessage } from '../../utils/validation';
+import StaffPreviewBanner from '../../Components/common/StaffPreviewBanner';
+import { dashboardHrefForUser, isStaffUser } from '../../utils/dashboardLinks';
 
 const FoodTasting = () => {
     const { user } = useAuth();
@@ -21,6 +23,7 @@ const FoodTasting = () => {
     const [message, setMessage] = useState(null);
     const [errors, setErrors] = useState({});
     const [scheduledTastingId, setScheduledTastingId] = useState(null);
+    const dashboardHref = dashboardHrefForUser(user, '/');
 
     const handleChange = (e) => {
         setFormData({ ...formData, [e.target.name]: e.target.value });
@@ -72,13 +75,14 @@ const FoodTasting = () => {
                         <p className="text-[11px] font-black uppercase tracking-[0.24em] text-[#720101]">Food Tasting</p>
                         <p className="hidden text-xs font-semibold text-gray-500 sm:block">Schedule a tasting session before finalizing your menu</p>
                     </div>
-                    <button onClick={() => router.get(user ? '/dashboard/client' : '/')} className="rounded-full bg-[#720101] px-4 py-2 text-xs font-black uppercase tracking-widest text-white transition-colors hover:bg-[#5a0101]">
+                    <button onClick={() => router.get(user ? dashboardHref : '/')} className="rounded-full bg-[#720101] px-4 py-2 text-xs font-black uppercase tracking-widest text-white transition-colors hover:bg-[#5a0101]">
                         {user ? 'Dashboard' : 'Home'}
                     </button>
                 </div>
             </header>
+            <StaffPreviewBanner user={user} label="customer-facing food tasting page" />
 
-            <main className="mx-auto grid max-w-7xl gap-8 px-5 pb-12 pt-28 sm:px-8 lg:grid-cols-[0.9fr_1.1fr]">
+            <main className={`mx-auto grid max-w-7xl gap-8 px-5 pb-12 ${isStaffUser(user) ? 'pt-36' : 'pt-28'} sm:px-8 lg:grid-cols-[0.9fr_1.1fr]`}>
                 <section className="rounded-3xl bg-[#1a1a1a] p-8 text-white shadow-xl shadow-black/10 lg:sticky lg:top-24 lg:self-start">
                     <div className="mb-8 inline-flex h-14 w-14 items-center justify-center rounded-2xl bg-[#f0aa0b] text-[#1a1a1a]">
                         <Utensils className="h-7 w-7" />
@@ -108,7 +112,7 @@ const FoodTasting = () => {
                             <p className="text-xs font-bold uppercase tracking-widest text-[#720101]">Request Session</p>
                             <h2 className="mt-1 text-2xl font-display font-bold">Schedule your tasting</h2>
                         </div>
-                        {user && <button onClick={() => router.get('/dashboard/client')} className="hidden rounded-xl border border-gray-200 px-4 py-2 text-xs font-bold text-gray-600 hover:bg-gray-50 sm:block">Dashboard</button>}
+                        {user && <button onClick={() => router.get(dashboardHref)} className="hidden rounded-xl border border-gray-200 px-4 py-2 text-xs font-bold text-gray-600 hover:bg-gray-50 sm:block">Dashboard</button>}
                     </div>
 
                     {message && (
@@ -122,7 +126,7 @@ const FoodTasting = () => {
                         <div className="mb-6 rounded-2xl border border-[#720101]/10 bg-[#faf7f2] p-4">
                             <p className="text-sm font-bold text-[#1a1a1a]">Your tasting request is on file. The team will confirm the schedule from the Marketing workspace.</p>
                             <div className="mt-4 flex flex-wrap gap-2">
-                                <button onClick={() => router.get('/dashboard/client')} className="rounded-xl bg-[#720101] px-4 py-2 text-xs font-black uppercase tracking-widest text-white hover:bg-[#5a0101]">Go to Dashboard</button>
+                                <button onClick={() => router.get(dashboardHref)} className="rounded-xl bg-[#720101] px-4 py-2 text-xs font-black uppercase tracking-widest text-white hover:bg-[#5a0101]">Go to Dashboard</button>
                                 <button onClick={() => router.get('/menu')} className="rounded-xl border border-gray-200 bg-white px-4 py-2 text-xs font-black uppercase tracking-widest text-gray-700 hover:bg-gray-50">Browse Menu</button>
                             </div>
                         </div>

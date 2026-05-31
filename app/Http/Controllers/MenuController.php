@@ -19,7 +19,7 @@ class MenuController extends Controller
         $bestSeller = $request->has('best_seller') && $request->boolean('best_seller');
         $active = $request->has('active') ? $request->boolean('active') : true;
         $version = (int) Cache::get('catalog.version', 1);
-        $cacheKey = "catalog.public.menu.v{$version}.category:{$category}.best:" . (int) $bestSeller . '.active:' . (int) $active . ".page:{$page}.per:{$perPage}";
+        $cacheKey = "catalog.public.menu.v{$version}.category:{$category}.best:".(int) $bestSeller.'.active:'.(int) $active.".page:{$page}.per:{$perPage}";
 
         $items = Cache::remember($cacheKey, now()->addMinutes(10), function () use ($active, $bestSeller, $category, $perPage) {
             $query = MenuItem::query();
@@ -33,7 +33,7 @@ class MenuController extends Controller
             }
 
             return $query
-                ->whereRaw('is_active is ' . ($active ? 'true' : 'false'))
+                ->whereRaw('is_active is '.($active ? 'true' : 'false'))
                 ->orderBy('category')
                 ->orderBy('name')
                 ->paginate($perPage)
@@ -49,6 +49,7 @@ class MenuController extends Controller
     public function show($id)
     {
         $item = MenuItem::findOrFail($id);
+
         return response()->json($item);
     }
 

@@ -10,6 +10,7 @@ use App\Models\BookingReviewTask;
 use App\Models\Payment;
 use App\Models\User;
 use App\Notifications\BookingLiveStatusNotification;
+use App\Notifications\BookingStatusNotification;
 use App\Notifications\CustomerAssistedBookingInviteNotification;
 use App\Notifications\NewBookingNotification;
 use App\Services\BookingValidationService;
@@ -21,6 +22,7 @@ use App\Services\OperationalBroadcastService;
 use App\Services\PaymentCalculationService;
 use App\Services\PostEventLifecycleService;
 use App\Support\ApiResponse;
+use App\Support\AuditContext;
 use App\Support\ResourceVersion;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
@@ -29,6 +31,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Str;
+use Illuminate\Validation\ValidationException;
 use Inertia\Inertia;
 
 /**
@@ -48,7 +51,7 @@ class MarketingController extends Controller
                 return Booking::with('user:id,full_name,username,role')
                     ->orderBy('event_date', 'asc')
                     ->get();
-            })
+            }),
         ]);
     }
 
@@ -63,12 +66,19 @@ class MarketingController extends Controller
             ->when($request->query('date_from'), fn ($q, $date) => $q->whereDate('event_date', '>=', $date))
             ->when($request->query('date_to'), fn ($q, $date) => $q->whereDate('event_date', '<=', $date))
             ->when($request->query('search'), function ($q, $search) {
-                $term = '%' . mb_strtolower(trim((string) $search)) . '%';
+                $term = '%'.mb_strtolower(trim((string) $search)).'%';
                 $q->where(fn ($inner) => $inner
                     ->whereRaw('LOWER(client_full_name) LIKE ?', [$term])
+                    ->orWhereRaw('LOWER(client_email) LIKE ?', [$term])
+                    ->orWhereRaw('LOWER(client_phone) LIKE ?', [$term])
                     ->orWhereRaw('LOWER(event_name) LIKE ?', [$term])
                     ->orWhereRaw('LOWER(venue_city) LIKE ?', [$term])
-                    ->orWhereRaw('LOWER(event_type) LIKE ?', [$term]));
+                    ->orWhereRaw('LOWER(event_type) LIKE ?', [$term])
+                    ->orWhereHas('user', fn ($userQuery) => $userQuery
+                        ->whereRaw('LOWER(full_name) LIKE ?', [$term])
+                        ->orWhereRaw('LOWER(username) LIKE ?', [$term])
+                        ->orWhereRaw('LOWER(email) LIKE ?', [$term])
+                        ->orWhereRaw('LOWER(phone) LIKE ?', [$term])));
             });
 
         match ($request->query('sort', 'eventDateSoonest')) {
@@ -122,12 +132,12 @@ class MarketingController extends Controller
         }
 
         $normalizedSearch = mb_strtolower($search);
-        $term = '%' . $normalizedSearch . '%';
-        $startsWithTerm = $normalizedSearch . '%';
+        $term = '%'.$normalizedSearch.'%';
+        $startsWithTerm = $normalizedSearch.'%';
 
         $query = User::query()
             ->where('role', 'Client')
-            ->when(!$includeDeactivated, fn ($query) => $query->activeAccounts())
+            ->when(! $includeDeactivated, fn ($query) => $query->activeAccounts())
             ->where(fn ($query) => $query
                 ->whereRaw('LOWER(full_name) LIKE ?', [$term])
                 ->orWhereRaw('LOWER(username) LIKE ?', [$term])
@@ -180,7 +190,7 @@ class MarketingController extends Controller
     {
         $actor = Auth::user();
 
-        if (!$actor || !in_array($actor->role, ['Marketing', 'Admin'], true)) {
+        if (! $actor || ! in_array($actor->role, ['Marketing', 'Admin'], true)) {
             return response()->json(['error' => 'Only Marketing or Admin can create assisted bookings.'], 403);
         }
 
@@ -223,7 +233,7 @@ class MarketingController extends Controller
                 'pax' => $data['pax'],
             ]);
 
-            if (!empty($data['menu_items']) && isset($data['total_cost'])) {
+            if (! empty($data['menu_items']) && isset($data['total_cost'])) {
                 $expectedTotal = BookingValidationService::calculateTotalCost($data['menu_items'], (int) $data['pax'])
                     + (float) ($data['transport_fee'] ?? 0)
                     + (float) ($data['labor_surcharge'] ?? 0);
@@ -235,7 +245,7 @@ class MarketingController extends Controller
                     ], 422);
                 }
             }
-        } catch (\Illuminate\Validation\ValidationException $e) {
+        } catch (ValidationException $e) {
             return response()->json(['errors' => $e->errors()], 422);
         } catch (\Throwable $e) {
             return response()->json(['error' => $e->getMessage()], 422);
@@ -295,7 +305,7 @@ class MarketingController extends Controller
 
                 $cost = (float) ($booking->total_cost ?? 0);
                 if ($cost > 0) {
-                    $paymentService = new PaymentCalculationService();
+                    $paymentService = new PaymentCalculationService;
                     foreach ($paymentService->calculateTranches($booking) as $tranche) {
                         Payment::create([
                             'booking_id' => $booking->id,
@@ -318,17 +328,18 @@ class MarketingController extends Controller
                     'status_code' => 201,
                     'ip_address' => request()->ip(),
                     'user_agent' => request()->userAgent(),
-                    'metadata' => [
+                    'metadata' => AuditContext::forRequest(request(), null, [
                         'booking_id' => $booking->id,
                         'customer_id' => $customer->id,
                         'customer_mode' => $data['customer_mode'],
                         'booking_source' => $booking->booking_source,
-                    ],
+                        'changed_fields' => ['booking', 'payment_schedule'],
+                    ]),
                 ]);
 
                 return [$booking, $customer, $createdNewCustomer, $temporaryPassword];
             });
-        } catch (\Illuminate\Validation\ValidationException $e) {
+        } catch (ValidationException $e) {
             return response()->json(['errors' => $e->errors()], 422);
         } catch (\Throwable $e) {
             return response()->json(['error' => $e->getMessage()], 422);
@@ -388,14 +399,14 @@ class MarketingController extends Controller
         if ($data['customer_mode'] === 'existing') {
             $customer = User::where('role', 'Client')->find($data['customer_id']);
 
-            if (!$customer) {
-                throw \Illuminate\Validation\ValidationException::withMessages([
+            if (! $customer) {
+                throw ValidationException::withMessages([
                     'customer_id' => 'Choose an existing customer account.',
                 ]);
             }
 
-            if (!$customer->isActive()) {
-                throw \Illuminate\Validation\ValidationException::withMessages([
+            if (! $customer->isActive()) {
+                throw ValidationException::withMessages([
                     'customer_id' => 'Choose an active customer account.',
                 ]);
             }
@@ -418,7 +429,7 @@ class MarketingController extends Controller
             if ($duplicate) {
                 $duplicateName = $duplicate->full_name ?: $duplicate->username;
 
-                throw \Illuminate\Validation\ValidationException::withMessages([
+                throw ValidationException::withMessages([
                     'customer' => "A customer account already exists for {$duplicateName}. Select that customer instead.",
                 ]);
             }
@@ -458,7 +469,7 @@ class MarketingController extends Controller
         $counter = 1;
 
         while (User::where('username', $candidate)->exists()) {
-            $candidate = $base . '_' . (++$counter);
+            $candidate = $base.'_'.(++$counter);
         }
 
         return $candidate;
@@ -504,7 +515,7 @@ class MarketingController extends Controller
 
         $booking = Booking::find($id);
 
-        if (!$booking) {
+        if (! $booking) {
             return response()->json(['error' => 'Booking not found'], 404);
         }
 
@@ -551,13 +562,13 @@ class MarketingController extends Controller
 
         // ─── Send notification to the client ───
         try {
-            $client = \App\Models\User::find($booking->user_id);
+            $client = User::find($booking->user_id);
             if ($client && in_array($request->status, ['Confirmed', 'Cancelled', 'Completed'])) {
                 app(NotificationRecipientService::class)
-                    ->sendToUser($client, new \App\Notifications\BookingStatusNotification($booking, $request->status), 'booking_status_update');
+                    ->sendToUser($client, new BookingStatusNotification($booking, $request->status), 'booking_status_update');
             }
         } catch (\Exception $e) {
-            \Illuminate\Support\Facades\Log::error("Notification failed on status update: {$e->getMessage()}");
+            Log::error("Notification failed on status update: {$e->getMessage()}");
         }
         app(OperationalBroadcastService::class)
             ->bookingChanged($booking->fresh(), 'status_updated', 'Booking status updated.');
@@ -578,11 +589,11 @@ class MarketingController extends Controller
     {
         $booking = Booking::find($id);
 
-        if (!$booking) {
+        if (! $booking) {
             return response()->json(['error' => 'Booking not found'], 404);
         }
 
-        if (!in_array(Auth::user()->role, ['Marketing', 'Admin'], true)) {
+        if (! in_array(Auth::user()->role, ['Marketing', 'Admin'], true)) {
             return response()->json(['error' => 'Only Marketing or Admin can claim bookings.'], 403);
         }
 
@@ -596,7 +607,7 @@ class MarketingController extends Controller
                 'review_status' => $booking->review_status === 'Submitted' ? 'Under Review' : ($booking->review_status ?: 'Under Review'),
             ]);
 
-        if (!$updated) {
+        if (! $updated) {
             $booking->refresh()->load('assignee:id,full_name,username');
 
             if ((int) $booking->assigned_to === (int) Auth::id()) {
@@ -608,7 +619,7 @@ class MarketingController extends Controller
             }
 
             return response()->json([
-                'error' => 'This booking was already claimed by ' . ($booking->assignee?->full_name ?: ($booking->assignee->username ?? 'another staff member')) . '.',
+                'error' => 'This booking was already claimed by '.($booking->assignee?->full_name ?: ($booking->assignee->username ?? 'another staff member')).'.',
                 'booking' => new BookingSummaryResource($booking->fresh(['user', 'assignee', 'transferRequestedTo', 'transferRequestedBy', 'reviewTasks', 'preparationTasks', 'historyNotes'])),
             ], 409);
         }
@@ -636,7 +647,7 @@ class MarketingController extends Controller
 
         $booking = Booking::find($id);
 
-        if (!$booking) {
+        if (! $booking) {
             return response()->json(['error' => 'Booking not found'], 404);
         }
 
@@ -671,7 +682,7 @@ class MarketingController extends Controller
     {
         $booking = Booking::find($id);
 
-        if (!$booking) {
+        if (! $booking) {
             return response()->json(['error' => 'Booking not found'], 404);
         }
 
@@ -699,7 +710,7 @@ class MarketingController extends Controller
     {
         $booking = Booking::find($id);
 
-        if (!$booking) {
+        if (! $booking) {
             return response()->json(['error' => 'Booking not found'], 404);
         }
 
@@ -707,7 +718,7 @@ class MarketingController extends Controller
         $isRequestedStaff = $user->role === 'Marketing' && (int) $booking->transfer_requested_to === (int) $user->id;
         $isOwnerOrAdmin = $user->role === 'Admin' || (int) $booking->assigned_to === (int) $user->id;
 
-        if (!$isRequestedStaff && !$isOwnerOrAdmin) {
+        if (! $isRequestedStaff && ! $isOwnerOrAdmin) {
             return response()->json(['error' => 'Only the requested staff member, owner, or admin can decline this transfer.'], 403);
         }
 
@@ -728,7 +739,7 @@ class MarketingController extends Controller
     {
         $booking = Booking::find($id);
 
-        if (!$booking) {
+        if (! $booking) {
             return response()->json(['error' => 'Booking not found'], 404);
         }
 
@@ -763,7 +774,7 @@ class MarketingController extends Controller
 
         $booking = Booking::find($id);
 
-        if (!$booking) {
+        if (! $booking) {
             return response()->json(['error' => 'Booking not found'], 404);
         }
 
@@ -801,7 +812,7 @@ class MarketingController extends Controller
 
         $booking = Booking::find($id);
 
-        if (!$booking) {
+        if (! $booking) {
             return response()->json(['error' => 'Booking not found'], 404);
         }
 
@@ -837,9 +848,9 @@ class MarketingController extends Controller
 
         try {
             app(NotificationRecipientService::class)
-                ->sendToUser($booking->user, new \App\Notifications\BookingStatusNotification($booking, 'Needs Customer Details'), 'clarification_requested');
+                ->sendToUser($booking->user, new BookingStatusNotification($booking, 'Needs Customer Details'), 'clarification_requested');
         } catch (\Throwable $e) {
-            \Illuminate\Support\Facades\Log::warning('Clarification notification failed.', [
+            Log::warning('Clarification notification failed.', [
                 'booking_id' => $booking->id,
                 'error' => $e->getMessage(),
             ]);
@@ -860,7 +871,7 @@ class MarketingController extends Controller
 
         $booking = Booking::find($bookingId);
 
-        if (!$booking) {
+        if (! $booking) {
             return response()->json(['error' => 'Booking not found'], 404);
         }
 
@@ -870,7 +881,7 @@ class MarketingController extends Controller
 
         $task = BookingReviewTask::where('booking_id', $bookingId)->find($taskId);
 
-        if (!$task) {
+        if (! $task) {
             return response()->json(['error' => 'Review task not found'], 404);
         }
 
@@ -898,12 +909,12 @@ class MarketingController extends Controller
         $validStatuses = ['Not Started', 'On the Way', 'Preparing', 'Serving', 'Completed'];
 
         $request->validate([
-            'live_status' => 'required|in:' . implode(',', $validStatuses),
+            'live_status' => 'required|in:'.implode(',', $validStatuses),
         ]);
 
         $booking = Booking::find($id);
 
-        if (!$booking) {
+        if (! $booking) {
             return response()->json(['error' => 'Booking not found'], 404);
         }
 
@@ -944,7 +955,7 @@ class MarketingController extends Controller
     {
         $booking = Booking::with(['user:id,full_name,username,email,phone,role', 'assignee:id,full_name,username', 'transferRequestedTo:id,full_name,username', 'transferRequestedBy:id,full_name,username', 'reviewTasks', 'preparationTasks', 'historyNotes:id,booking_id,user_id,body,created_at'])->find($id);
 
-        if (!$booking) {
+        if (! $booking) {
             return response()->json(['error' => 'Booking not found'], 404);
         }
 
@@ -962,7 +973,7 @@ class MarketingController extends Controller
         $user = Auth::user();
         $booking->refresh();
 
-        if (!$user || !in_array($user->role, ['Marketing', 'Admin'], true)) {
+        if (! $user || ! in_array($user->role, ['Marketing', 'Admin'], true)) {
             return response()->json(['error' => 'Only Marketing or Admin can update bookings.'], 403);
         }
 
@@ -999,7 +1010,7 @@ class MarketingController extends Controller
 
         $email = $booking->client_email ?: $booking->user?->email;
 
-        if (!$email) {
+        if (! $email) {
             return;
         }
 

@@ -17,8 +17,8 @@ class InventoryItem extends Model
     protected function casts(): array
     {
         return [
-            'quantity_in_stock'  => 'integer',
-            'minimum_threshold'  => 'integer',
+            'quantity_in_stock' => 'integer',
+            'minimum_threshold' => 'integer',
         ];
     }
 

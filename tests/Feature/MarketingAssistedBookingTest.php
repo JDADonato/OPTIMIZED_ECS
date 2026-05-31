@@ -248,8 +248,8 @@ class MarketingAssistedBookingTest extends TestCase
     {
         return User::create(array_merge([
             'full_name' => "{$role} Tester",
-            'username' => strtolower($role) . '_' . uniqid(),
-            'email' => uniqid(strtolower($role) . '_') . '@example.test',
+            'username' => strtolower($role).'_'.uniqid(),
+            'email' => uniqid(strtolower($role).'_').'@example.test',
             'password' => 'password',
             'phone' => '09170000000',
             'role' => $role,

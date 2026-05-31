@@ -1,4 +1,8 @@
 import axios from 'axios';
+import { installGlobalClientErrorHandlers } from './utils/clientErrorReporter';
+
+installGlobalClientErrorHandlers();
+
 window.axios = axios;
 
 window.axios.defaults.headers.common['X-Requested-With'] = 'XMLHttpRequest';
@@ -204,12 +208,6 @@ window.fetch = async (input, init = {}) => {
         return response;
     }
 };
-
-/**
- * Echo exposes an expressive API for subscribing to channels and listening
- * for events that are broadcast by Laravel. Echo and event broadcasting
- * allow your team to easily build robust real-time web applications.
- */
 
 import Echo from 'laravel-echo';
 import Pusher from 'pusher-js';

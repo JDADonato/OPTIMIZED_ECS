@@ -11,15 +11,12 @@ class PaymentCalculationService
 {
     /**
      * Calculate required payment tranches for a booking based on the event date proximity.
-     * 
-     * @param Booking $booking
-     * @return array
      */
     public function calculateTranches(Booking $booking): array
     {
         $eventDate = Carbon::parse($booking->event_date)->startOfDay();
         $createdAt = $booking->created_at ? $booking->created_at->startOfDay() : now()->startOfDay();
-        
+
         $daysUntilEvent = $createdAt->diffInDays($eventDate, false);
         $totalCost = (float) $booking->total_cost;
         $rules = BusinessRule::getActive();
@@ -39,13 +36,14 @@ class PaymentCalculationService
                     'amount' => $totalCost,
                     'due_date' => now()->addHours($reservationHours)->toIso8601String(),
                     'description' => '100% Full Payment required immediately for rush events.',
-                ]
+                ],
             ];
         }
 
         // Rush 1: Event is less than 1 month, but > 10 days away
         if ($daysUntilEvent <= $downPaymentDueDays) {
             $rushPct = $reservationPct + $downPaymentPct;
+
             return [
                 [
                     'name' => 'DownPayment',
@@ -60,7 +58,7 @@ class PaymentCalculationService
                     'amount' => $totalCost * ($finalPct / 100),
                     'due_date' => $eventDate->copy()->subDays($finalDueDays)->toIso8601String(),
                     'description' => "{$finalPct}% Final Balance due {$finalDueDays} days before the event.",
-                ]
+                ],
             ];
         }
 
@@ -86,7 +84,7 @@ class PaymentCalculationService
                 'amount' => $totalCost * ($finalPct / 100),
                 'due_date' => $eventDate->copy()->subDays($finalDueDays)->toIso8601String(),
                 'description' => "{$finalPct}% Final Balance due {$finalDueDays} days before the event.",
-            ]
+            ],
         ];
     }
 
@@ -109,7 +107,7 @@ class PaymentCalculationService
         $voider = app(PaymentScheduleVoidService::class);
 
         // Only retire obsolete rows when nothing has been paid yet. Once money moved, preserve the active schedule.
-        if (!$hasLockedPayments) {
+        if (! $hasLockedPayments) {
             $expectedTypes = $tranches->pluck('name')->all();
             $booking->payments()
                 ->active()
@@ -131,7 +129,7 @@ class PaymentCalculationService
                 ->orderBy('id')
                 ->first();
 
-            if (!$payment) {
+            if (! $payment) {
                 if ($hasLockedPayments) {
                     continue;
                 }
@@ -176,9 +174,6 @@ class PaymentCalculationService
 
     /**
      * Check if the booking is within the non-refundable window (7 days before event).
-     * 
-     * @param Booking $booking
-     * @return bool
      */
     public function isNonRefundable(Booking $booking): bool
     {
@@ -192,9 +187,6 @@ class PaymentCalculationService
     /**
      * Get the next sequential payment due, ignoring future tranches.
      * Evaluates the event proximity and outstanding payments.
-     * 
-     * @param Booking $booking
-     * @return array|null
      */
     public function getNextPaymentDue(Booking $booking): ?array
     {
@@ -207,8 +199,8 @@ class PaymentCalculationService
             ->whereIn('status', ['Pending', 'Failed', 'Rejected'])
             ->orderBy('due_date', 'asc')
             ->first();
-            
-        if (!$nextPayment) {
+
+        if (! $nextPayment) {
             return null; // Fully paid or no pending payments
         }
 

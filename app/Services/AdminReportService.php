@@ -4,7 +4,6 @@ namespace App\Services;
 
 use App\Models\Booking;
 use App\Models\Payment;
-use App\Services\ConversionEventService;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -71,7 +70,7 @@ class AdminReportService
 
     public function widgetData(string $id, array $filters = []): array
     {
-        return $this->cachedPart('report-widget.' . $id, $filters, 120, function () use ($id, $filters) {
+        return $this->cachedPart('report-widget.'.$id, $filters, 120, function () use ($id, $filters) {
             $data = match ($id) {
                 'revenue_summary' => $this->revenueSummary($filters),
                 'payment_breakdown' => $this->paymentBreakdown($filters),
@@ -377,7 +376,7 @@ class AdminReportService
         $testimonialCandidates = 0;
         $lowFeedbackFollowups = 0;
 
-        if (!empty($bookingIds) && Schema::hasTable('feedback_responses')) {
+        if (! empty($bookingIds) && Schema::hasTable('feedback_responses')) {
             $feedbackBase = DB::table('feedback_responses')
                 ->whereIn('booking_id', $bookingIds);
 
@@ -513,11 +512,11 @@ class AdminReportService
         $forecastPax = (int) ($paxProjection['summary']['nextForecast'] ?? $paxProjection['summary']['forecastPax'] ?? 0);
 
         if ($direction === 'downward') {
-            return $this->insight('Revenue regression is trending downward.', 'Revenue is trending downward with an expected trajectory of ' . $this->peso($nextRevenue) . ' next month.', 'Check upcoming confirmed bookings and payment schedules before planning expenses.', 'warning');
+            return $this->insight('Revenue regression is trending downward.', 'Revenue is trending downward with an expected trajectory of '.$this->peso($nextRevenue).' next month.', 'Check upcoming confirmed bookings and payment schedules before planning expenses.', 'warning');
         }
 
         if ($forecastPax > 0) {
-            return $this->insight('Forecasts are usable for preparation.', 'Revenue is trending upward with an expected trajectory of ' . $this->peso($nextRevenue) . ' next month, while demand projects ' . number_format($forecastPax) . ' guests.', 'Share the revenue and demand projections with finance, handoff, and operations planning.', 'watch');
+            return $this->insight('Forecasts are usable for preparation.', 'Revenue is trending upward with an expected trajectory of '.$this->peso($nextRevenue).' next month, while demand projects '.number_format($forecastPax).' guests.', 'Share the revenue and demand projections with finance, handoff, and operations planning.', 'watch');
         }
 
         return $this->insight('Forecast needs more history.', 'There is not enough visible demand to make this projection very useful yet.', 'Use actual booking queues until more history is available.', 'good');
@@ -526,7 +525,7 @@ class AdminReportService
     private function paymentBreakdownInsight(array $rows): array
     {
         $pending = collect($rows)
-            ->filter(fn ($row) => !in_array(strtolower((string) ($row['label'] ?? '')), ['paid', 'verified', 'refunded'], true))
+            ->filter(fn ($row) => ! in_array(strtolower((string) ($row['label'] ?? '')), ['paid', 'verified', 'refunded'], true))
             ->sum('total');
 
         return $this->insight(
@@ -569,7 +568,7 @@ class AdminReportService
 
         return $this->insight(
             $top ? $headline : 'No demand pattern is visible yet.',
-            $top ? (($top['label'] ?? $top['name'] ?? 'The top item') . ' is leading this report view.') : 'The selected filters did not return enough rows for a useful ranking.',
+            $top ? (($top['label'] ?? $top['name'] ?? 'The top item').' is leading this report view.') : 'The selected filters did not return enough rows for a useful ranking.',
             $top ? $action : 'Broaden the filters or wait for more booking activity.',
             $top ? 'watch' : 'good'
         );
@@ -581,7 +580,7 @@ class AdminReportService
 
         return $this->insight(
             $urgent ? 'Operations has an active blocker.' : 'No operational blockers are visible.',
-            $urgent ? (($urgent['label'] ?? 'An operational alert') . ' needs attention before it affects customer experience.') : 'The alert queue does not show an active blocker for this view.',
+            $urgent ? (($urgent['label'] ?? 'An operational alert').' needs attention before it affects customer experience.') : 'The alert queue does not show an active blocker for this view.',
             $urgent ? 'Open the related queue and resolve the blocker first.' : 'Keep this as a daily health check.',
             $urgent ? (($urgent['severity'] ?? '') === 'danger' ? 'critical' : 'warning') : 'good'
         );
@@ -600,16 +599,16 @@ class AdminReportService
     private function cachedPart(string $part, array $filters, int $ttlSeconds, callable $callback): array
     {
         $version = Cache::get('admin.analytics.version', 1);
-        $key = 'admin.analytics.v5.' . $version . '.' . $part . '.' . $this->filterHash($filters);
+        $key = 'admin.analytics.v5.'.$version.'.'.$part.'.'.$this->filterHash($filters);
 
         return Cache::remember($key, now()->addSeconds($ttlSeconds), $callback);
     }
 
     private function memo(string $name, array $filters, callable $callback): mixed
     {
-        $key = $name . ':' . $this->filterHash($filters);
+        $key = $name.':'.$this->filterHash($filters);
 
-        if (!array_key_exists($key, $this->memo)) {
+        if (! array_key_exists($key, $this->memo)) {
             $this->memo[$key] = $callback();
         }
 
@@ -667,7 +666,7 @@ class AdminReportService
                     'label' => 'Overdue balance',
                     'value' => $summary['overdueRevenue'],
                     'format' => 'currency',
-                    'hint' => $overdueRatio . '% of total revenue exposure',
+                    'hint' => $overdueRatio.'% of total revenue exposure',
                 ],
                 [
                     'label' => 'Bookings',
@@ -830,7 +829,7 @@ class AdminReportService
             })
             ->when($filters['package_id'] ?? null, fn ($q, $id) => $q->where('bookings.package_id', $id))
             ->when($filters['package_category'] ?? null, fn ($q, $category) => $this->applyPackageCategoryFilter($q, 'bookings.package_id', $category))
-            ->when($filters['city'] ?? null, fn ($q, $city) => $q->where('bookings.venue_city', 'like', '%' . trim($city) . '%'))
+            ->when($filters['city'] ?? null, fn ($q, $city) => $q->where('bookings.venue_city', 'like', '%'.trim($city).'%'))
             ->when($filters['pax_min'] ?? null, fn ($q, $pax) => $q->where('bookings.pax', '>=', (int) $pax))
             ->when($filters['pax_max'] ?? null, fn ($q, $pax) => $q->where('bookings.pax', '<=', (int) $pax))
             ->select('menu_items.name as label', 'menu_items.category')
@@ -1077,11 +1076,11 @@ class AdminReportService
             ],
             'interpretation' => $this->insight(
                 'Revenue regression is ready.',
-                'Revenue is trending ' . $direction . ' with an expected trajectory of ' . $this->peso($nextForecast) . ' next month.',
+                'Revenue is trending '.$direction.' with an expected trajectory of '.$this->peso($nextForecast).' next month.',
                 'Consider adjusting operational buffers and purchasing commitments before the next planning cycle.',
                 $direction === 'downward' ? 'warning' : 'watch'
             ),
-            'insight' => 'Revenue is trending ' . $direction . ' with an expected trajectory of ' . $this->peso($nextForecast) . ' next month. Consider adjusting operational buffers.',
+            'insight' => 'Revenue is trending '.$direction.' with an expected trajectory of '.$this->peso($nextForecast).' next month. Consider adjusting operational buffers.',
         ];
     }
 
@@ -1103,7 +1102,7 @@ class AdminReportService
             ->whereDate('event_date', '>=', $start->toDateString())
             ->whereDate('event_date', '<', $this->shiftPeriod($end, 1, $period)->toDateString())
             ->when($year, fn ($q) => $q->whereYear('event_date', $year))
-            ->when($quarter, fn ($q) => $q->whereRaw($this->quarterWhereExpression('event_date') . ' = ?', [$quarter]))
+            ->when($quarter, fn ($q) => $q->whereRaw($this->quarterWhereExpression('event_date').' = ?', [$quarter]))
             ->selectRaw("$periodExpression as period_key")
             ->selectRaw('SUM(pax) as pax')
             ->selectRaw('COUNT(*) as events')
@@ -1133,7 +1132,7 @@ class AdminReportService
                     'isForecast' => false,
                 ];
             })
-            ->filter(fn ($row) => !$year || str_starts_with($row['period'], (string) $year))
+            ->filter(fn ($row) => ! $year || str_starts_with($row['period'], (string) $year))
             ->values();
 
         $smaBasis = $this->bookingQuery($filters)
@@ -1151,6 +1150,7 @@ class AdminReportService
         $seriesValues = collect(range(0, $historyCount - 1))
             ->map(function ($index) use ($start, $period, $smaBasis) {
                 $key = $this->periodKey($this->shiftPeriod($start, $index, $period), $period);
+
                 return (float) ($smaBasis[$key]->pax ?? 0);
             })
             ->values()
@@ -1192,15 +1192,15 @@ class AdminReportService
                 'nextForecast' => $nextForecast,
                 'nextMonthBaseline' => $nextForecast,
                 'peakPeriod' => $peak['label'] ?? 'No historical demand',
-                'method' => strtoupper((string) $window) . '-period SMA',
+                'method' => strtoupper((string) $window).'-period SMA',
             ],
             'interpretation' => $this->insight(
                 'Guest demand baseline is ready.',
-                'The smoothed moving average projects a baseline requirement for ' . number_format($nextForecast) . ' total guests next month.',
+                'The smoothed moving average projects a baseline requirement for '.number_format($nextForecast).' total guests next month.',
                 'Ensure raw ingredient inventory aligns with this baseline before supplier commitments are finalized.',
                 'watch'
             ),
-            'insight' => 'The smoothed moving average projects a baseline requirement for ' . number_format($nextForecast) . ' total guests next month. Ensure raw ingredient inventory aligns with this baseline.',
+            'insight' => 'The smoothed moving average projects a baseline requirement for '.number_format($nextForecast).' total guests next month. Ensure raw ingredient inventory aligns with this baseline.',
         ];
     }
 
@@ -1300,7 +1300,7 @@ class AdminReportService
             })
             ->when($filters['package_id'] ?? null, fn ($q, $id) => $q->where('package_id', $id))
             ->when($filters['package_category'] ?? null, fn ($q, $category) => $this->applyPackageCategoryFilter($q, 'package_id', $category))
-            ->when($filters['city'] ?? null, fn ($q, $city) => $q->where('venue_city', 'like', '%' . trim($city) . '%'))
+            ->when($filters['city'] ?? null, fn ($q, $city) => $q->where('venue_city', 'like', '%'.trim($city).'%'))
             ->when($filters['pax_min'] ?? null, fn ($q, $pax) => $q->where('pax', '>=', (int) $pax))
             ->when($filters['pax_max'] ?? null, fn ($q, $pax) => $q->where('pax', '<=', (int) $pax));
     }
@@ -1317,7 +1317,7 @@ class AdminReportService
             ->when($filters['payment_status'] ?? null, fn ($q, $status) => $q->where('payments.status', $status))
             ->when($filters['package_id'] ?? null, fn ($q, $id) => $q->where('bookings.package_id', $id))
             ->when($filters['package_category'] ?? null, fn ($q, $category) => $this->applyPackageCategoryFilter($q, 'bookings.package_id', $category))
-            ->when($filters['city'] ?? null, fn ($q, $city) => $q->where('bookings.venue_city', 'like', '%' . trim($city) . '%'))
+            ->when($filters['city'] ?? null, fn ($q, $city) => $q->where('bookings.venue_city', 'like', '%'.trim($city).'%'))
             ->when($filters['pax_min'] ?? null, fn ($q, $pax) => $q->where('bookings.pax', '>=', (int) $pax))
             ->when($filters['pax_max'] ?? null, fn ($q, $pax) => $q->where('bookings.pax', '<=', (int) $pax));
     }
@@ -1421,7 +1421,7 @@ class AdminReportService
 
         $top = collect($rows)->first();
         $meaning = $top
-            ? $top['label'] . ' represents ' . $top['percentage'] . '% of verified package volume in this view.'
+            ? $top['label'].' represents '.$top['percentage'].'% of verified package volume in this view.'
             : 'No verified sales volume is available for package-category distribution yet.';
 
         return [
@@ -1434,7 +1434,7 @@ class AdminReportService
             ],
             'is_fallback' => $isFallback,
             'insight' => $this->insight(
-                $top ? ($top['label'] . ' leads verified package volume.') : 'Package category distribution needs more data.',
+                $top ? ($top['label'].' leads verified package volume.') : 'Package category distribution needs more data.',
                 $meaning,
                 $top ? 'Use the leading category for campaign targeting and package recommendation defaults.' : 'Keep the chart visible while more verified payments arrive.',
                 $isFallback ? 'warning' : 'watch'
@@ -1513,6 +1513,7 @@ class AdminReportService
         $cumulative = 0.0;
         $history = $monthly->map(function ($row) use (&$cumulative) {
             $cumulative += (float) $row['revenue'];
+
             return [
                 ...$row,
                 'cumulativeRevenue' => round($cumulative, 2),
@@ -1573,11 +1574,11 @@ class AdminReportService
             ],
             'interpretation' => $this->insight(
                 'Fallback revenue regression is active.',
-                'Revenue is trending upward with an expected trajectory of ' . $this->peso($nextForecast) . ' next month.',
+                'Revenue is trending upward with an expected trajectory of '.$this->peso($nextForecast).' next month.',
                 'Replace fallback values with verified payments as soon as real history is available.',
                 'warning'
             ),
-            'insight' => 'Fallback revenue regression is active. Revenue is trending upward with an expected trajectory of ' . $this->peso($nextForecast) . ' next month.',
+            'insight' => 'Fallback revenue regression is active. Revenue is trending upward with an expected trajectory of '.$this->peso($nextForecast).' next month.',
         ];
     }
 
@@ -1634,34 +1635,34 @@ class AdminReportService
                 'nextForecast' => $nextForecast,
                 'nextMonthBaseline' => $nextForecast,
                 'peakPeriod' => ($history->sortByDesc('pax')->first()['label'] ?? 'Fallback demand'),
-                'method' => strtoupper((string) $window) . '-period SMA',
+                'method' => strtoupper((string) $window).'-period SMA',
             ],
             'interpretation' => $this->insight(
                 'Fallback demand baseline is active.',
-                'The smoothed moving average projects a baseline requirement for ' . number_format($nextForecast) . ' total guests next month.',
+                'The smoothed moving average projects a baseline requirement for '.number_format($nextForecast).' total guests next month.',
                 'Use this only for panel evaluation until real booking history is available.',
                 'warning'
             ),
-            'insight' => 'Fallback demand baseline is active. The smoothed moving average projects a baseline requirement for ' . number_format($nextForecast) . ' total guests next month.',
+            'insight' => 'Fallback demand baseline is active. The smoothed moving average projects a baseline requirement for '.number_format($nextForecast).' total guests next month.',
         ];
     }
 
     private function advancedFallbackSeed(array $filters, string $salt): string
     {
-        return $salt . ':' . $this->filterHash($filters) . ':' . today()->format('Y-m-d');
+        return $salt.':'.$this->filterHash($filters).':'.today()->format('Y-m-d');
     }
 
     private function pseudoBetween(string $seed, int $index, int $min, int $max): int
     {
         $range = max(1, $max - $min + 1);
-        $value = abs(crc32($seed . ':' . $index));
+        $value = abs(crc32($seed.':'.$index));
 
         return $min + (int) ($value % $range);
     }
 
     private function peso(float $amount): string
     {
-        return 'PHP ' . number_format($amount, 2);
+        return 'PHP '.number_format($amount, 2);
     }
 
     private function simpleMovingAverage(array $values, int $window): float
@@ -1746,14 +1747,14 @@ class AdminReportService
     private function periodKey(Carbon $date, string $period): string
     {
         return $period === 'quarterly'
-            ? $date->format('Y') . '-Q' . $date->quarter
+            ? $date->format('Y').'-Q'.$date->quarter
             : $date->format('Y-m');
     }
 
     private function periodLabel(Carbon $date, string $period): string
     {
         return $period === 'quarterly'
-            ? 'Q' . $date->quarter . ' ' . $date->format('Y')
+            ? 'Q'.$date->quarter.' '.$date->format('Y')
             : $date->format('M Y');
     }
 

@@ -2,6 +2,8 @@
 
 namespace App\Console\Commands;
 
+use App\Http\Middleware\SecurityHeaders;
+use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Route;
@@ -76,8 +78,8 @@ class PreflightScan extends Command
         $checks = [];
         foreach ($required as $key) {
             $checks[] = $this->check(
-                (bool) preg_match('/^' . preg_quote($key, '/') . '=/m', $example),
-                'env.example.' . strtolower($key),
+                (bool) preg_match('/^'.preg_quote($key, '/').'=/m', $example),
+                'env.example.'.strtolower($key),
                 ".env.example documents {$key}",
                 'fail',
                 'Add the key to .env.example without real secrets.'
@@ -96,7 +98,7 @@ class PreflightScan extends Command
     private function securityChecks(): array
     {
         return [
-            $this->check(class_exists(\App\Http\Middleware\SecurityHeaders::class), 'security.middleware_exists', 'Security headers middleware exists'),
+            $this->check(class_exists(SecurityHeaders::class), 'security.middleware_exists', 'Security headers middleware exists'),
             $this->check((bool) config('security.headers.enabled'), 'security.headers_enabled', 'Security headers are enabled'),
             $this->check((bool) config('security.headers.csp_enabled'), 'security.csp_enabled', 'CSP header is enabled'),
             $this->check(app()->environment('production') ? (bool) config('security.headers.hsts_enabled') : true, 'security.hsts_configured', 'HSTS is configured for production HTTPS requests'),
@@ -126,7 +128,7 @@ class PreflightScan extends Command
             $this->check(str_contains(File::get(base_path('bootstrap/app.php')), 'announcements:publish-due'), 'deploy.announcement_scheduler', 'Due scheduled announcements are published by the scheduler', 'warning', 'Register announcements:publish-due in the Laravel scheduler.'),
             $this->check(str_contains(File::get(base_path('bootstrap/app.php')), 'uploads:purge-orphans'), 'deploy.upload_purge_scheduler', 'Temporary upload cleanup is scheduled', 'warning', 'Register uploads:purge-orphans in the Laravel scheduler.'),
             $this->check(config('queue.default') !== 'sync', 'deploy.queue_not_sync', 'Queue driver is production-capable', 'warning', 'Use redis or database queue workers in production.'),
-            $this->check(class_exists(\Barryvdh\DomPDF\Facade\Pdf::class), 'deploy.pdf_renderer_installed', 'PDF renderer package is installed', 'fail', 'Install barryvdh/laravel-dompdf before deployment.'),
+            $this->check(class_exists(Pdf::class), 'deploy.pdf_renderer_installed', 'PDF renderer package is installed', 'fail', 'Install barryvdh/laravel-dompdf before deployment.'),
             $this->check(config('broadcasting.default') === 'reverb' || ! app()->environment('production'), 'deploy.reverb_expected', 'Reverb broadcasting is expected in production', 'warning', 'Run Reverb and set BROADCAST_CONNECTION=reverb in production.'),
         ];
     }
@@ -139,7 +141,7 @@ class PreflightScan extends Command
 
         $skills = File::exists(base_path('skills.sh'))
             ? base_path('skills.sh')
-            : (new ExecutableFinder())->find('skills.sh');
+            : (new ExecutableFinder)->find('skills.sh');
 
         if (! $skills) {
             return [$this->check(false, 'external.skills_sh', 'skills.sh preflight scanner is available', 'warning', 'Install skills.sh or run the native preflight scan only.')];
@@ -152,7 +154,7 @@ class PreflightScan extends Command
         return [$this->check($process->isSuccessful(), 'external.skills_sh', 'skills.sh @preflight --json completed', 'warning', trim($process->getErrorOutput()) ?: 'External preflight returned a non-zero exit code.')];
     }
 
-    private function check(bool $passes, string $id, string $label, string $failureStatus = 'fail', string $recommendation = null): array
+    private function check(bool $passes, string $id, string $label, string $failureStatus = 'fail', ?string $recommendation = null): array
     {
         return [
             'id' => $id,
@@ -172,7 +174,7 @@ class PreflightScan extends Command
         File::ensureDirectoryExists(storage_path('app/preflight'));
 
         File::put(
-            storage_path('app/preflight/preflight-' . now()->format('Ymd-His') . '.json'),
+            storage_path('app/preflight/preflight-'.now()->format('Ymd-His').'.json'),
             json_encode($results, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)
         );
     }

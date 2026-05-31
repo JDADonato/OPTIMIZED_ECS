@@ -2,6 +2,7 @@
 
 namespace App\Http\Middleware;
 
+use App\Support\PasswordPolicy;
 use Illuminate\Http\Request;
 use Inertia\Middleware;
 
@@ -31,11 +32,11 @@ class HandleInertiaRequests extends Middleware
                     'id' => $request->user()->id,
                     'full_name' => $request->user()->full_name,
                     'username' => $request->user()->username,
-                     'email' => $request->user()->email,
-                     'phone' => $request->user()->phone,
-                     'avatar_path' => $request->user()->avatar_path,
-                    'avatar_url' => $request->user()->avatar_path ? route('profile.avatar', [], false) . '?v=' . optional($request->user()->updated_at)->timestamp : null,
-                     'preferred_contact_method' => $request->user()->preferred_contact_method,
+                    'email' => $request->user()->email,
+                    'phone' => $request->user()->phone,
+                    'avatar_path' => $request->user()->avatar_path,
+                    'avatar_url' => $request->user()->avatar_path ? route('profile.avatar', [], false).'?v='.optional($request->user()->updated_at)->timestamp : null,
+                    'preferred_contact_method' => $request->user()->preferred_contact_method,
                     'notification_preferences' => $request->user()->notification_preferences,
                     'profile_preferences' => $request->user()->profile_preferences,
                     'role' => $request->user()->role,
@@ -45,12 +46,16 @@ class HandleInertiaRequests extends Middleware
                     'otp_resend_attempts' => (int) ($request->user()->otp_resend_attempts ?? 0),
                     'account_status' => $request->user()->account_status ?? 'active',
                     'must_change_password' => $request->user()->requiresPasswordChange(),
+                    'password_policy_version' => (int) ($request->user()->password_policy_version ?? 1),
+                    'password_upgrade_recommended' => ! $request->user()->requiresPasswordChange()
+                        && ! PasswordPolicy::isCurrent($request->user()->password_policy_version),
                 ] : null,
             ],
             'flash' => [
                 'message' => fn () => $request->session()->get('message'),
                 'error' => fn () => $request->session()->get('error'),
             ],
+            'request_id' => fn () => $request->attributes->get('request_id'),
         ]);
     }
 }

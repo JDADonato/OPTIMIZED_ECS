@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Mail\VerifyEmailOTP;
 use App\Models\User;
+use App\Support\PasswordPolicy;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Hash;
@@ -19,7 +20,7 @@ class ProfileManagementTest extends TestCase
     {
         $user = User::create([
             'full_name' => 'Original Name',
-            'username' => 'client_' . uniqid(),
+            'username' => 'client_'.uniqid(),
             'email' => 'client@example.test',
             'password' => 'password',
             'role' => 'Client',
@@ -53,12 +54,54 @@ class ProfileManagementTest extends TestCase
         $this->assertSame('Metro Manila', $user->profile_preferences['default_event_city']);
     }
 
+    public function test_json_profile_update_returns_json_without_redirecting_to_current_dashboard(): void
+    {
+        $user = User::create([
+            'full_name' => 'Admin User',
+            'username' => 'admin_'.uniqid(),
+            'email' => 'admin@example.test',
+            'password' => 'password',
+            'role' => 'Admin',
+        ]);
+
+        $this->actingAs($user)
+            ->from('/dashboard/admin')
+            ->putJson('/profile', [
+                'full_name' => $user->full_name,
+                'username' => $user->username,
+                'email' => $user->email,
+                'phone' => '09170000000',
+                'preferred_contact_method' => 'email',
+                'notification_preferences' => [
+                    'booking_updates' => true,
+                    'payment_reminders' => true,
+                    'message_alerts' => true,
+                    'announcements' => true,
+                ],
+                'profile_preferences' => [
+                    'staff_workspace' => [
+                        'admin' => [
+                            'default_tab' => 'today',
+                            'density' => 'compact',
+                            'sidebar_state' => 'expanded',
+                            'sync_feedback' => 'quiet',
+                        ],
+                    ],
+                ],
+            ])
+            ->assertOk()
+            ->assertJsonPath('message', 'Profile updated successfully!')
+            ->assertJsonPath('user.profile_preferences.staff_workspace.admin.density', 'compact');
+
+        $this->assertSame('compact', $user->fresh()->profile_preferences['staff_workspace']['admin']['density']);
+    }
+
     public function test_email_change_clears_verification_and_password_change_requires_current_password(): void
     {
         Mail::fake();
 
         $user = User::create([
-            'username' => 'client_' . uniqid(),
+            'username' => 'client_'.uniqid(),
             'email' => 'old@example.test',
             'email_verified_at' => now(),
             'password' => 'password123',
@@ -70,8 +113,8 @@ class ProfileManagementTest extends TestCase
                 'username' => $user->username,
                 'email' => 'new@example.test',
                 'current_password' => 'wrong-password',
-                'new_password' => 'newpassword123',
-                'new_password_confirmation' => 'newpassword123',
+                'new_password' => 'SecurePass123!',
+                'new_password_confirmation' => 'SecurePass123!',
             ])
             ->assertSessionHasErrors('current_password');
 
@@ -80,8 +123,8 @@ class ProfileManagementTest extends TestCase
                 'username' => $user->username,
                 'email' => 'new@example.test',
                 'current_password' => 'password123',
-                'new_password' => 'newpassword123',
-                'new_password_confirmation' => 'newpassword123',
+                'new_password' => 'SecurePass123!',
+                'new_password_confirmation' => 'SecurePass123!',
             ])
             ->assertSessionHasErrors('password_verification_code');
 
@@ -96,14 +139,15 @@ class ProfileManagementTest extends TestCase
                 'username' => $user->username,
                 'email' => 'new@example.test',
                 'current_password' => 'password123',
-                'new_password' => 'newpassword123',
-                'new_password_confirmation' => 'newpassword123',
+                'new_password' => 'SecurePass123!',
+                'new_password_confirmation' => 'SecurePass123!',
                 'password_verification_code' => '123456',
             ])
             ->assertSessionHasNoErrors();
 
         $this->assertNull($user->fresh()->email_verified_at);
-        $this->assertTrue(password_verify('newpassword123', $user->fresh()->password));
+        $this->assertTrue(password_verify('SecurePass123!', $user->fresh()->password));
+        $this->assertSame(PasswordPolicy::CURRENT_VERSION, $user->fresh()->password_policy_version);
     }
 
     public function test_avatar_upload_accepts_images_and_rejects_invalid_files(): void
@@ -111,7 +155,7 @@ class ProfileManagementTest extends TestCase
         Storage::fake('public');
 
         $user = User::create([
-            'username' => 'client_' . uniqid(),
+            'username' => 'client_'.uniqid(),
             'email' => 'client@example.test',
             'password' => 'password',
             'role' => 'Client',
@@ -143,7 +187,7 @@ class ProfileManagementTest extends TestCase
         Mail::fake();
 
         $user = User::create([
-            'username' => 'client_' . uniqid(),
+            'username' => 'client_'.uniqid(),
             'email' => 'client@example.test',
             'password' => 'password',
             'role' => 'Client',
@@ -163,7 +207,7 @@ class ProfileManagementTest extends TestCase
     public function test_password_verification_code_expires_before_password_change(): void
     {
         $user = User::create([
-            'username' => 'client_' . uniqid(),
+            'username' => 'client_'.uniqid(),
             'email' => 'client@example.test',
             'password' => 'password123',
             'role' => 'Client',
@@ -180,8 +224,8 @@ class ProfileManagementTest extends TestCase
                 'username' => $user->username,
                 'email' => $user->email,
                 'current_password' => 'password123',
-                'new_password' => 'newpassword123',
-                'new_password_confirmation' => 'newpassword123',
+                'new_password' => 'SecurePass123!',
+                'new_password_confirmation' => 'SecurePass123!',
                 'password_verification_code' => '123456',
             ])
             ->assertSessionHasErrors('password_verification_code');

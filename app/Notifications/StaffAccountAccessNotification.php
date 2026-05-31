@@ -13,8 +13,7 @@ class StaffAccountAccessNotification extends Notification
     public function __construct(
         private readonly string $temporaryPassword,
         private readonly string $purpose = 'created',
-    ) {
-    }
+    ) {}
 
     public function via(object $notifiable): array
     {

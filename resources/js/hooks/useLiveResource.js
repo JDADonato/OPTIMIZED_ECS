@@ -8,6 +8,7 @@ const DEFAULT_SELECT = (payload) => payload;
 const DEFAULT_EVENTS = ['.operational.resource.changed'];
 const DEFAULT_TIMEOUT = 12000;
 const MAX_RETRY_DELAY = 60000;
+const MAX_AUTO_RETRIES = 5;
 
 const normalizeList = (value) => (Array.isArray(value) ? value.filter(Boolean) : []);
 
@@ -26,6 +27,7 @@ export default function useLiveResource(url, {
     select = DEFAULT_SELECT,
     initialData = null,
     onSuccess = null,
+    maxAutoRetries = MAX_AUTO_RETRIES,
 } = {}) {
     const { auth } = usePage().props;
     const user = auth?.user || null;
@@ -102,11 +104,16 @@ export default function useLiveResource(url, {
 
     const scheduleRetry = useCallback((loadFn) => {
         clearRetry();
+        if (failuresRef.current > maxAutoRetries) {
+            setSyncState(dataRef.current ? 'stale' : 'error');
+            return;
+        }
+
         const delay = Math.min(4000 * (2 ** Math.max(0, failuresRef.current - 1)), MAX_RETRY_DELAY);
         retryTimerRef.current = window.setTimeout(() => {
             loadFn({ silent: true, force: true, reason: 'retry' });
         }, delay);
-    }, [clearRetry]);
+    }, [clearRetry, maxAutoRetries]);
 
     const canBackgroundRefresh = useCallback(() => (
         document.visibilityState === 'visible'
@@ -121,6 +128,10 @@ export default function useLiveResource(url, {
             setRefreshing(false);
             setSyncState(dataRef.current ? 'stale' : 'offline');
             return dataRef.current;
+        }
+
+        if (reason !== 'retry') {
+            failuresRef.current = 0;
         }
 
         abortRef.current?.abort();
@@ -172,7 +183,9 @@ export default function useLiveResource(url, {
 
             failuresRef.current += 1;
             setError(requestError);
-            setSyncState(dataRef.current ? 'reconnecting' : 'error');
+            setSyncState(failuresRef.current > maxAutoRetries
+                ? (dataRef.current ? 'stale' : 'error')
+                : (dataRef.current ? 'reconnecting' : 'error'));
             scheduleRetry(load);
             return dataRef.current;
         } finally {
@@ -182,7 +195,7 @@ export default function useLiveResource(url, {
                 setRefreshing(false);
             }
         }
-    }, [clearRetry, enabled, markChanged, online, persist, requestUrl, resolvedCacheKey, scheduleRetry, timeout, ttl]);
+    }, [clearRetry, enabled, markChanged, maxAutoRetries, online, persist, requestUrl, resolvedCacheKey, scheduleRetry, timeout, ttl]);
 
     useEffect(() => {
         if (!enabled) return undefined;

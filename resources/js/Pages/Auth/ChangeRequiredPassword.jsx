@@ -3,7 +3,9 @@ import axios from 'axios';
 import { usePage } from '@inertiajs/react';
 import { Loader2, LockKeyhole } from 'lucide-react';
 import AuthShell from '../../Components/auth/AuthShell';
+import PasswordStrengthField, { PasswordMatchHint } from '../../Components/auth/PasswordStrengthField';
 import { useToast } from '../../context/ToastContext';
+import { evaluatePassword } from '../../utils/passwordPolicy';
 
 const dashboardForRole = (role) => {
     if (role === 'Admin') return '/dashboard/admin';
@@ -62,6 +64,19 @@ const ChangeRequiredPassword = () => {
         event.preventDefault();
         setProcessing(true);
         setErrors({});
+
+        const passwordEvaluation = evaluatePassword(form.password, {
+            username: auth?.user?.username,
+            email: auth?.user?.email,
+        });
+        if (!passwordEvaluation.valid || form.password !== form.password_confirmation) {
+            setErrors({
+                password: !passwordEvaluation.valid ? ['Please complete the password requirements.'] : undefined,
+                password_confirmation: form.password !== form.password_confirmation ? ['Passwords do not match.'] : undefined,
+            });
+            setProcessing(false);
+            return;
+        }
 
         try {
             authFlowDebug('Submitting required password change', {
@@ -126,36 +141,49 @@ const ChangeRequiredPassword = () => {
             brandTitle="Set your own password."
             brandCopy="For account safety, temporary staff passwords must be replaced before opening the workspace."
             title="Change password"
-            subtitle="Use at least 8 characters. Choose something only you know."
+            subtitle="Choose a stronger password before opening your workspace."
             features={[]}
             hideAuthSwitch
             backLabel="Back to sign in"
             backHref="/login"
             onBack={signOut}
         >
-            <form className="space-y-5" onSubmit={submit}>
-                {['password', 'password_confirmation'].map((field) => (
-                    <div key={field}>
-                        <label htmlFor={field} className="mb-2 block text-xs font-bold uppercase tracking-[0.16em] text-slate-500">
-                            {field === 'password' ? 'New password' : 'Confirm password'}
-                        </label>
-                        <div className="auth-field">
-                            <LockKeyhole className="h-5 w-5 text-slate-400" />
-                            <input
-                                id={field}
-                                type="password"
-                                required
-                                minLength={8}
-                                className="auth-input"
-                                value={form[field]}
-                                onChange={(event) => setForm((current) => ({ ...current, [field]: event.target.value }))}
-                            />
-                        </div>
-                        {errors[field] && <p className="mt-2 text-xs font-bold text-red-700">{errors[field]}</p>}
-                    </div>
-                ))}
+            <form className="space-y-3.5" onSubmit={submit}>
+                <PasswordStrengthField
+                    id="password"
+                    name="password"
+                    label="New password"
+                    value={form.password}
+                    username={auth?.user?.username}
+                    email={auth?.user?.email}
+                    required
+                    placeholder="Create password"
+                    error={errors.password}
+                    onChange={(value) => setForm((current) => ({ ...current, password: value }))}
+                />
 
-                <button type="submit" disabled={processing} className="auth-submit">
+                <div>
+                    <label htmlFor="password_confirmation" className="auth-label">Confirm password</label>
+                    <div className="auth-field auth-field-compact">
+                        <LockKeyhole className="h-4 w-4 text-slate-400" />
+                        <input
+                            id="password_confirmation"
+                            type="password"
+                            required
+                            className="auth-input"
+                            value={form.password_confirmation}
+                            onChange={(event) => setForm((current) => ({ ...current, password_confirmation: event.target.value }))}
+                        />
+                    </div>
+                    {errors.password_confirmation && <p className="mt-2 text-xs font-bold text-red-700">{errors.password_confirmation}</p>}
+                    <PasswordMatchHint
+                        password={form.password}
+                        confirmation={form.password_confirmation}
+                        touched={Boolean(form.password_confirmation)}
+                    />
+                </div>
+
+                <button type="submit" disabled={processing} className="auth-submit auth-submit-compact">
                     {processing ? (
                         <span className="flex items-center justify-center gap-2">
                             <Loader2 className="h-5 w-5 animate-spin" />

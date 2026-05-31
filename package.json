@@ -5,14 +5,22 @@
     "scripts": {
         "build": "vite build",
         "dev": "vite",
-        "refresh": "powershell -ExecutionPolicy Bypass -File .\\refresh.ps1"
+        "lint": "eslint resources/js --max-warnings=0",
+        "lint:fix": "eslint resources/js --fix",
+        "refresh": "powershell -ExecutionPolicy Bypass -File .\\refresh.ps1",
+        "secret-scan": "node scripts/secret-scan.mjs"
     },
     "devDependencies": {
+        "@eslint/js": "^9.39.1",
         "@laravel/echo-react": "^2.3.3",
         "@vitejs/plugin-react": "^4.7.0",
         "autoprefixer": "^10.5.0",
         "axios": "^1.15.0",
         "concurrently": "^9.0.1",
+        "eslint": "^9.39.1",
+        "eslint-plugin-react": "^7.37.5",
+        "eslint-plugin-react-hooks": "^7.0.1",
+        "globals": "^16.4.0",
         "laravel-echo": "^2.3.4",
         "laravel-vite-plugin": "^2.0.0",
         "postcss": "^8.5.10",

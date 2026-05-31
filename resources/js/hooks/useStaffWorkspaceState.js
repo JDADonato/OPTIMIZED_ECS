@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 const canUseBrowserStorage = () => typeof window !== 'undefined' && typeof window.localStorage !== 'undefined';
+const NAVIGATION_QUERY_CHANGE_EVENT = 'ecs:navigation-query-change';
 
 const readUrlTab = () => {
     if (typeof window === 'undefined') return null;
@@ -45,6 +46,28 @@ const useStaffWorkspaceState = ({ storageKey, defaultTab, allowedTabs = [], tabA
         }
         replaceUrlTab(activeTab);
     }, [activeTab, storageKey]);
+
+    useEffect(() => {
+        if (typeof window === 'undefined') return undefined;
+
+        const handleNavigationQueryChange = (event) => {
+            if (event.detail?.path && event.detail.path !== window.location.pathname) return;
+
+            const params = event.detail?.params || Object.fromEntries(new URLSearchParams(event.detail?.search || window.location.search).entries());
+            if (!params.tab) return;
+
+            const normalized = normalizeTab(params.tab);
+            intentionalNavigationRef.current = normalized !== activeTabRef.current;
+            setActiveTabState(normalized);
+        };
+
+        window.addEventListener(NAVIGATION_QUERY_CHANGE_EVENT, handleNavigationQueryChange);
+        window.addEventListener('popstate', handleNavigationQueryChange);
+        return () => {
+            window.removeEventListener(NAVIGATION_QUERY_CHANGE_EVENT, handleNavigationQueryChange);
+            window.removeEventListener('popstate', handleNavigationQueryChange);
+        };
+    }, [normalizeTab]);
 
     useEffect(() => {
         if (!canUseBrowserStorage()) return undefined;

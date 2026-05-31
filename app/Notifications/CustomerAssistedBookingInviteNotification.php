@@ -15,8 +15,7 @@ class CustomerAssistedBookingInviteNotification extends Notification implements 
     public function __construct(
         private readonly Booking $booking,
         private readonly ?string $temporaryPassword = null,
-    ) {
-    }
+    ) {}
 
     public function via(object $notifiable): array
     {

@@ -10,6 +10,7 @@ class PricingOverride extends Model
      * The primary key type is string (e.g., "dish_chicken_adobo").
      */
     protected $keyType = 'string';
+
     public $incrementing = false;
 
     protected $fillable = [

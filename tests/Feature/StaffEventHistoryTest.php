@@ -41,12 +41,12 @@ class StaffEventHistoryTest extends TestCase
         }
 
         $this->actingAs($marketing)
-            ->getJson('/api/staff/event-history?search=' . $pending->id)
+            ->getJson('/api/staff/event-history?search='.$pending->id)
             ->assertOk()
             ->assertJsonPath('meta.total', 0);
 
         $this->actingAs($accounting)
-            ->getJson('/api/staff/event-history?search=' . $cancelled->id)
+            ->getJson('/api/staff/event-history?search='.$cancelled->id)
             ->assertOk()
             ->assertJsonPath('meta.total', 0);
     }
@@ -119,7 +119,7 @@ class StaffEventHistoryTest extends TestCase
             ->assertJsonPath('data.0.id', $needsFollowUp->id);
 
         $this->actingAs($staff)
-            ->getJson('/api/staff/event-history?search=' . $closed->id . '&feedback_status=Needs%20Follow%20Up')
+            ->getJson('/api/staff/event-history?search='.$closed->id.'&feedback_status=Needs%20Follow%20Up')
             ->assertOk()
             ->assertJsonPath('meta.total', 0);
     }
@@ -128,8 +128,8 @@ class StaffEventHistoryTest extends TestCase
     {
         return User::create([
             'full_name' => "{$role} Tester",
-            'username' => strtolower($role) . '_' . uniqid(),
-            'email' => uniqid(strtolower($role) . '_') . '@example.test',
+            'username' => strtolower($role).'_'.uniqid(),
+            'email' => uniqid(strtolower($role).'_').'@example.test',
             'password' => 'password',
             'phone' => '09170000000',
             'role' => $role,

@@ -69,7 +69,7 @@ class AdminCustomerAccountTest extends TestCase
             'id' => $customer->id,
             'account_status' => 'deactivated',
         ]);
-        $this->assertStringStartsWith('deactivated+' . $customer->id, $customer->fresh()->email);
+        $this->assertStringStartsWith('deactivated+'.$customer->id, $customer->fresh()->email);
 
         $this->actingAs($admin)
             ->getJson('/api/admin/customers?paginated=1')
@@ -288,7 +288,7 @@ class AdminCustomerAccountTest extends TestCase
         $this->post('/register', [
             'username' => 'reuse_user',
             'email' => 'reuse@example.test',
-            'password' => 'password123',
+            'password' => 'StrongPass123!',
             'phone' => '09170000000',
         ])->assertRedirect();
 
@@ -577,8 +577,8 @@ class AdminCustomerAccountTest extends TestCase
     {
         return User::create(array_merge([
             'full_name' => "{$role} Tester",
-            'username' => strtolower($role) . '_' . uniqid(),
-            'email' => uniqid(strtolower($role) . '_') . '@example.test',
+            'username' => strtolower($role).'_'.uniqid(),
+            'email' => uniqid(strtolower($role).'_').'@example.test',
             'password' => 'password',
             'phone' => '09170000000',
             'role' => $role,

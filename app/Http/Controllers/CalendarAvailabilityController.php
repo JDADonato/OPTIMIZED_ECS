@@ -8,9 +8,12 @@ use App\Models\CalendarAvailabilityOverride;
 use App\Services\BusinessRulesService;
 use App\Services\CalendarAvailabilityService;
 use App\Services\OperationalBroadcastService;
+use App\Support\CustomerIdentity;
 use App\Support\ResourceVersion;
 use Carbon\Carbon;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 
@@ -32,10 +35,10 @@ class CalendarAvailabilityController extends Controller
             $data['month'] = now()->format('Y-m');
         }
 
-        $start = !empty($data['start']) && !empty($data['end'])
+        $start = ! empty($data['start']) && ! empty($data['end'])
             ? Carbon::parse($data['start'])->startOfDay()
             : Carbon::createFromFormat('Y-m', $data['month'])->startOfMonth();
-        $end = !empty($data['start']) && !empty($data['end'])
+        $end = ! empty($data['start']) && ! empty($data['end'])
             ? Carbon::parse($data['end'])->endOfDay()
             : $start->copy()->endOfMonth();
 
@@ -47,12 +50,19 @@ class CalendarAvailabilityController extends Controller
             ->when($data['city'] ?? null, fn ($q, $city) => $q->where('venue_city', $city))
             ->when($data['owner'] ?? null, fn ($q, $owner) => $q->where('assigned_to', $owner))
             ->when($data['search'] ?? null, function ($q, $search) {
-                $term = '%' . mb_strtolower(trim((string) $search)) . '%';
+                $term = '%'.mb_strtolower(trim((string) $search)).'%';
                 $q->where(fn ($inner) => $inner
                     ->whereRaw('LOWER(event_name) LIKE ?', [$term])
                     ->orWhereRaw('LOWER(event_type) LIKE ?', [$term])
                     ->orWhereRaw('LOWER(client_full_name) LIKE ?', [$term])
-                    ->orWhereRaw('LOWER(venue_city) LIKE ?', [$term]));
+                    ->orWhereRaw('LOWER(client_email) LIKE ?', [$term])
+                    ->orWhereRaw('LOWER(client_phone) LIKE ?', [$term])
+                    ->orWhereRaw('LOWER(venue_city) LIKE ?', [$term])
+                    ->orWhereHas('user', fn ($userQuery) => $userQuery
+                        ->whereRaw('LOWER(full_name) LIKE ?', [$term])
+                        ->orWhereRaw('LOWER(username) LIKE ?', [$term])
+                        ->orWhereRaw('LOWER(email) LIKE ?', [$term])
+                        ->orWhereRaw('LOWER(phone) LIKE ?', [$term])));
             });
         $overrideQuery = CalendarAvailabilityOverride::query()
             ->whereBetween('date', [$start->toDateString(), $end->toDateString()]);
@@ -69,7 +79,7 @@ class CalendarAvailabilityController extends Controller
         }
 
         $events = (clone $eventQuery)
-            ->with('assignee:id,full_name,username')
+            ->with(['assignee:id,full_name,username', 'user:id,full_name,username,email,phone,account_status'])
             ->withCount([
                 'payments',
                 'payments as paid_payments_count' => fn ($query) => $query->whereIn('status', ['Paid', 'Verified']),
@@ -78,11 +88,14 @@ class CalendarAvailabilityController extends Controller
             ])
             ->select([
                 'id',
+                'user_id',
                 'event_date',
                 'event_time',
                 'event_name',
                 'event_type',
                 'client_full_name',
+                'client_email',
+                'client_phone',
                 'pax',
                 'status',
                 'venue_city',
@@ -122,6 +135,7 @@ class CalendarAvailabilityController extends Controller
                     'event_display_name' => $booking->event_display_name,
                     'type' => $booking->event_type,
                     'client' => $booking->client_full_name,
+                    ...CustomerIdentity::forBooking($booking),
                     'pax' => $booking->pax,
                     'status' => $booking->status === 'Reserved' ? 'Confirmed' : $booking->status,
                     'city' => $booking->venue_city,
@@ -135,7 +149,7 @@ class CalendarAvailabilityController extends Controller
                     'owner' => $booking->assignee?->full_name ?: $booking->assignee?->username,
                     'can_claim' => $canClaim,
                     'can_edit' => $canEdit,
-                    'payment_state' => (int) ($booking->paid_payments_count ?? 0) . '/' . (int) ($booking->payments_count ?? 0) . ' paid',
+                    'payment_state' => (int) ($booking->paid_payments_count ?? 0).'/'.(int) ($booking->payments_count ?? 0).' paid',
                     'preparation_state' => $taskCount ? "{$doneTasks}/{$taskCount} ready" : 'No tasks yet',
                 ];
             });
@@ -170,7 +184,7 @@ class CalendarAvailabilityController extends Controller
 
         $override = CalendarAvailabilityOverride::whereDate('date', $dateString)->first();
         $payload = [
-            'is_locked' => DB::raw(!empty($data['is_locked']) ? 'true' : 'false'),
+            'is_locked' => DB::raw(! empty($data['is_locked']) ? 'true' : 'false'),
             'max_events_override' => $maxEventsOverride,
             'max_pax_override' => $maxPaxOverride,
             'note' => $data['note'] ?? null,
@@ -201,7 +215,7 @@ class CalendarAvailabilityController extends Controller
         ]);
     }
 
-    public function destroy(string $date): \Illuminate\Http\JsonResponse
+    public function destroy(string $date): JsonResponse
     {
         $dateString = Carbon::parse($date)->toDateString();
         $ids = CalendarAvailabilityOverride::whereDate('date', $dateString)->pluck('id');
@@ -213,7 +227,7 @@ class CalendarAvailabilityController extends Controller
         return response()->json(['message' => 'Availability override cleared.']);
     }
 
-    private function serializeOverrides(\Illuminate\Support\Collection $overrides, Carbon $start, Carbon $end): \Illuminate\Support\Collection
+    private function serializeOverrides(Collection $overrides, Carbon $start, Carbon $end): Collection
     {
         if ($overrides->isEmpty()) {
             return collect();

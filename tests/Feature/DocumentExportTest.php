@@ -80,7 +80,7 @@ class DocumentExportTest extends TestCase
             'status' => 'Confirmed',
         ]);
 
-        $response = $this->actingAs($admin)->get('/documents/calendar.pdf?start=' . now()->startOfMonth()->toDateString() . '&end=' . now()->addMonth()->endOfMonth()->toDateString());
+        $response = $this->actingAs($admin)->get('/documents/calendar.pdf?start='.now()->startOfMonth()->toDateString().'&end='.now()->addMonth()->endOfMonth()->toDateString());
 
         $response->assertOk();
         $this->assertPdfResponse($response->getContent(), $response->headers->get('content-type'));
@@ -134,8 +134,8 @@ class DocumentExportTest extends TestCase
     {
         return User::create([
             'full_name' => "{$role} Tester",
-            'username' => strtolower($role) . '_' . uniqid(),
-            'email' => uniqid(strtolower($role) . '_') . '@example.test',
+            'username' => strtolower($role).'_'.uniqid(),
+            'email' => uniqid(strtolower($role).'_').'@example.test',
             'password' => 'password',
             'phone' => '09170000000',
             'role' => $role,

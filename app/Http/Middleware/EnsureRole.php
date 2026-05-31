@@ -15,7 +15,7 @@ class EnsureRole
      */
     public function handle(Request $request, Closure $next, string ...$roles): Response
     {
-        if (!Auth::check()) {
+        if (! Auth::check()) {
             return redirect()->route('login');
         }
 
@@ -25,7 +25,7 @@ class EnsureRole
             return redirect()->route('login')->with('error', 'This account is deactivated.');
         }
 
-        if (!in_array(Auth::user()->role, $roles)) {
+        if (! in_array(Auth::user()->role, $roles)) {
             abort(403, 'Unauthorized — insufficient role.');
         }
 

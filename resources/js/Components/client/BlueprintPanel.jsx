@@ -67,7 +67,6 @@ const BlueprintPanel = ({ bookingData, collapsed = false, onToggle }) => {
         package_base_price,
         package_flat_price,
         package_pricing_type,
-        package_guest_count,
         package_allowances = {},
         package_category_label,
         package_security_label,

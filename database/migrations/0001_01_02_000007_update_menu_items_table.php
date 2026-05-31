@@ -10,12 +10,12 @@ return new class extends Migration
     {
         Schema::table('menu_items', function (Blueprint $table) {
             // Add category if it doesn't exist
-            if (!Schema::hasColumn('menu_items', 'category')) {
+            if (! Schema::hasColumn('menu_items', 'category')) {
                 $table->string('category')->after('name');
             }
 
             // Add is_active if it doesn't exist
-            if (!Schema::hasColumn('menu_items', 'is_active')) {
+            if (! Schema::hasColumn('menu_items', 'is_active')) {
                 $table->boolean('is_active')->default(true)->after('is_best_seller');
             }
         });

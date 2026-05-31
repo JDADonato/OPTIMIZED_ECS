@@ -3,6 +3,7 @@
 namespace App\Http\Middleware;
 
 use App\Models\AuditLog;
+use App\Support\AuditContext;
 use Closure;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
@@ -17,16 +18,16 @@ class RecordStaffAuditLog
         $response = $next($request);
         $user = $request->user();
 
-        if (!$user || !in_array($user->role, ['Admin', 'Marketing', 'Accounting'], true)) {
+        if (! $user || ! in_array($user->role, ['Admin', 'Marketing', 'Accounting'], true)) {
             return $response;
         }
 
-        if (!$this->shouldRecord($request)) {
+        if (! $this->shouldRecord($request)) {
             return $response;
         }
 
         try {
-            if (!Schema::hasTable('audit_logs')) {
+            if (! Schema::hasTable('audit_logs')) {
                 return $response;
             }
 
@@ -36,20 +37,11 @@ class RecordStaffAuditLog
                 'role' => $user->role,
                 'action' => $this->describeAction($request),
                 'method' => $request->method(),
-                'path' => '/' . ltrim($request->path(), '/'),
+                'path' => '/'.ltrim($request->path(), '/'),
                 'status_code' => $response->getStatusCode(),
                 'ip_address' => $request->ip(),
                 'user_agent' => Str::limit((string) $request->userAgent(), 500, ''),
-                'metadata' => [
-                    'route' => optional($request->route())->getName(),
-                    'target_id' => $request->route()?->parameter('id')
-                        ?? $request->route()?->parameter('bookingId')
-                        ?? $request->route()?->parameter('paymentId')
-                        ?? optional($request->route()?->parameter('booking'))->id
-                        ?? optional($request->route()?->parameter('payment'))->id
-                        ?? optional($request->route()?->parameter('conversation'))->id
-                        ?? optional($request->route()?->parameter('message'))->id,
-                ],
+                'metadata' => AuditContext::forRequest($request, $response),
             ]);
         } catch (\Throwable $e) {
             Log::warning('Unable to record staff audit log.', [
@@ -68,7 +60,7 @@ class RecordStaffAuditLog
             return false;
         }
 
-        if (!$request->isMethod('GET') && $request->is('api/admin/employees*', 'api/admin/customers*')) {
+        if (! $request->isMethod('GET') && $request->is('api/admin/employees*', 'api/admin/customers*')) {
             return false;
         }
 
@@ -77,7 +69,7 @@ class RecordStaffAuditLog
         }
 
         if ($request->is('api/admin/*', 'api/marketing/*', 'api/accounting/*', 'api/chat/*', 'api/operations/*', 'api/calendar-availability*', 'logout', 'profile')) {
-            return !$request->isMethod('GET');
+            return ! $request->isMethod('GET');
         }
 
         if ($request->is('documents/*', 'preview/customer-booking/*')) {
@@ -90,7 +82,7 @@ class RecordStaffAuditLog
     private function describeAction(Request $request): string
     {
         $method = $request->method();
-        $path = '/' . ltrim($request->path(), '/');
+        $path = '/'.ltrim($request->path(), '/');
 
         $phrases = [
             'POST /api/admin/employees/' => $this->employeeActionLabel($path),
@@ -113,8 +105,9 @@ class RecordStaffAuditLog
             'DELETE /api/admin/event-types' => 'Archived an event type',
             'PUT /api/accounting/payments' => 'Updated payment record',
             'POST /api/accounting/remind' => 'Sent payment reminder',
-            'POST /api/accounting/refund' => 'Processed refund',
+            'POST /api/accounting/refund' => $this->refundActionLabel($path),
             'POST /api/accounting/refunds' => 'Updated refund case',
+            'POST /api/admin/refund' => $this->refundActionLabel($path),
             'PUT /api/marketing/bookings' => 'Updated marketing booking status',
             'POST /api/marketing/bookings' => $this->marketingBookingActionLabel($path),
             'PATCH /api/marketing/bookings' => 'Updated booking review task',
@@ -184,5 +177,12 @@ class RecordStaffAuditLog
             str_contains($path, '/messages') => 'Sent a chat message',
             default => 'Updated a conversation',
         };
+    }
+
+    private function refundActionLabel(string $path): string
+    {
+        return preg_match('#/api/(accounting|admin)/refund/\d+/[^/]+#', $path)
+            ? 'Updated refund case'
+            : 'Processed refund';
     }
 }

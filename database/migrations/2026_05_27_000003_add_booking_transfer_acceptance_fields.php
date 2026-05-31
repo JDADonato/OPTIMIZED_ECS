@@ -9,13 +9,13 @@ return new class extends Migration
     public function up(): void
     {
         Schema::table('bookings', function (Blueprint $table) {
-            if (!Schema::hasColumn('bookings', 'transfer_requested_to')) {
+            if (! Schema::hasColumn('bookings', 'transfer_requested_to')) {
                 $table->foreignId('transfer_requested_to')->nullable()->after('assigned_to')->constrained('users')->nullOnDelete();
             }
-            if (!Schema::hasColumn('bookings', 'transfer_requested_by')) {
+            if (! Schema::hasColumn('bookings', 'transfer_requested_by')) {
                 $table->foreignId('transfer_requested_by')->nullable()->after('transfer_requested_to')->constrained('users')->nullOnDelete();
             }
-            if (!Schema::hasColumn('bookings', 'transfer_requested_at')) {
+            if (! Schema::hasColumn('bookings', 'transfer_requested_at')) {
                 $table->timestamp('transfer_requested_at')->nullable()->after('transfer_requested_by');
             }
         });

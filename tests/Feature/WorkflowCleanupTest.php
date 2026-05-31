@@ -122,7 +122,7 @@ class WorkflowCleanupTest extends TestCase
         $this->assertNotEmpty($version);
 
         $this->actingAs($admin)
-            ->getJson('/api/admin/bookings?paginated=1&since_version=' . $version)
+            ->getJson('/api/admin/bookings?paginated=1&since_version='.$version)
             ->assertOk()
             ->assertJsonPath('meta.changed', false)
             ->assertJsonPath('data', null);
@@ -152,14 +152,14 @@ class WorkflowCleanupTest extends TestCase
         $version = $initial->json('meta.resource_version');
 
         $this->actingAs($client)
-            ->getJson('/api/dashboard/client?since_version=' . $version)
+            ->getJson('/api/dashboard/client?since_version='.$version)
             ->assertOk()
             ->assertJsonPath('meta.changed', false);
 
         $payment->forceFill(['status' => 'Verified', 'updated_at' => now()->addSecond()])->save();
 
         $this->actingAs($client)
-            ->getJson('/api/dashboard/client?since_version=' . $version)
+            ->getJson('/api/dashboard/client?since_version='.$version)
             ->assertOk()
             ->assertJsonPath('meta.changed', true)
             ->assertJsonPath('payments.0.status', 'Verified');
@@ -269,8 +269,8 @@ class WorkflowCleanupTest extends TestCase
     {
         return User::create(array_merge([
             'full_name' => "{$role} Tester",
-            'username' => strtolower($role) . '_' . uniqid(),
-            'email' => uniqid(strtolower($role) . '_') . '@example.test',
+            'username' => strtolower($role).'_'.uniqid(),
+            'email' => uniqid(strtolower($role).'_').'@example.test',
             'password' => 'password',
             'phone' => '09170000000',
             'role' => $role,

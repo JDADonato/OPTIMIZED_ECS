@@ -2,8 +2,11 @@
 
 namespace App\Http\Controllers;
 
-use App\Models\Booking;
+use App\Http\Resources\BookingSummaryResource;
+use App\Http\Resources\PaymentResource;
+use App\Mail\BookingContinuationReminder;
 use App\Models\AuditLog;
+use App\Models\Booking;
 use App\Models\BookingHistoryNote;
 use App\Models\BusinessRule;
 use App\Models\CalendarAvailabilityOverride;
@@ -11,21 +14,23 @@ use App\Models\Conversation;
 use App\Models\MenuItem;
 use App\Models\Message;
 use App\Models\Payment;
-use App\Models\User;
-use App\Http\Resources\BookingSummaryResource;
-use App\Mail\BookingContinuationReminder;
+use App\Notifications\ClientMenuUpdatedNotification;
 use App\Notifications\NewBookingNotification;
-use App\Services\BookingValidationService;
+use App\Notifications\StaffMenuUpdatedNotification;
 use App\Services\BookingManagementService;
+use App\Services\BookingValidationService;
 use App\Services\BusinessRulesService;
 use App\Services\CalendarAvailabilityService;
 use App\Services\ConversionEventService;
 use App\Services\NotificationRecipientService;
 use App\Services\OperationalBroadcastService;
+use App\Services\PaymentCalculationService;
 use App\Services\PaymentEventService;
 use App\Services\UploadRegistryService;
+use App\Support\AuditContext;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -33,6 +38,7 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
 
 /**
  * Ported from: server/controllers/bookingController.js
@@ -52,16 +58,16 @@ class BookingController extends Controller
     public function store(Request $request)
     {
         $request->validate([
-            'user_id'     => 'nullable|exists:users,id',
-            'event_date'  => 'required|date',
-            'event_time'  => 'required|string',
-            'pax'         => 'required|integer|min:1',
-            'budget'      => 'nullable|numeric',
-            'package_id'  => 'nullable|string',
-            'event_type'  => 'nullable|string',
-            'event_name'  => 'required|string|max:255',
-            'menu_items'  => 'nullable|array',
-            'total_cost'  => 'nullable|numeric',
+            'user_id' => 'nullable|exists:users,id',
+            'event_date' => 'required|date',
+            'event_time' => 'required|string',
+            'pax' => 'required|integer|min:1',
+            'budget' => 'nullable|numeric',
+            'package_id' => 'nullable|string',
+            'event_type' => 'nullable|string',
+            'event_name' => 'required|string|max:255',
+            'menu_items' => 'nullable|array',
+            'total_cost' => 'nullable|numeric',
         ]);
 
         // ─── Apply Business Rule Validation ───
@@ -71,10 +77,11 @@ class BookingController extends Controller
                 'event_date' => $request->event_date,
                 'pax' => $request->pax,
             ]);
-        } catch (\Illuminate\Validation\ValidationException $e) {
+        } catch (ValidationException $e) {
             return response()->json(['errors' => $e->errors()], 422);
         } catch (\Exception $e) {
             Log::error("Booking validation error: {$e->getMessage()}");
+
             return response()->json(['error' => $e->getMessage()], 500);
         }
 
@@ -88,18 +95,20 @@ class BookingController extends Controller
                     (int) $request->pax
                 );
 
-                if (!$isAccurate) {
-                    Log::warning("Potential price manipulation detected for user " . Auth::id());
+                if (! $isAccurate) {
+                    Log::warning('Potential price manipulation detected for user '.Auth::id());
+
                     return response()->json([
                         'error' => 'Price calculation mismatch. Please refresh and try again.',
                         'recalculated_total' => BookingValidationService::calculateTotalCost(
                             $request->menu_items,
                             (int) $request->pax
-                        )
+                        ),
                     ], 422);
                 }
             } catch (\Exception $e) {
                 Log::error("Price verification failed: {$e->getMessage()}");
+
                 return response()->json(['error' => 'Unable to verify pricing'], 500);
             }
         }
@@ -112,30 +121,30 @@ class BookingController extends Controller
 
         // 4. Insert Booking
         $booking = Booking::create([
-            'user_id'              => Auth::id(),
-            'event_date'           => $eventDate,
-            'event_time'           => $request->event_time,
-            'pax'                  => $pax,
-            'budget'               => $request->budget,
-            'package_id'           => $request->package_id,
-            'event_type'           => $request->event_type,
-            'event_name'           => $request->event_name,
-            'client_full_name'     => $request->client_full_name,
-            'venue_address_line'   => $request->venue_address_line,
-            'venue_street'         => $request->venue_street,
-            'venue_city'           => $request->venue_city,
-            'venue_province'       => $request->venue_province,
-            'venue_zip_code'       => $request->venue_zip_code,
-            'client_email'         => $request->client_email,
-            'client_phone'         => $request->client_phone,
-            'total_cost'           => $request->total_cost ?? $request->budget,
-            'outsourced_services'  => $outsourcedServices,
-            'selected_menu'        => $selectedMenu,
+            'user_id' => Auth::id(),
+            'event_date' => $eventDate,
+            'event_time' => $request->event_time,
+            'pax' => $pax,
+            'budget' => $request->budget,
+            'package_id' => $request->package_id,
+            'event_type' => $request->event_type,
+            'event_name' => $request->event_name,
+            'client_full_name' => $request->client_full_name,
+            'venue_address_line' => $request->venue_address_line,
+            'venue_street' => $request->venue_street,
+            'venue_city' => $request->venue_city,
+            'venue_province' => $request->venue_province,
+            'venue_zip_code' => $request->venue_zip_code,
+            'client_email' => $request->client_email,
+            'client_phone' => $request->client_phone,
+            'total_cost' => $request->total_cost ?? $request->budget,
+            'outsourced_services' => $outsourcedServices,
+            'selected_menu' => $selectedMenu,
             'venue_building_details' => $request->venue_building_details,
-            'transport_fee'        => $request->transport_fee ?? 0,
-            'labor_surcharge'      => $request->labor_surcharge ?? 0,
-            'review_status'        => 'Submitted',
-            'expires_at'           => now()->addHours(24), // Phase 1: Slot Expiration
+            'transport_fee' => $request->transport_fee ?? 0,
+            'labor_surcharge' => $request->labor_surcharge ?? 0,
+            'review_status' => 'Submitted',
+            'expires_at' => now()->addHours(24), // Phase 1: Slot Expiration
         ]);
 
         ConversionEventService::record('booking_submitted', [
@@ -146,7 +155,7 @@ class BookingController extends Controller
                 'event_type' => $booking->event_type,
                 'pax' => $booking->pax,
                 'total_cost' => (float) ($booking->total_cost ?? 0),
-                'has_menu' => !empty($selectedMenu),
+                'has_menu' => ! empty($selectedMenu),
             ],
         ]);
 
@@ -170,17 +179,17 @@ class BookingController extends Controller
 
         if ($cost > 0) {
             try {
-                $paymentService = new \App\Services\PaymentCalculationService();
+                $paymentService = new PaymentCalculationService;
                 $tranches = $paymentService->calculateTranches($booking);
 
                 foreach ($tranches as $tranche) {
                     Payment::create([
-                        'booking_id'     => $booking->id,
-                        'amount'         => $tranche['amount'],
+                        'booking_id' => $booking->id,
+                        'amount' => $tranche['amount'],
                         'payment_method' => 'Pending',
-                        'status'         => 'Pending',
-                        'payment_type'   => $tranche['name'],
-                        'due_date'       => Carbon::parse($tranche['due_date'])->toDateString(),
+                        'status' => 'Pending',
+                        'payment_type' => $tranche['name'],
+                        'due_date' => Carbon::parse($tranche['due_date'])->toDateString(),
                     ]);
                 }
 
@@ -203,7 +212,7 @@ class BookingController extends Controller
             ->bookingChanged($booking->fresh(), 'created', 'New booking submitted.');
 
         return response()->json([
-            'message'   => 'Booking created successfully!',
+            'message' => 'Booking created successfully!',
             'bookingId' => $booking->id,
         ], 201);
     }
@@ -218,11 +227,11 @@ class BookingController extends Controller
             ->where('user_id', Auth::id())
             ->first();
 
-        if (!$booking) {
+        if (! $booking) {
             return response()->json(['message' => 'Booking not found.'], 404);
         }
 
-        if (!$booking->clarification_request) {
+        if (! $booking->clarification_request) {
             return response()->json(['message' => 'No details are being requested for this booking right now.'], 422);
         }
 
@@ -276,7 +285,7 @@ class BookingController extends Controller
     public function sendAbandonedReminder(Request $request)
     {
         $user = Auth::user();
-        if (!$user) {
+        if (! $user) {
             return response()->json(['message' => 'Unauthenticated'], 401);
         }
 
@@ -292,7 +301,7 @@ class BookingController extends Controller
         ]);
 
         $email = $data['client_email'] ?? $user->email;
-        if (!$email) {
+        if (! $email) {
             return response()->json(['message' => 'No customer email available.'], 202);
         }
 
@@ -345,8 +354,8 @@ class BookingController extends Controller
     public function getDisabledDates(CalendarAvailabilityService $availabilityService)
     {
         // Lead-time window: today through today + 6 days are always blocked
-        $today     = Carbon::today();
-        $rangeEnd  = Carbon::today()->addMonths(12);
+        $today = Carbon::today();
+        $rangeEnd = Carbon::today()->addMonths(12);
 
         $disabledDates = [];
 
@@ -424,7 +433,7 @@ class BookingController extends Controller
 
         $booking = Booking::where('id', $id)->where('user_id', $userId)->first();
 
-        if (!$booking) {
+        if (! $booking) {
             return response()->json(['error' => 'Booking not found.'], 404);
         }
 
@@ -441,14 +450,14 @@ class BookingController extends Controller
             ->attachBookingThemeUploads($booking, $themeUploads, $request->user());
 
         $booking->update([
-            'reservation_time'      => $request->reservation_time,
-            'serving_time'          => $request->serving_time,
-            'event_timeline'        => $request->event_timeline,
-            'color_motif'           => $request->color_motif,
-            'theme_uploads'         => $themeUploads,
-            'special_instructions'  => $request->special_instructions,
+            'reservation_time' => $request->reservation_time,
+            'serving_time' => $request->serving_time,
+            'event_timeline' => $request->event_timeline,
+            'color_motif' => $request->color_motif,
+            'theme_uploads' => $themeUploads,
+            'special_instructions' => $request->special_instructions,
             'venue_building_details' => $request->venue_building_details,
-            'selected_menu'         => $request->has('selected_menu')
+            'selected_menu' => $request->has('selected_menu')
                 ? $this->normalizeJsonPayload($request->selected_menu)
                 : $booking->selected_menu,
         ]);
@@ -486,7 +495,7 @@ class BookingController extends Controller
 
         $booking = Booking::where('id', $id)->where('user_id', $userId)->first();
 
-        if (!$booking) {
+        if (! $booking) {
             return response()->json(['error' => 'Booking not found.'], 404);
         }
 
@@ -494,8 +503,8 @@ class BookingController extends Controller
             return response()->json(['error' => 'This booking can no longer be edited.'], 400);
         }
 
-        $bookingService = new \App\Services\BookingManagementService();
-        if (!$bookingService->canEditMenu($booking)) {
+        $bookingService = new BookingManagementService;
+        if (! $bookingService->canEditMenu($booking)) {
             return response()->json(['error' => 'Menu changes are locked within 30 days of the event.'], 400);
         }
 
@@ -510,6 +519,7 @@ class BookingController extends Controller
                 if (is_array($item)) {
                     return $item['id'] ?? null;
                 }
+
                 return $item;
             })
             ->filter()
@@ -528,6 +538,7 @@ class BookingController extends Controller
         $oldTotal = (float) ($booking->total_cost ?? $booking->budget ?? 0);
         $newTotal = $menuItemIds->reduce(function ($sum, $itemId) use ($menuItems, $booking) {
             $item = $menuItems[$itemId];
+
             return $sum + (($item->cost_per_head + ($item->price_adj ?? 0)) * (int) $booking->pax);
         }, 0);
 
@@ -549,6 +560,7 @@ class BookingController extends Controller
             foreach ($pendingPayments as $index => $payment) {
                 if ($remaining <= 0) {
                     $payment->update(['amount' => 0]);
+
                     continue;
                 }
 
@@ -573,10 +585,10 @@ class BookingController extends Controller
 
         $booking->refresh()->load('user');
         app(NotificationRecipientService::class)
-            ->sendToUser($booking->user, new \App\Notifications\ClientMenuUpdatedNotification($booking, $newTotal), 'client_menu_updated');
+            ->sendToUser($booking->user, new ClientMenuUpdatedNotification($booking, $newTotal), 'client_menu_updated');
 
         app(NotificationRecipientService::class)
-            ->sendToRoles(['Marketing', 'Accounting', 'Admin'], new \App\Notifications\StaffMenuUpdatedNotification($booking, $newTotal, $oldTotal), 'staff_menu_updated');
+            ->sendToRoles(['Marketing', 'Accounting', 'Admin'], new StaffMenuUpdatedNotification($booking, $newTotal, $oldTotal), 'staff_menu_updated');
 
         $this->recordCustomerMenuUpdate($request, $booking, $oldTotal, (float) $newTotal);
         app(OperationalBroadcastService::class)
@@ -612,11 +624,12 @@ class BookingController extends Controller
         }
 
         $newTotal = $menuItemIds->reduce(function ($sum, $itemId) use ($menuItems, $booking) {
-            if (!isset($menuItems[$itemId])) {
+            if (! isset($menuItems[$itemId])) {
                 return $sum;
             }
 
             $item = $menuItems[$itemId];
+
             return $sum + (((float) $item->cost_per_head + (float) ($item->price_adj ?? 0)) * (int) $booking->pax);
         }, 0.0);
 
@@ -683,7 +696,7 @@ class BookingController extends Controller
         ];
     }
 
-    private function selectedMenuItemIds(array $selectedMenu): \Illuminate\Support\Collection
+    private function selectedMenuItemIds(array $selectedMenu): Collection
     {
         return collect($selectedMenu)
             ->flatMap(fn ($items) => is_array($items) ? $items : [])
@@ -701,7 +714,7 @@ class BookingController extends Controller
 
     private function recordCustomerMenuUpdate(Request $request, Booking $booking, float $oldTotal, float $newTotal): void
     {
-        $note = "Menu updated by customer. Event total changed from PHP " . number_format($oldTotal, 2) . " to PHP " . number_format($newTotal, 2) . ".";
+        $note = 'Menu updated by customer. Event total changed from PHP '.number_format($oldTotal, 2).' to PHP '.number_format($newTotal, 2).'.';
 
         try {
             if (Schema::hasTable('booking_history_notes')) {
@@ -737,16 +750,16 @@ class BookingController extends Controller
                     'role' => $request->user()?->role,
                     'action' => 'Menu updated by customer',
                     'method' => $request->method(),
-                    'path' => '/' . ltrim($request->path(), '/'),
+                    'path' => '/'.ltrim($request->path(), '/'),
                     'status_code' => 200,
                     'ip_address' => $request->ip(),
                     'user_agent' => substr((string) $request->userAgent(), 0, 500),
-                    'metadata' => [
+                    'metadata' => AuditContext::forRequest($request, null, [
                         'target_type' => 'booking',
                         'target_id' => $booking->id,
-                        'old_total' => $oldTotal,
-                        'new_total' => $newTotal,
-                    ],
+                        'booking_id' => $booking->id,
+                        'changed_fields' => ['selected_menu', 'total_cost'],
+                    ]),
                 ]);
             }
         } catch (\Throwable $e) {
@@ -768,19 +781,19 @@ class BookingController extends Controller
             ->where('user_id', $userId)
             ->first();
 
-        if (!$booking) {
+        if (! $booking) {
             return response()->json(['error' => 'Booking not found.'], 404);
         }
 
         $status = strtolower((string) $booking->status);
         $eventDate = $booking->event_date ? Carbon::parse($booking->event_date)->startOfDay() : null;
         $isInactive = in_array($status, ['cancelled', 'canceled', 'completed', 'expired'], true)
-            || ($eventDate && $eventDate->isPast() && !in_array($status, ['pending', 'confirmed'], true));
-        $hasOpenPayments = $booking->payments->contains(fn ($payment) => !in_array($payment->status, ['Paid', 'Verified', 'Refunded'], true));
-        $hasOpenRefunds = $booking->refundCases->contains(fn ($case) => !in_array($case->status, ['Refunded', 'Completed', 'Closed', 'Manual Refunded', 'Forfeited', 'No Refund Due', 'Rejected', 'Cancelled'], true));
-        $hasOpenPreparation = $booking->preparationTasks->contains(fn ($task) => !in_array($task->status, ['Done', 'Completed', 'done', 'completed'], true));
+            || ($eventDate && $eventDate->isPast() && ! in_array($status, ['pending', 'confirmed'], true));
+        $hasOpenPayments = $booking->payments->contains(fn ($payment) => ! in_array($payment->status, ['Paid', 'Verified', 'Refunded'], true));
+        $hasOpenRefunds = $booking->refundCases->contains(fn ($case) => ! in_array($case->status, ['Refunded', 'Completed', 'Closed', 'Manual Refunded', 'Forfeited', 'No Refund Due', 'Rejected', 'Cancelled'], true));
+        $hasOpenPreparation = $booking->preparationTasks->contains(fn ($task) => ! in_array($task->status, ['Done', 'Completed', 'done', 'completed'], true));
 
-        if (!$isInactive || $hasOpenPayments || $hasOpenRefunds || $hasOpenPreparation) {
+        if (! $isInactive || $hasOpenPayments || $hasOpenRefunds || $hasOpenPreparation) {
             return response()->json([
                 'error' => 'Only inactive bookings with no open payment, refund, or preparation work can be hidden from history.',
             ], 422);
@@ -812,7 +825,7 @@ class BookingController extends Controller
 
         $booking = Booking::where('id', $id)->where('user_id', $userId)->first();
 
-        if (!$booking) {
+        if (! $booking) {
             return response()->json(['error' => 'Booking not found.'], 404);
         }
 
@@ -902,7 +915,7 @@ class BookingController extends Controller
 
         $booking = Booking::where('id', $id)->where('user_id', $userId)->first();
 
-        if (!$booking) {
+        if (! $booking) {
             return response()->json(['error' => 'Booking not found.'], 404);
         }
 
@@ -935,7 +948,7 @@ class BookingController extends Controller
         }
 
         $pricingChange = null;
-        if (!empty($updates)) {
+        if (! empty($updates)) {
             try {
                 if (array_key_exists('event_date', $updates) || array_key_exists('pax', $updates)) {
                     BookingValidationService::validateBookingConstraints([
@@ -943,10 +956,11 @@ class BookingController extends Controller
                         'pax' => $updates['pax'] ?? $booking->pax,
                     ], $booking);
                 }
-            } catch (\Illuminate\Validation\ValidationException $e) {
+            } catch (ValidationException $e) {
                 return response()->json(['errors' => $e->errors()], 422);
             } catch (\Exception $e) {
                 Log::error("Booking update validation error: {$e->getMessage()}");
+
                 return response()->json(['error' => $e->getMessage()], 500);
             }
 
@@ -970,7 +984,7 @@ class BookingController extends Controller
             'message' => 'Booking updated successfully.',
             'pricing_change' => $pricingChange ?? null,
             'booking' => new BookingSummaryResource($booking),
-            'payments' => \App\Http\Resources\PaymentResource::collection($booking->payments),
+            'payments' => PaymentResource::collection($booking->payments),
         ]);
     }
 
@@ -983,8 +997,8 @@ class BookingController extends Controller
         $userId = Auth::id();
 
         $request->validate([
-            'booking_id'     => 'required|integer',
-            'payment_id'     => 'nullable|integer',
+            'booking_id' => 'required|integer',
+            'payment_id' => 'nullable|integer',
             'payment_method' => 'nullable|string',
         ]);
 
@@ -992,7 +1006,7 @@ class BookingController extends Controller
             ->where('user_id', $userId)
             ->first();
 
-        if (!$booking) {
+        if (! $booking) {
             return response()->json(['error' => 'Booking not found.'], 404);
         }
 
@@ -1040,6 +1054,7 @@ class BookingController extends Controller
     {
         if (is_string($value)) {
             $decoded = json_decode($value, true);
+
             return json_last_error() === JSON_ERROR_NONE ? $decoded : $value;
         }
 

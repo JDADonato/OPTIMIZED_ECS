@@ -4,6 +4,8 @@ import { useAuth } from '../context/AuthContext';
 import ClientNavbar from '../Components/common/ClientNavbar';
 import Footer from '../Components/common/Footer';
 import SmartImage from '../Components/common/SmartImage';
+import StaffPreviewBanner from '../Components/common/StaffPreviewBanner';
+import { isStaffUser } from '../utils/dashboardLinks';
 
 /* ── SVG Icons ── */
 const settledStatuses = ['Paid', 'Verified'];
@@ -112,7 +114,7 @@ const Counter = ({ end, suffix = '' }) => {
     return <span ref={ref}>{val}{suffix}</span>;
 };
 
-const EventJourneyTracker = ({ booking, payments }) => {
+const _EventJourneyTracker = ({ booking, payments }) => {
     if (!booking) return null;
     const steps = buildFloatingJourneySteps(booking, payments);
     const completedCount = steps.filter(s => s.done).length;
@@ -697,9 +699,10 @@ const LandingPage = () => {
             </Head>
 
             <ClientNavbar user={user} logout={logout} />
+            <StaffPreviewBanner user={user} label="customer-facing home page" />
 
             {/* HERO */}
-            <section className="relative flex items-center overflow-hidden bg-[#15110f]" style={{minHeight:'100vh',paddingTop: 68}}>
+            <section className="relative flex items-center overflow-hidden bg-[#15110f]" style={{minHeight:'100vh',paddingTop: isStaffUser(user) ? 104 : 68}}>
                 <img src="https://images.unsplash.com/photo-1511795409834-ef04bbd61622?auto=format&fit=crop&q=85&w=1800" alt="Elegant catered reception service" className="absolute inset-0 w-full h-full object-cover opacity-55"/>
                 <div className="absolute inset-0 bg-gradient-to-r from-[#15110f] via-[#15110f]/88 to-[#720101]/42"/>
                 <div className="relative z-10 w-full max-w-7xl mx-auto grid gap-12 px-5 py-20 sm:px-8 lg:grid-cols-[1.05fr_0.72fr] lg:items-end">

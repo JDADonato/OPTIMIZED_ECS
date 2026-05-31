@@ -132,13 +132,15 @@ This file consolidates the useful completed items from the old documentation set
 
 ## Documentation And Planning Artifacts Completed
 
-- `optimizationplan.md` was created for loading/performance work.
-- `productionready.md` was created for production-readiness analysis.
-- `todoplan.md` was created for planned feature phases.
-- `suggestions.md` was created for improvement suggestions.
-- `checklist.md` was created from the larger planning docs.
-- `BPMN.md` was created with business process details for diagramming.
-- `may20handoff.md` was created for team handoff.
+- Old handoff, planning, and rating notes were consolidated into this file, `docs/todo.md`, and the README documentation map.
+- `FRD.md` remains the functional requirements baseline.
+- `latestratedFRD.md` remains the latest requirement completion rating.
+- `testcase.md` remains the end-to-end and role-based test case reference.
+- `instructions.md` remains the manual workflow walkthrough.
+- `QA.md` remains the consolidated QA report.
+- `docs/rulesforstaffui.md` and `docs/overhaulstaffui.md` remain the staff/Admin UI references.
+- `docs/document-inventory.md` remains the generated document route and ownership inventory.
+- `tablerules.md` was added as the shared table layout and alignment rule set.
 
 ## Verification Already Run
 
@@ -149,4 +151,3 @@ Recent successful checks include:
 - `.\php\php.exe artisan migrate --force`
 - `.\php\php.exe artisan migrate:status`
 - PHP syntax checks on the main edited controllers, services, resources, and migrations
-

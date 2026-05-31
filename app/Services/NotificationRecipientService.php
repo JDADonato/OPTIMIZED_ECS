@@ -50,7 +50,7 @@ class NotificationRecipientService
 
     public function sendToUser(?User $user, Notification $notification, string $context = 'notification'): bool
     {
-        if (!$user || !$user->isReachableForNotifications()) {
+        if (! $user || ! $user->isReachableForNotifications()) {
             return false;
         }
 

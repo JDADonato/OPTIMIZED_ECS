@@ -22,7 +22,7 @@ class AnalyticsDemoSeeder extends Seeder
 
     public function run(): void
     {
-        if (!app()->environment('local')) {
+        if (! app()->environment('local')) {
             $message = 'Analytics demo seeding is disabled outside APP_ENV=local. Use php artisan db:seed --class=AnalyticsDemoSeeder only in a local demo database.';
 
             if (app()->environment('production')) {
@@ -30,6 +30,7 @@ class AnalyticsDemoSeeder extends Seeder
             }
 
             $this->command?->warn($message);
+
             return;
         }
 
@@ -37,6 +38,7 @@ class AnalyticsDemoSeeder extends Seeder
 
         if ($this->generatedAnalyticsBookingsExist()) {
             $this->command?->info('Analytics demo data already exists; keeping existing demo accounts and bookings.');
+
             return;
         }
 
@@ -56,12 +58,12 @@ class AnalyticsDemoSeeder extends Seeder
 
     private function generatedAnalyticsBookingsExist(): bool
     {
-        return Booking::where('client_email', 'like', '%@' . self::DEMO_DOMAIN)->exists();
+        return Booking::where('client_email', 'like', '%@'.self::DEMO_DOMAIN)->exists();
     }
 
     private function cleanGeneratedAnalyticsData(): void
     {
-        $bookingIds = Booking::where('client_email', 'like', '%@' . self::DEMO_DOMAIN)->pluck('id');
+        $bookingIds = Booking::where('client_email', 'like', '%@'.self::DEMO_DOMAIN)->pluck('id');
 
         if ($bookingIds->isNotEmpty()) {
             $this->deleteGeneratedBookingChildren($bookingIds->all());
@@ -115,7 +117,7 @@ class AnalyticsDemoSeeder extends Seeder
 
         if (Schema::hasTable('messages')) {
             DB::table('messages')
-                ->when(!empty($conversationIds), fn ($query) => $query->whereIn('conversation_id', $conversationIds))
+                ->when(! empty($conversationIds), fn ($query) => $query->whereIn('conversation_id', $conversationIds))
                 ->orWhereIn('sender_id', $userIds)
                 ->orWhereIn('receiver_id', $userIds)
                 ->delete();
@@ -123,12 +125,12 @@ class AnalyticsDemoSeeder extends Seeder
 
         if (Schema::hasTable('conversation_participants')) {
             DB::table('conversation_participants')
-                ->when(!empty($conversationIds), fn ($query) => $query->whereIn('conversation_id', $conversationIds))
+                ->when(! empty($conversationIds), fn ($query) => $query->whereIn('conversation_id', $conversationIds))
                 ->orWhereIn('user_id', $userIds)
                 ->delete();
         }
 
-        if (!empty($conversationIds)) {
+        if (! empty($conversationIds)) {
             DB::table('conversations')->whereIn('id', $conversationIds)->delete();
         }
 
@@ -171,7 +173,7 @@ class AnalyticsDemoSeeder extends Seeder
                 $name = $variant > 1 ? "{$baseName} {$variant}" : $baseName;
 
                 DB::table('menu_items')->insert([
-                    'dish_id' => 'demo_' . $category . '_' . str_pad((string) ($i + 1), 3, '0', STR_PAD_LEFT),
+                    'dish_id' => 'demo_'.$category.'_'.str_pad((string) ($i + 1), 3, '0', STR_PAD_LEFT),
                     'name' => $name,
                     'category' => $category,
                     'cost_per_head' => $this->menuPrice($category, $i),
@@ -201,11 +203,11 @@ class AnalyticsDemoSeeder extends Seeder
                 'name' => $name,
                 'user' => User::create([
                     'full_name' => $name,
-                    'username' => 'ecs_demo_client_' . str_pad((string) $i, 3, '0', STR_PAD_LEFT),
+                    'username' => 'ecs_demo_client_'.str_pad((string) $i, 3, '0', STR_PAD_LEFT),
                     'password' => 'password123',
                     'role' => 'Client',
-                    'email' => 'client' . str_pad((string) $i, 3, '0', STR_PAD_LEFT) . '@' . self::DEMO_DOMAIN,
-                    'phone' => '09' . str_pad((string) (170000000 + $i * 713), 9, '0', STR_PAD_LEFT),
+                    'email' => 'client'.str_pad((string) $i, 3, '0', STR_PAD_LEFT).'@'.self::DEMO_DOMAIN,
+                    'phone' => '09'.str_pad((string) (170000000 + $i * 713), 9, '0', STR_PAD_LEFT),
                     'email_verified_at' => now(),
                     'account_status' => 'active',
                     'preferred_contact_method' => 'email',
@@ -286,7 +288,7 @@ class AnalyticsDemoSeeder extends Seeder
                 'event_type_id' => $eventType?->id,
                 'event_type' => $eventType?->label ?? 'Social Event',
                 'client_full_name' => $client['name'],
-                'venue_address_line' => ($i + 18) . ' ' . $venues[$i % count($venues)],
+                'venue_address_line' => ($i + 18).' '.$venues[$i % count($venues)],
                 'venue_street' => 'Events Avenue',
                 'venue_city' => $city,
                 'venue_province' => in_array($city, ['Tagaytay City', 'Santa Rosa'], true) ? 'Cavite/Laguna Area' : 'Metro Manila',
@@ -317,6 +319,7 @@ class AnalyticsDemoSeeder extends Seeder
     {
         $candidates = $packages->filter(function ($package) use ($eventSlug) {
             $slugs = $package->event_type_slugs ?: [];
+
             return $package->type === $eventSlug || in_array($eventSlug, $slugs, true);
         })->values();
 

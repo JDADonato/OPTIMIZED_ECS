@@ -8,7 +8,7 @@ return new class extends Migration
 {
     public function up(): void
     {
-        if (!Schema::hasTable('payment_events')) {
+        if (! Schema::hasTable('payment_events')) {
             Schema::create('payment_events', function (Blueprint $table) {
                 $table->id();
                 $table->foreignId('payment_id')->nullable()->constrained()->nullOnDelete();
@@ -26,7 +26,7 @@ return new class extends Migration
             });
         }
 
-        if (!Schema::hasTable('refund_cases')) {
+        if (! Schema::hasTable('refund_cases')) {
             Schema::create('refund_cases', function (Blueprint $table) {
                 $table->id();
                 $table->foreignId('booking_id')->constrained()->cascadeOnDelete();
@@ -46,7 +46,7 @@ return new class extends Migration
             });
         }
 
-        if (!Schema::hasTable('event_preparation_tasks')) {
+        if (! Schema::hasTable('event_preparation_tasks')) {
             Schema::create('event_preparation_tasks', function (Blueprint $table) {
                 $table->id();
                 $table->foreignId('booking_id')->constrained()->cascadeOnDelete();
@@ -64,7 +64,7 @@ return new class extends Migration
             });
         }
 
-        if (!Schema::hasTable('feedback_requests')) {
+        if (! Schema::hasTable('feedback_requests')) {
             Schema::create('feedback_requests', function (Blueprint $table) {
                 $table->id();
                 $table->foreignId('booking_id')->constrained()->cascadeOnDelete();
@@ -78,7 +78,7 @@ return new class extends Migration
             });
         }
 
-        if (!Schema::hasTable('feedback_responses')) {
+        if (! Schema::hasTable('feedback_responses')) {
             Schema::create('feedback_responses', function (Blueprint $table) {
                 $table->id();
                 $table->foreignId('feedback_request_id')->constrained()->cascadeOnDelete();

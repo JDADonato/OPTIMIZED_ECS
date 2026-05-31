@@ -55,4 +55,8 @@ return [
         'webhook_tolerance' => env('PAYMONGO_WEBHOOK_TOLERANCE', 300),
     ],
 
+    'ngrok' => [
+        'path' => env('NGROK_PATH'),
+    ],
+
 ];

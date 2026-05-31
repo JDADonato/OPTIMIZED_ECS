@@ -374,7 +374,7 @@ const AnnouncementManager = ({ variant = 'marketing', user }) => {
     return (
         <div className={isAdminVariant ? 'admin-content-surface' : 'space-y-5'}>
             {composerOpen && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 px-4 py-6 backdrop-blur-sm">
+                <div className="fixed inset-0 z-[130] flex items-center justify-center bg-black/45 px-4 py-6 backdrop-blur-sm">
                     <form onSubmit={(event) => submit(event, 'draft')} className="flex max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-[1.35rem] border border-[#720101]/15 bg-white shadow-2xl">
                         <div className="flex shrink-0 items-start justify-between gap-4 border-b border-[#720101]/10 bg-[#fffaf3] px-5 py-4 lg:px-6">
                             <div>
@@ -540,7 +540,7 @@ const AnnouncementManager = ({ variant = 'marketing', user }) => {
             )}
 
             {deleteTarget && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 px-4 backdrop-blur-sm">
+                <div className="fixed inset-0 z-[130] flex items-center justify-center bg-black/45 px-4 backdrop-blur-sm">
                     <div className="w-full max-w-lg rounded-[1.5rem] border border-[#720101]/15 bg-[#fffaf3] p-6">
                         <div className="flex items-start justify-between gap-4">
                             <div>

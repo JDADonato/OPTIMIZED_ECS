@@ -10,6 +10,13 @@ const DeferredChatBubble = ({ user }) => {
     useEffect(() => {
         if (!user || shouldLoad) return undefined;
 
+        const params = new URLSearchParams(window.location.search);
+        if (params.get('chat') === 'open' || params.get('tab') === 'messages') {
+            setOpenOnLoad(true);
+            setShouldLoad(true);
+            return undefined;
+        }
+
         let cancelled = false;
         const fetchUnreadCount = async () => {
             try {
@@ -30,6 +37,27 @@ const DeferredChatBubble = ({ user }) => {
             window.clearInterval(timer);
         };
     }, [shouldLoad, user]);
+
+    useEffect(() => {
+        if (!user) return undefined;
+
+        const handleNavigationQueryChange = (event) => {
+            if (event.detail?.path && event.detail.path !== window.location.pathname) return;
+
+            const params = event.detail?.params || Object.fromEntries(new URLSearchParams(event.detail?.search || window.location.search).entries());
+            if (params.chat === 'open' || params.tab === 'messages') {
+                setOpenOnLoad(true);
+                setShouldLoad(true);
+            }
+        };
+
+        window.addEventListener('ecs:navigation-query-change', handleNavigationQueryChange);
+        window.addEventListener('popstate', handleNavigationQueryChange);
+        return () => {
+            window.removeEventListener('ecs:navigation-query-change', handleNavigationQueryChange);
+            window.removeEventListener('popstate', handleNavigationQueryChange);
+        };
+    }, [user]);
 
     useEffect(() => {
         if (!user || shouldLoad) return undefined;

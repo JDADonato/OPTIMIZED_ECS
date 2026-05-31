@@ -9,7 +9,7 @@ return new class extends Migration
 {
     public function up(): void
     {
-        if (!Schema::hasTable('uploaded_files')) {
+        if (! Schema::hasTable('uploaded_files')) {
             Schema::create('uploaded_files', function (Blueprint $table) {
                 $table->id();
                 $table->foreignId('user_id')->nullable()->constrained('users')->nullOnDelete();
@@ -53,7 +53,7 @@ return new class extends Migration
 
     private function replacePostgresForeign(string $table, string $constraint, string $column, string $references, string $onDelete): void
     {
-        if (!Schema::hasTable($table) || !Schema::hasColumn($table, $column)) {
+        if (! Schema::hasTable($table) || ! Schema::hasColumn($table, $column)) {
             return;
         }
 

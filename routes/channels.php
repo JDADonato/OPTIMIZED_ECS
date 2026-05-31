@@ -1,5 +1,7 @@
 <?php
 
+use App\Models\Booking;
+use App\Models\Conversation;
 use Illuminate\Support\Facades\Broadcast;
 
 /*
@@ -17,9 +19,9 @@ use Illuminate\Support\Facades\Broadcast;
  * (or any Marketing/Admin staff for unassigned ones) can listen.
  */
 Broadcast::channel('conversation.{conversationId}', function ($user, $conversationId) {
-    $conversation = \App\Models\Conversation::find($conversationId);
+    $conversation = Conversation::find($conversationId);
 
-    if (!$conversation) {
+    if (! $conversation) {
         return false;
     }
 
@@ -65,9 +67,9 @@ Broadcast::channel('admin.dashboard', function ($user) {
 });
 
 Broadcast::channel('booking.{bookingId}', function ($user, $bookingId) {
-    $booking = \App\Models\Booking::query()->select(['id', 'user_id'])->find($bookingId);
+    $booking = Booking::query()->select(['id', 'user_id'])->find($bookingId);
 
-    if (!$booking) {
+    if (! $booking) {
         return false;
     }
 

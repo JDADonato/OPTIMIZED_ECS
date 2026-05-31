@@ -131,7 +131,7 @@ const PaymentTermEditorModal = ({ isOpen, onClose, booking, payment, onSuccess }
     };
 
     return (
-        <div className="fixed inset-0 z-[100] flex flex-col items-center justify-center bg-slate-950/55 p-4 backdrop-blur-sm animate-fadeIn">
+        <div className="fixed inset-0 z-[130] flex flex-col items-center justify-center bg-slate-950/55 p-4 backdrop-blur-sm animate-fadeIn">
             <div className="flex max-h-[90vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
                 <div className="flex items-start justify-between gap-4 border-b border-[#720101]/10 bg-white px-5 py-4 sm:px-6">
                     <div>

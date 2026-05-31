@@ -30,7 +30,7 @@ class ConversionEventService
     public static function record(string $eventName, array $context = []): void
     {
         try {
-            if (!Schema::hasTable('conversion_events')) {
+            if (! Schema::hasTable('conversion_events')) {
                 return;
             }
 
@@ -57,7 +57,7 @@ class ConversionEventService
 
     public static function summarize(?\DateTimeInterface $from = null, ?\DateTimeInterface $to = null): array
     {
-        if (!Schema::hasTable('conversion_events')) {
+        if (! Schema::hasTable('conversion_events')) {
             return self::emptySummary();
         }
 
@@ -106,6 +106,7 @@ class ConversionEventService
 
             if (is_array($value)) {
                 $safe[$key] = self::sanitizeMetadata($value);
+
                 continue;
             }
 

@@ -7,7 +7,7 @@ const Modal = ({ isOpen, onClose, title, message, type = 'info', onConfirm, conf
     const isError = type === 'error';
 
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4 backdrop-blur-sm animate-fadeIn">
+        <div className="fixed inset-0 z-[130] flex items-center justify-center bg-black/55 p-4 backdrop-blur-sm animate-fadeIn">
             <div className="w-full max-w-md overflow-hidden rounded-[1.75rem] border border-[#720101]/10 bg-[#fffaf3] shadow-2xl transform transition-all scale-100 animate-scaleIn">
                 <div className="px-7 pt-8 text-center">
                     <div className={`mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl ${isSuccess ? 'bg-[#fff7e8] text-[#720101] ring-1 ring-[#720101]/12' : isError ? 'bg-red-50 text-red-600 ring-1 ring-red-100' : 'bg-[#fff7e8] text-[#9f6500] ring-1 ring-[#720101]/10'}`}>

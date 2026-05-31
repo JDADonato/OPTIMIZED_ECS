@@ -73,7 +73,7 @@ class BrandedPdfService
 
         return $this->render('pdf.report', [
             'title' => 'Management Report',
-            'documentNumber' => '#' . $run->id,
+            'documentNumber' => '#'.$run->id,
             'generatedAt' => now(),
             'run' => $run,
             'sections' => array_slice($sections, 0, self::MAX_REPORT_LINES),
@@ -131,7 +131,7 @@ class BrandedPdfService
 
     public function money(mixed $value): string
     {
-        return 'PHP ' . number_format((float) $value, 2);
+        return 'PHP '.number_format((float) $value, 2);
     }
 
     public function label(?string $value): string

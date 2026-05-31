@@ -19,8 +19,7 @@ class OperationalResourceChanged implements ShouldBroadcastNow
         public string $action,
         public ?string $message = null,
         public array $channels = [],
-    ) {
-    }
+    ) {}
 
     public function broadcastOn(): array
     {

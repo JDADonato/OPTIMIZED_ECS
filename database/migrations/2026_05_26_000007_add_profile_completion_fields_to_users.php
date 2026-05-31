@@ -9,16 +9,16 @@ return new class extends Migration
     public function up(): void
     {
         Schema::table('users', function (Blueprint $table) {
-            if (!Schema::hasColumn('users', 'avatar_path')) {
+            if (! Schema::hasColumn('users', 'avatar_path')) {
                 $table->string('avatar_path')->nullable()->after('phone');
             }
-            if (!Schema::hasColumn('users', 'preferred_contact_method')) {
+            if (! Schema::hasColumn('users', 'preferred_contact_method')) {
                 $table->string('preferred_contact_method')->nullable()->after('avatar_path');
             }
-            if (!Schema::hasColumn('users', 'notification_preferences')) {
+            if (! Schema::hasColumn('users', 'notification_preferences')) {
                 $table->json('notification_preferences')->nullable()->after('preferred_contact_method');
             }
-            if (!Schema::hasColumn('users', 'profile_preferences')) {
+            if (! Schema::hasColumn('users', 'profile_preferences')) {
                 $table->json('profile_preferences')->nullable()->after('notification_preferences');
             }
         });

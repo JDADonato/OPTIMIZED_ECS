@@ -9,6 +9,7 @@ import {
     preparationStatusLabel,
     reviewStatusLabel,
 } from '../../utils/statusLabels';
+import { bookingContactEmail, bookingContactName, bookingContactPhone, customerAccountEmail, customerAccountHandle, customerAccountName, customerAccountPhone, hasDifferentBookingContact } from '../../utils/customerIdentity';
 
 const formatDate = (value) => {
     if (!value) return 'Date pending';
@@ -82,6 +83,7 @@ const EventDetailDrawer = ({
     const payments = booking.payments || [];
     const tasks = booking.preparation_tasks || [];
     const historyNotes = booking.history_notes || [];
+    const showCustomerAccount = hasDifferentBookingContact(booking);
 
     return (
         <StaffDrawer
@@ -109,10 +111,17 @@ const EventDetailDrawer = ({
                 </section>
 
                 <div className="staff-detail-grid">
-                    <DetailCard label="Client" value={booking.client_full_name || booking.username || 'Customer'}>
-                        <p className="mt-2 text-sm font-semibold text-slate-500">{booking.client_email || 'No email recorded'}</p>
-                        <p className="mt-1 text-sm font-semibold text-slate-500">{booking.client_phone || 'No phone recorded'}</p>
+                    <DetailCard label="Booking contact" value={bookingContactName(booking)}>
+                        <p className="mt-2 text-sm font-semibold text-slate-500">{bookingContactEmail(booking) || 'No email recorded'}</p>
+                        <p className="mt-1 text-sm font-semibold text-slate-500">{bookingContactPhone(booking) || 'No phone recorded'}</p>
                     </DetailCard>
+                    {showCustomerAccount && (
+                        <DetailCard label="Customer account" value={customerAccountName(booking)}>
+                            {customerAccountHandle(booking) && <p className="mt-2 text-sm font-semibold text-slate-500">{customerAccountHandle(booking)}</p>}
+                            <p className="mt-1 text-sm font-semibold text-slate-500">{customerAccountEmail(booking) || 'No account email'}</p>
+                            <p className="mt-1 text-sm font-semibold text-slate-500">{customerAccountPhone(booking) || 'No account phone'}</p>
+                        </DetailCard>
+                    )}
                     <DetailCard label="Schedule" value={`${formatDate(booking.event_date)} / ${formatTime(booking.event_time)}`}>
                         <p className="mt-2 text-sm font-semibold text-slate-500">{booking.pax || 0} guests</p>
                     </DetailCard>

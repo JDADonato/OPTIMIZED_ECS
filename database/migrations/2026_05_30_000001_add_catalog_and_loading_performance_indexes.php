@@ -35,7 +35,7 @@ return new class extends Migration
             'booking_review_tasks_booking_status_idx',
             'event_preparation_tasks_booking_status_idx',
         ] as $index) {
-            DB::statement('DROP INDEX IF EXISTS ' . $index);
+            DB::statement('DROP INDEX IF EXISTS '.$index);
         }
     }
 };

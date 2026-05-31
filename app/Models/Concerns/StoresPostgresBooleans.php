@@ -10,6 +10,7 @@ trait StoresPostgresBooleans
     {
         if ($value instanceof Expression) {
             $this->attributes[$key] = $value;
+
             return;
         }
 

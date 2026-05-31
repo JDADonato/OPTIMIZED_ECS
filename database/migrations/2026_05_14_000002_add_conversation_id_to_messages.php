@@ -24,23 +24,23 @@ return new class extends Migration
 
         if ($isPostgres) {
             // 1. Drop RLS policies that reference receiver_id on messages
-            DB::statement("drop policy if exists messages_select_participant_or_staff on public.messages");
-            DB::statement("drop policy if exists messages_update_participant_or_staff on public.messages");
-            DB::statement("drop policy if exists messages_delete_participant_or_staff on public.messages");
+            DB::statement('drop policy if exists messages_select_participant_or_staff on public.messages');
+            DB::statement('drop policy if exists messages_update_participant_or_staff on public.messages');
+            DB::statement('drop policy if exists messages_delete_participant_or_staff on public.messages');
         }
 
         // 2. Alter the table
         Schema::table('messages', function (Blueprint $table) {
             $table->foreignId('conversation_id')
-                  ->nullable()
-                  ->after('id')
-                  ->constrained('conversations')
-                  ->onDelete('cascade');
+                ->nullable()
+                ->after('id')
+                ->constrained('conversations')
+                ->onDelete('cascade');
 
             $table->index('conversation_id');
         });
 
-        if (!$isPostgres) {
+        if (! $isPostgres) {
             return;
         }
 
@@ -69,18 +69,18 @@ return new class extends Migration
         DB::statement("create policy messages_delete_participant_or_staff on public.messages for delete using ({$messageParty})");
 
         // 4. Add RLS policies for the new conversations table
-        DB::statement("alter table public.conversations enable row level security");
+        DB::statement('alter table public.conversations enable row level security');
 
         // Server can do everything
-        DB::statement("create policy conversations_server_manage on public.conversations for all using (app.is_server_role()) with check (app.is_server_role())");
+        DB::statement('create policy conversations_server_manage on public.conversations for all using (app.is_server_role()) with check (app.is_server_role())');
 
         // Staff can see all conversations
         // Clients can see their own conversations
-        $convAccess = "app.is_staff() OR client_id = app.current_user_id()";
+        $convAccess = 'app.is_staff() OR client_id = app.current_user_id()';
         DB::statement("create policy conversations_select_own_or_staff on public.conversations for select using ({$convAccess})");
         DB::statement("create policy conversations_insert_own_or_staff on public.conversations for insert with check ({$convAccess})");
         DB::statement("create policy conversations_update_own_or_staff on public.conversations for update using ({$convAccess}) with check ({$convAccess})");
-        DB::statement("create policy conversations_delete_staff on public.conversations for delete using (app.is_staff())");
+        DB::statement('create policy conversations_delete_staff on public.conversations for delete using (app.is_staff())');
     }
 
     /**
@@ -98,16 +98,16 @@ return new class extends Migration
         }
 
         // Drop conversation policies
-        DB::statement("drop policy if exists conversations_server_manage on public.conversations");
-        DB::statement("drop policy if exists conversations_select_own_or_staff on public.conversations");
-        DB::statement("drop policy if exists conversations_insert_own_or_staff on public.conversations");
-        DB::statement("drop policy if exists conversations_update_own_or_staff on public.conversations");
-        DB::statement("drop policy if exists conversations_delete_staff on public.conversations");
+        DB::statement('drop policy if exists conversations_server_manage on public.conversations');
+        DB::statement('drop policy if exists conversations_select_own_or_staff on public.conversations');
+        DB::statement('drop policy if exists conversations_insert_own_or_staff on public.conversations');
+        DB::statement('drop policy if exists conversations_update_own_or_staff on public.conversations');
+        DB::statement('drop policy if exists conversations_delete_staff on public.conversations');
 
         // Drop updated message policies
-        DB::statement("drop policy if exists messages_select_participant_or_staff on public.messages");
-        DB::statement("drop policy if exists messages_update_participant_or_staff on public.messages");
-        DB::statement("drop policy if exists messages_delete_participant_or_staff on public.messages");
+        DB::statement('drop policy if exists messages_select_participant_or_staff on public.messages');
+        DB::statement('drop policy if exists messages_update_participant_or_staff on public.messages');
+        DB::statement('drop policy if exists messages_delete_participant_or_staff on public.messages');
 
         // Restore original column and policies
         Schema::table('messages', function (Blueprint $table) {

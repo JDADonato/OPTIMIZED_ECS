@@ -4,23 +4,27 @@ namespace App\Http\Controllers;
 
 use App\Http\Resources\BookingSummaryResource;
 use App\Http\Resources\UserSummaryResource;
-use App\Models\Booking;
 use App\Models\AuditLog;
+use App\Models\Booking;
 use App\Models\MenuItem;
 use App\Models\PricingOverride;
 use App\Models\User;
+use App\Notifications\BookingStatusNotification;
 use App\Notifications\CustomerAccountLifecycleNotification;
 use App\Notifications\StaffAccountAccessNotification;
 use App\Notifications\StaffAccountLifecycleNotification;
-use App\Services\AdminReportService;
+use App\Rules\BalancedPassword;
 use App\Services\AccountLifecycleService;
+use App\Services\AdminReportService;
 use App\Services\EmailDeliveryService;
 use App\Services\EventPreparationService;
 use App\Services\NotificationRecipientService;
 use App\Services\OperationalBroadcastService;
-use App\Services\PostEventLifecycleService;
 use App\Support\ApiResponse;
+use App\Support\AuditContext;
+use App\Support\PasswordPolicy;
 use App\Support\ResourceVersion;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Cache;
@@ -57,6 +61,7 @@ class AdminController extends Controller
             ->when($request->filled('account_status') && $request->query('account_status') !== 'all', function ($q) use ($request) {
                 if ($request->query('account_status') === 'active') {
                     $q->where(fn ($inner) => $inner->whereNull('account_status')->orWhere('account_status', 'active'));
+
                     return;
                 }
 
@@ -68,7 +73,7 @@ class AdminController extends Controller
                     : $q->where(fn ($inner) => $inner->whereNull('must_change_password')->orWhereRaw('must_change_password is false'));
             })
             ->when($request->query('search'), function ($q, $search) {
-                $term = '%' . mb_strtolower(trim((string) $search)) . '%';
+                $term = '%'.mb_strtolower(trim((string) $search)).'%';
                 $q->where(fn ($inner) => $inner
                     ->whereRaw('LOWER(full_name) LIKE ?', [$term])
                     ->orWhereRaw('LOWER(username) LIKE ?', [$term])
@@ -101,9 +106,9 @@ class AdminController extends Controller
         $request->validate([
             'full_name' => 'required|string|max:255',
             'username' => 'required|string|unique:users,username',
-            'email'    => 'nullable|email|unique:users,email',
-            'phone'    => 'nullable|string',
-            'role'     => 'required|in:Admin,Marketing,Accounting',
+            'email' => 'nullable|email|unique:users,email',
+            'phone' => 'nullable|string',
+            'role' => 'required|in:Admin,Marketing,Accounting',
         ]);
 
         $temporaryPassword = Str::password(14);
@@ -112,13 +117,15 @@ class AdminController extends Controller
             'full_name' => $request->full_name,
             'username' => $request->username,
             'password' => $temporaryPassword,
-            'email'    => $request->email,
-            'phone'    => $request->phone,
-            'role'     => $request->role,
+            'email' => $request->email,
+            'phone' => $request->phone,
+            'role' => $request->role,
             'account_status' => 'active',
             'must_change_password' => true,
             'temporary_password_expires_at' => now()->addHours(self::TEMPORARY_PASSWORD_TTL_HOURS),
             'temporary_password_secret' => $temporaryPassword,
+            'password_changed_at' => now(),
+            'password_policy_version' => PasswordPolicy::CURRENT_VERSION,
         ]);
 
         $emailDelivery = app(EmailDeliveryService::class)
@@ -143,32 +150,48 @@ class AdminController extends Controller
 
     public function updateEmployee(Request $request, int $id)
     {
+        $user = User::find($id);
+
         $request->validate([
             'full_name' => ['nullable', 'string', 'max:255'],
             'username' => ['nullable', 'string', Rule::unique('users', 'username')->ignore($id)],
-            'email'    => ['nullable', 'email', Rule::unique('users', 'email')->ignore($id)],
-            'phone'    => 'nullable|string',
-            'password' => 'nullable|string|min:6',
-            'role'     => 'nullable|in:Marketing,Accounting',
+            'email' => ['nullable', 'email', Rule::unique('users', 'email')->ignore($id)],
+            'phone' => 'nullable|string',
+            'password' => [
+                'nullable',
+                'string',
+                new BalancedPassword($request->input('username', $user?->username), $request->input('email', $user?->email)),
+            ],
+            'role' => 'nullable|in:Marketing,Accounting',
         ]);
 
-        $user = User::find($id);
-
-        if (!$user || in_array($user->role, ['Admin', 'Client'])) {
+        if (! $user || in_array($user->role, ['Admin', 'Client'])) {
             return response()->json(['error' => 'Cannot modify this user'], 403);
         }
 
         $updates = [];
-        if ($request->has('full_name')) $updates['full_name'] = $request->full_name;
-        if ($request->has('username')) $updates['username'] = $request->username;
-        if ($request->has('email'))    $updates['email'] = $request->email;
-        if ($request->has('phone'))    $updates['phone'] = $request->phone;
-        if ($request->has('role'))     $updates['role'] = $request->role;
+        if ($request->has('full_name')) {
+            $updates['full_name'] = $request->full_name;
+        }
+        if ($request->has('username')) {
+            $updates['username'] = $request->username;
+        }
+        if ($request->has('email')) {
+            $updates['email'] = $request->email;
+        }
+        if ($request->has('phone')) {
+            $updates['phone'] = $request->phone;
+        }
+        if ($request->has('role')) {
+            $updates['role'] = $request->role;
+        }
         if ($request->has('password') && $request->password) {
             $updates['password'] = Hash::make($request->password);
             $updates['must_change_password'] = true;
             $updates['temporary_password_expires_at'] = now()->addHours(self::TEMPORARY_PASSWORD_TTL_HOURS);
             $updates['temporary_password_secret'] = null;
+            $updates['password_changed_at'] = now();
+            $updates['password_policy_version'] = PasswordPolicy::CURRENT_VERSION;
         }
 
         if (empty($updates)) {
@@ -203,7 +226,7 @@ class AdminController extends Controller
     {
         $user = User::find($id);
 
-        if (!$user || in_array($user->role, ['Admin', 'Client'])) {
+        if (! $user || in_array($user->role, ['Admin', 'Client'])) {
             return response()->json(['error' => 'Cannot delete this user'], 403);
         }
 
@@ -238,7 +261,7 @@ class AdminController extends Controller
     {
         $user = User::find($id);
 
-        if (!$user || $user->role === 'Client' || ((int) $user->id === (int) Auth::id())) {
+        if (! $user || $user->role === 'Client' || ((int) $user->id === (int) Auth::id())) {
             return response()->json(['error' => 'Cannot modify this user'], 403);
         }
 
@@ -248,6 +271,8 @@ class AdminController extends Controller
             'must_change_password' => true,
             'temporary_password_expires_at' => now()->addHours(self::TEMPORARY_PASSWORD_TTL_HOURS),
             'temporary_password_secret' => $temporaryPassword,
+            'password_changed_at' => now(),
+            'password_policy_version' => PasswordPolicy::CURRENT_VERSION,
         ])->save();
 
         $emailDelivery = app(EmailDeliveryService::class)
@@ -272,7 +297,7 @@ class AdminController extends Controller
     {
         $user = User::whereIn('role', ['Admin', 'Marketing', 'Accounting'])->find($id);
 
-        if (!$user || (int) $user->id === (int) Auth::id()) {
+        if (! $user || (int) $user->id === (int) Auth::id()) {
             return response()->json(['error' => 'Temporary password is not available for this account.'], 403);
         }
 
@@ -291,7 +316,7 @@ class AdminController extends Controller
             ], 410);
         }
 
-        if (!$user->requiresPasswordChange() || empty($user->temporary_password_secret)) {
+        if (! $user->requiresPasswordChange() || empty($user->temporary_password_secret)) {
             $this->recordAccountAudit('Temporary password viewed', $user, 'Denied', [
                 'reason' => $user->requiresPasswordChange() ? 'missing_secret' : 'password_already_changed',
                 'expires_at' => $user->temporary_password_expires_at,
@@ -324,7 +349,7 @@ class AdminController extends Controller
     {
         $user = User::find($id);
 
-        if (!$user || $user->role === 'Client' || ((int) $user->id === (int) Auth::id())) {
+        if (! $user || $user->role === 'Client' || ((int) $user->id === (int) Auth::id())) {
             return response()->json(['error' => 'Cannot modify this user'], 403);
         }
 
@@ -351,7 +376,7 @@ class AdminController extends Controller
     {
         $user = User::find($id);
 
-        if (!$user || in_array($user->role, ['Admin', 'Client'])) {
+        if (! $user || in_array($user->role, ['Admin', 'Client'])) {
             return response()->json(['error' => 'Cannot modify this user'], 403);
         }
 
@@ -388,6 +413,7 @@ class AdminController extends Controller
             ->when($status !== 'all', function ($q) use ($status) {
                 if ($status === 'deactivated') {
                     $q->where('account_status', 'deactivated');
+
                     return;
                 }
 
@@ -396,7 +422,7 @@ class AdminController extends Controller
                     ->orWhere('account_status', 'active'));
             })
             ->when($request->query('search'), function ($q, $search) {
-                $term = '%' . mb_strtolower(trim((string) $search)) . '%';
+                $term = '%'.mb_strtolower(trim((string) $search)).'%';
                 $q->where(fn ($inner) => $inner
                     ->whereRaw('LOWER(full_name) LIKE ?', [$term])
                     ->orWhereRaw('LOWER(username) LIKE ?', [$term])
@@ -418,6 +444,7 @@ class AdminController extends Controller
 
         if ($request->boolean('paginated')) {
             $perPage = min(max((int) $request->query('per_page', 25), 1), 100);
+
             return ApiResponse::paginated($query->paginate($perPage), null, [
                 ...$versionMeta,
                 'changed' => true,
@@ -431,25 +458,37 @@ class AdminController extends Controller
 
     public function updateCustomer(Request $request, int $id)
     {
-        $request->validate([
-            'username' => ['nullable', 'string', Rule::unique('users', 'username')->ignore($id)],
-            'email'    => ['nullable', 'email', Rule::unique('users', 'email')->ignore($id)],
-            'phone'    => 'nullable|string',
-            'password' => 'nullable|string|min:6',
-        ]);
-
         $user = User::find($id);
 
-        if (!$user || $user->role !== 'Client') {
+        $request->validate([
+            'username' => ['nullable', 'string', Rule::unique('users', 'username')->ignore($id)],
+            'email' => ['nullable', 'email', Rule::unique('users', 'email')->ignore($id)],
+            'phone' => 'nullable|string',
+            'password' => [
+                'nullable',
+                'string',
+                new BalancedPassword($request->input('username', $user?->username), $request->input('email', $user?->email)),
+            ],
+        ]);
+
+        if (! $user || $user->role !== 'Client') {
             return response()->json(['error' => 'Cannot modify this user'], 403);
         }
 
         $updates = [];
-        if ($request->has('username')) $updates['username'] = $request->username;
-        if ($request->has('email'))    $updates['email'] = $request->email;
-        if ($request->has('phone'))    $updates['phone'] = $request->phone;
+        if ($request->has('username')) {
+            $updates['username'] = $request->username;
+        }
+        if ($request->has('email')) {
+            $updates['email'] = $request->email;
+        }
+        if ($request->has('phone')) {
+            $updates['phone'] = $request->phone;
+        }
         if ($request->has('password') && $request->password) {
             $updates['password'] = Hash::make($request->password);
+            $updates['password_changed_at'] = now();
+            $updates['password_policy_version'] = PasswordPolicy::CURRENT_VERSION;
         }
 
         if (empty($updates)) {
@@ -469,7 +508,7 @@ class AdminController extends Controller
     {
         $user = User::find($id);
 
-        if (!$user || $user->role !== 'Client') {
+        if (! $user || $user->role !== 'Client') {
             return response()->json(['error' => 'Cannot delete this user'], 403);
         }
 
@@ -507,7 +546,7 @@ class AdminController extends Controller
     {
         $user = User::find($id);
 
-        if (!$user || $user->role !== 'Client') {
+        if (! $user || $user->role !== 'Client') {
             return response()->json(['error' => 'Cannot modify this user'], 403);
         }
 
@@ -533,12 +572,12 @@ class AdminController extends Controller
         ]);
     }
 
-    public function deliveryDiagnostics(EmailDeliveryService $emailDelivery): \Illuminate\Http\JsonResponse
+    public function deliveryDiagnostics(EmailDeliveryService $emailDelivery): JsonResponse
     {
         return response()->json($emailDelivery->diagnostics());
     }
 
-    public function sendDiagnosticEmail(Request $request, EmailDeliveryService $emailDelivery): \Illuminate\Http\JsonResponse
+    public function sendDiagnosticEmail(Request $request, EmailDeliveryService $emailDelivery): JsonResponse
     {
         $data = $request->validate([
             'email' => ['required', 'email'],
@@ -557,7 +596,7 @@ class AdminController extends Controller
     {
         try {
             $actor = Auth::user();
-            if (!$actor) {
+            if (! $actor) {
                 return;
             }
 
@@ -567,16 +606,15 @@ class AdminController extends Controller
                 'role' => $actor->role,
                 'action' => $action,
                 'method' => request()->method(),
-                'path' => '/' . ltrim(request()->path(), '/'),
+                'path' => '/'.ltrim(request()->path(), '/'),
                 'status_code' => 200,
                 'ip_address' => request()->ip(),
                 'user_agent' => Str::limit((string) request()->userAgent(), 500, ''),
-                'metadata' => array_merge([
+                'metadata' => AuditContext::forAccount(request(), $target, $result, array_merge([
                     'explicit_account_audit' => true,
                     'target_user_id' => $target?->id,
                     'target_role' => $target?->role,
-                    'result' => $result,
-                ], $metadata),
+                ], $metadata)),
             ]);
         } catch (\Throwable $e) {
             Log::warning('Unable to record account audit log.', [
@@ -639,23 +677,30 @@ class AdminController extends Controller
                 'preparationTasks',
                 'payments:id,booking_id,amount,status,payment_type,due_date',
             ])
-            ->when(!$request->boolean('include_history'), fn ($q) => $q->whereNotIn('status', ['Cancelled', 'cancelled', 'Completed', 'completed']))
+            ->when(! $request->boolean('include_history'), fn ($q) => $q->whereNotIn('status', ['Cancelled', 'cancelled', 'Completed', 'completed']))
             ->when($request->query('status'), fn ($q, $status) => $q->where('status', $status))
             ->when($request->query('source'), function ($q, $source) {
                 if ($source === 'customer') {
                     $q->where(fn ($inner) => $inner->whereNull('booking_source')->orWhere('booking_source', 'customer'));
+
                     return;
                 }
 
                 $q->where('booking_source', $source);
             })
             ->when($request->query('search'), function ($q, $search) {
-                $term = '%' . mb_strtolower(trim((string) $search)) . '%';
+                $term = '%'.mb_strtolower(trim((string) $search)).'%';
                 $q->where(fn ($inner) => $inner
                     ->whereRaw('LOWER(client_full_name) LIKE ?', [$term])
                     ->orWhereRaw('LOWER(event_name) LIKE ?', [$term])
                     ->orWhereRaw('LOWER(client_email) LIKE ?', [$term])
-                    ->orWhereRaw('LOWER(venue_city) LIKE ?', [$term]));
+                    ->orWhereRaw('LOWER(client_phone) LIKE ?', [$term])
+                    ->orWhereRaw('LOWER(venue_city) LIKE ?', [$term])
+                    ->orWhereHas('user', fn ($userQuery) => $userQuery
+                        ->whereRaw('LOWER(full_name) LIKE ?', [$term])
+                        ->orWhereRaw('LOWER(username) LIKE ?', [$term])
+                        ->orWhereRaw('LOWER(email) LIKE ?', [$term])
+                        ->orWhereRaw('LOWER(phone) LIKE ?', [$term])));
             })
             ->orderBy('created_at', 'desc');
 
@@ -667,6 +712,7 @@ class AdminController extends Controller
         if ($request->boolean('paginated')) {
             $perPage = min(max((int) $request->query('per_page', 25), 1), 100);
             $bookings = $query->paginate($perPage);
+
             return ApiResponse::paginated($bookings, BookingSummaryResource::collection($bookings->getCollection())->resolve(), [
                 ...$versionMeta,
                 'changed' => true,
@@ -685,7 +731,7 @@ class AdminController extends Controller
         ]);
 
         $booking = Booking::find($id);
-        if (!$booking) {
+        if (! $booking) {
             return response()->json(['error' => 'Booking not found'], 404);
         }
 
@@ -713,7 +759,7 @@ class AdminController extends Controller
         try {
             $client = User::find($booking->user_id);
             app(NotificationRecipientService::class)
-                ->sendToUser($client, new \App\Notifications\BookingStatusNotification($booking, $request->status), 'admin_booking_status_update');
+                ->sendToUser($client, new BookingStatusNotification($booking, $request->status), 'admin_booking_status_update');
         } catch (\Exception $e) {
             Log::error("Notification failed on admin booking approval: {$e->getMessage()}");
         }
@@ -743,6 +789,7 @@ class AdminController extends Controller
 
                 return $map;
             });
+
             return response()->json(['overrides' => $pricingMap]);
         } catch (\Exception $e) {
             return response()->json(['overrides' => []]);
@@ -752,9 +799,9 @@ class AdminController extends Controller
     public function updatePricingOverride(Request $request)
     {
         $request->validate([
-            'id'        => 'required|string',
+            'id' => 'required|string',
             'item_type' => 'required|string',
-            'item_id'   => 'required|string',
+            'item_id' => 'required|string',
             'new_price' => 'required|numeric',
         ]);
 
@@ -762,7 +809,7 @@ class AdminController extends Controller
             ['id' => $request->id],
             [
                 'item_type' => $request->item_type,
-                'item_id'   => $request->item_id,
+                'item_id' => $request->item_id,
                 'new_price' => $request->new_price,
             ]
         );
@@ -779,11 +826,11 @@ class AdminController extends Controller
     {
         $request->validate([
             'discount_value' => 'nullable|numeric',
-            'discount_type'  => 'nullable|in:fixed,percentage',
+            'discount_type' => 'nullable|in:fixed,percentage',
         ]);
 
         $booking = Booking::find($id);
-        if (!$booking) {
+        if (! $booking) {
             return response()->json(['error' => 'Booking not found'], 404);
         }
 
@@ -804,13 +851,13 @@ class AdminController extends Controller
 
         $booking->update([
             'discount_value' => $discountValue,
-            'discount_type'  => $discountType,
-            'total_cost'     => $newTotalCost,
+            'discount_type' => $discountType,
+            'total_cost' => $newTotalCost,
         ]);
         Cache::put('admin.analytics.version', (int) Cache::get('admin.analytics.version', 1) + 1);
 
         return response()->json([
-            'message'        => 'Discount applied successfully',
+            'message' => 'Discount applied successfully',
             'new_total_cost' => $newTotalCost,
         ]);
     }
@@ -900,7 +947,7 @@ class AdminController extends Controller
             ->when($request->query('role'), fn ($q, $role) => $q->where('role', $role))
             ->when($request->query('method'), fn ($q, $method) => $q->where('method', strtoupper($method)))
             ->when($request->query('search'), function ($q, $search) {
-                $term = '%' . mb_strtolower(trim((string) $search)) . '%';
+                $term = '%'.mb_strtolower(trim((string) $search)).'%';
                 $q->where(function ($inner) use ($term) {
                     $inner->whereRaw('LOWER(username) LIKE ?', [$term])
                         ->orWhereRaw('LOWER(action) LIKE ?', [$term])
@@ -909,7 +956,10 @@ class AdminController extends Controller
             })
             ->orderByDesc('created_at');
 
-        return response()->json($query->paginate($perPage));
+        $audits = $query->paginate($perPage);
+        $audits->getCollection()->transform(fn (AuditLog $audit) => AuditContext::normalize($audit));
+
+        return response()->json($audits);
     }
 
     // ==========================================
@@ -920,45 +970,46 @@ class AdminController extends Controller
     {
         $includeInactive = in_array(Auth::user()?->role, ['Admin', 'Marketing'], true);
         $version = $this->catalogVersion();
-        $cacheKey = 'catalog.menu_items.' . ($includeInactive ? 'staff' : 'public') . ".v{$version}";
+        $cacheKey = 'catalog.menu_items.'.($includeInactive ? 'staff' : 'public').".v{$version}";
 
         $items = Cache::remember($cacheKey, now()->addMinutes(10), function () use ($includeInactive) {
             $query = MenuItem::query();
 
-            if (!$includeInactive) {
+            if (! $includeInactive) {
                 $query->whereRaw('is_active is true');
             }
 
             return $query->orderBy('category')->orderBy('name')->get();
         });
+
         return response()->json($items);
     }
 
     public function createMenuItem(Request $request)
     {
         $request->validate([
-            'name'          => 'required|string|max:255',
-            'category'      => 'required|in:starter,main,side,dessert,drink',
+            'name' => 'required|string|max:255',
+            'category' => 'required|in:starter,main,side,dessert,drink',
             'cost_per_head' => 'required|numeric|min:0',
-            'price_adj'     => 'nullable|numeric|min:0',
-            'image'         => 'nullable|string',
-            'description'   => 'nullable|string',
+            'price_adj' => 'nullable|numeric|min:0',
+            'image' => 'nullable|string',
+            'description' => 'nullable|string',
             'is_best_seller' => 'nullable|boolean',
             'is_active' => 'nullable|boolean',
         ]);
 
-        $dishId = 'custom_' . strtolower(preg_replace('/[^a-zA-Z0-9]/', '', $request->name)) . '_' . time();
+        $dishId = 'custom_'.strtolower(preg_replace('/[^a-zA-Z0-9]/', '', $request->name)).'_'.time();
 
         $item = MenuItem::create([
-            'dish_id'        => $dishId,
-            'name'           => $request->name,
-            'category'       => $request->category,
-            'cost_per_head'  => $request->cost_per_head,
-            'price_adj'      => $request->price_adj ?? 0,
-            'image'          => $request->image ?? 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&q=80&w=400',
-            'description'    => $request->description ?? '',
+            'dish_id' => $dishId,
+            'name' => $request->name,
+            'category' => $request->category,
+            'cost_per_head' => $request->cost_per_head,
+            'price_adj' => $request->price_adj ?? 0,
+            'image' => $request->image ?? 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&q=80&w=400',
+            'description' => $request->description ?? '',
             'is_best_seller' => $request->is_best_seller ?? false,
-            'is_active'      => $request->input('is_active', true),
+            'is_active' => $request->input('is_active', true),
         ]);
         $this->bumpCatalogVersion();
         Cache::put('admin.analytics.version', (int) Cache::get('admin.analytics.version', 1) + 1);
@@ -971,17 +1022,17 @@ class AdminController extends Controller
     public function updateMenuItem(Request $request, int $id)
     {
         $item = MenuItem::find($id);
-        if (!$item) {
+        if (! $item) {
             return response()->json(['error' => 'Menu item not found'], 404);
         }
 
         $request->validate([
-            'name'          => 'nullable|string|max:255',
-            'category'      => 'nullable|in:starter,main,side,dessert,drink',
+            'name' => 'nullable|string|max:255',
+            'category' => 'nullable|in:starter,main,side,dessert,drink',
             'cost_per_head' => 'nullable|numeric|min:0',
-            'price_adj'     => 'nullable|numeric|min:0',
-            'image'         => 'nullable|string',
-            'description'   => 'nullable|string',
+            'price_adj' => 'nullable|numeric|min:0',
+            'image' => 'nullable|string',
+            'description' => 'nullable|string',
             'is_best_seller' => 'nullable|boolean',
             'is_active' => 'nullable|boolean',
         ]);
@@ -1001,7 +1052,7 @@ class AdminController extends Controller
     public function deleteMenuItem(int $id)
     {
         $item = MenuItem::find($id);
-        if (!$item) {
+        if (! $item) {
             return response()->json(['error' => 'Menu item not found'], 404);
         }
 

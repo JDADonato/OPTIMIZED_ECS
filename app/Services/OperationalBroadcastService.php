@@ -41,7 +41,7 @@ class OperationalBroadcastService
         $channels = ['staff.queue', 'marketing.dashboard', 'accounting.dashboard', 'admin.dashboard'];
 
         if ($booking->user_id) {
-            $channels[] = 'client.' . $booking->user_id;
+            $channels[] = 'client.'.$booking->user_id;
         }
 
         $this->changed('bookings', 'booking', $booking->id, $action, $message, $channels);
@@ -52,7 +52,7 @@ class OperationalBroadcastService
         $channels = ['accounting.dashboard', 'admin.dashboard'];
 
         if ($booking?->user_id) {
-            $channels[] = 'client.' . $booking->user_id;
+            $channels[] = 'client.'.$booking->user_id;
         }
 
         $this->changed('finance', $entityType, $entityId, $action, $message, $channels);

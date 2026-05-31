@@ -1,8 +1,10 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Head, Link, useForm, usePage } from '@inertiajs/react';
-import { Bell, Check, Clock, Crop, Grip, KeyRound, MailCheck, RotateCcw, ShieldCheck, Timer, Upload, X, ZoomIn } from 'lucide-react';
+import { Bell, Check, Clock, Crop, Grip, KeyRound, MailCheck, RotateCcw, ShieldCheck, Timer, Upload, X } from 'lucide-react';
 import DefaultLayout from '../../Layouts/DefaultLayout';
 import ClientNavbar from '../../Components/common/ClientNavbar';
+import PasswordStrengthField, { PasswordMatchHint } from '../../Components/auth/PasswordStrengthField';
+import { evaluatePassword } from '../../utils/passwordPolicy';
 
 const csrfToken = () => document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '';
 
@@ -253,6 +255,10 @@ const ProfileEdit = () => {
     const missingReadiness = readinessItems.filter((item) => !item.complete);
     const passwordCodeExpired = Boolean(passwordCodeExpiresAt) && passwordCodeSecondsRemaining === 0;
     const passwordCodeCountdown = `${Math.floor(passwordCodeSecondsRemaining / 60)}:${String(passwordCodeSecondsRemaining % 60).padStart(2, '0')}`;
+    const passwordEvaluation = useMemo(
+        () => evaluatePassword(data.new_password, { username: data.username, email: data.email }),
+        [data.new_password, data.username, data.email],
+    );
 
     const selectedAvatarUrl = useMemo(() => data.avatar ? URL.createObjectURL(data.avatar) : null, [data.avatar]);
     const persistedAvatarUrl = user.avatar_url || null;
@@ -447,6 +453,13 @@ const ProfileEdit = () => {
     const submit = () => {
         if (data.profile_preferences.default_guest_count === '') {
             setData('profile_preferences', { ...data.profile_preferences, default_guest_count: null });
+        }
+
+        if (editing === 'security' && data.new_password) {
+            if (!passwordEvaluation.valid || data.new_password !== data.new_password_confirmation) {
+                setPasswordCodeError('Complete the password requirements and confirmation before saving.');
+                return;
+            }
         }
 
         post('/profile', {
@@ -866,14 +879,29 @@ const ProfileEdit = () => {
                                         <input type={showPasswords ? 'text' : 'password'} value={data.current_password} onChange={(e) => setData('current_password', e.target.value)} className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold focus:border-[#720101] focus:outline-none focus:ring-4 focus:ring-[#720101]/10" />
                                         <FieldError message={errors.current_password} />
                                     </label>
-                                    <label>
-                                        <span className="text-xs font-black uppercase tracking-widest text-slate-500">New password</span>
-                                        <input type={showPasswords ? 'text' : 'password'} value={data.new_password} onChange={(e) => setData('new_password', e.target.value)} className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold focus:border-[#720101] focus:outline-none focus:ring-4 focus:ring-[#720101]/10" />
-                                        <FieldError message={errors.new_password} />
-                                    </label>
+                                    <PasswordStrengthField
+                                        id="new_password"
+                                        name="new_password"
+                                        label="New password"
+                                        value={data.new_password}
+                                        username={data.username}
+                                        email={data.email}
+                                        visible={showPasswords}
+                                        showToggle={false}
+                                        placeholder="Create password"
+                                        labelClassName="text-xs font-black uppercase tracking-widest text-slate-500"
+                                        fieldClassName="auth-field auth-field-compact mt-2"
+                                        error={errors.new_password}
+                                        onChange={(value) => setData('new_password', value)}
+                                    />
                                     <label className="sm:col-span-2">
                                         <span className="text-xs font-black uppercase tracking-widest text-slate-500">Confirm password</span>
                                         <input type={showPasswords ? 'text' : 'password'} value={data.new_password_confirmation} onChange={(e) => setData('new_password_confirmation', e.target.value)} className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold focus:border-[#720101] focus:outline-none focus:ring-4 focus:ring-[#720101]/10" />
+                                        <PasswordMatchHint
+                                            password={data.new_password}
+                                            confirmation={data.new_password_confirmation}
+                                            touched={Boolean(data.new_password_confirmation)}
+                                        />
                                     </label>
                                 </div>
                                 <div className="mt-6 flex flex-col gap-3 border-t border-[#ead8cc] pt-5 sm:flex-row sm:items-center sm:justify-between">

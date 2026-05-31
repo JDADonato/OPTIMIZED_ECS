@@ -21,7 +21,7 @@ return new class extends Migration
             ->update(['payment_type' => 'Final']);
 
         if (DB::connection()->getDriverName() === 'pgsql') {
-            DB::statement("ALTER TABLE payments ALTER COLUMN payment_type TYPE VARCHAR(255) USING payment_type::text");
+            DB::statement('ALTER TABLE payments ALTER COLUMN payment_type TYPE VARCHAR(255) USING payment_type::text');
         }
     }
 };

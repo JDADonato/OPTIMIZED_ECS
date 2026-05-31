@@ -49,7 +49,7 @@ class PayMongoWebhookTest extends TestCase
         $payment = $this->payment($this->booking($this->user('Client')));
         $payload = $this->paidPayload($payment, ['event_id' => 'evt_bad_signature']);
 
-        $this->withHeader('Paymongo-Signature', 't=' . time() . ',te=not-a-real-signature')
+        $this->withHeader('Paymongo-Signature', 't='.time().',te=not-a-real-signature')
             ->postJson('/webhook/paymongo', $payload)
             ->assertUnauthorized();
 
@@ -119,7 +119,7 @@ class PayMongoWebhookTest extends TestCase
 
         $json = json_encode($payload);
         $timestamp = (string) time();
-        $signature = hash_hmac('sha256', $timestamp . '.' . $json, 'whsec_test_secret');
+        $signature = hash_hmac('sha256', $timestamp.'.'.$json, 'whsec_test_secret');
 
         return $this->call('POST', '/webhook/paymongo', [], [], [], [
             'CONTENT_TYPE' => 'application/json',
@@ -130,9 +130,9 @@ class PayMongoWebhookTest extends TestCase
 
     private function paidPayload(Payment $payment, array $overrides = []): array
     {
-        $eventId = $overrides['event_id'] ?? 'evt_paid_' . uniqid();
-        $checkoutId = $overrides['checkout_id'] ?? ($payment->paymongo_checkout_session_id ?: 'cs_' . uniqid());
-        $providerPaymentId = $overrides['payment_id'] ?? 'pay_' . uniqid();
+        $eventId = $overrides['event_id'] ?? 'evt_paid_'.uniqid();
+        $checkoutId = $overrides['checkout_id'] ?? ($payment->paymongo_checkout_session_id ?: 'cs_'.uniqid());
+        $providerPaymentId = $overrides['payment_id'] ?? 'pay_'.uniqid();
 
         return [
             'data' => [
@@ -170,8 +170,8 @@ class PayMongoWebhookTest extends TestCase
     {
         return User::create([
             'full_name' => "{$role} Tester",
-            'username' => strtolower($role) . '_' . uniqid(),
-            'email' => uniqid(strtolower($role) . '_') . '@example.test',
+            'username' => strtolower($role).'_'.uniqid(),
+            'email' => uniqid(strtolower($role).'_').'@example.test',
             'password' => 'password',
             'phone' => '09170000000',
             'role' => $role,

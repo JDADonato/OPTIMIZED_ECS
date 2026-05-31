@@ -126,8 +126,8 @@ class ConversionRoadmapTest extends TestCase
     {
         return User::create(array_merge([
             'full_name' => "{$role} User",
-            'username' => strtolower($role) . '_' . uniqid(),
-            'email' => strtolower($role) . uniqid() . '@example.test',
+            'username' => strtolower($role).'_'.uniqid(),
+            'email' => strtolower($role).uniqid().'@example.test',
             'password' => 'password',
             'role' => $role,
             'account_status' => 'active',

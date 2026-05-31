@@ -24,17 +24,17 @@ class BusinessRule extends Model
     protected function casts(): array
     {
         return [
-            'minimum_lead_days'          => 'integer',
-            'maximum_capacity_per_day'   => 'integer',
-            'maximum_pax_per_event'      => 'integer',
-            'minimum_pax_per_event'      => 'integer',
-            'is_active'                  => 'boolean',
+            'minimum_lead_days' => 'integer',
+            'maximum_capacity_per_day' => 'integer',
+            'maximum_pax_per_event' => 'integer',
+            'minimum_pax_per_event' => 'integer',
+            'is_active' => 'boolean',
             'reservation_fee_percentage' => 'decimal:2',
-            'downpayment_percentage'     => 'decimal:2',
-            'final_payment_percentage'   => 'decimal:2',
+            'downpayment_percentage' => 'decimal:2',
+            'final_payment_percentage' => 'decimal:2',
             'reservation_validity_hours' => 'integer',
-            'downpayment_due_days'       => 'integer',
-            'final_payment_due_days'     => 'integer',
+            'downpayment_due_days' => 'integer',
+            'final_payment_due_days' => 'integer',
         ];
     }
 

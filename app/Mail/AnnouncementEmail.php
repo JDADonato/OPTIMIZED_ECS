@@ -12,9 +12,7 @@ class AnnouncementEmail extends Mailable implements ShouldQueue
 {
     use Queueable, SerializesModels;
 
-    public function __construct(public Announcement $announcement)
-    {
-    }
+    public function __construct(public Announcement $announcement) {}
 
     public function build(): self
     {

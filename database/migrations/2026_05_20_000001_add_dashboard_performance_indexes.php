@@ -37,7 +37,7 @@ return new class extends Migration
             'payments_paymongo_event_id_idx',
             'messages_conversation_created_at_idx',
         ] as $index) {
-            DB::statement('DROP INDEX IF EXISTS ' . $index);
+            DB::statement('DROP INDEX IF EXISTS '.$index);
         }
     }
 };

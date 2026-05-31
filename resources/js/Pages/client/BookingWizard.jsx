@@ -13,8 +13,10 @@ import FoodTastingStep from '../../Components/client/FoodTastingStep';
 import BlueprintPanel from '../../Components/client/BlueprintPanel';
 import Modal from '../../Components/common/Modal';
 import ClientNavbar from '../../Components/common/ClientNavbar';
+import StaffPreviewBanner from '../../Components/common/StaffPreviewBanner';
 import { getCustomerSafeValidationMessage } from '../../utils/dashboardUtils';
 import csrfFetch from '../../utils/csrf';
+import { dashboardHrefForUser, isStaffUser } from '../../utils/dashboardLinks';
 
 const totalSteps = 7;
 
@@ -104,6 +106,7 @@ const menuRowsFromBooking = (data = {}) => Object.values(data.customMenu || {})
 const BookingWizard = () => {
     const { user } = useAuth();
     const toast = useToast();
+    const dashboardHref = dashboardHrefForUser(user, '/');
     const [summaryCollapsed, setSummaryCollapsed] = useState(false);
     const {
         bookingData,
@@ -314,7 +317,7 @@ const BookingWizard = () => {
                 'success',
                 'Booking Submitted',
                 'Your event plan has been submitted. Open your dashboard to track approval, payments, event details, menu edits, tastings, and messages from the Eloquente team.',
-                () => router.get('/dashboard/client'),
+                () => router.get(dashboardHref),
                 'Go to Dashboard'
             );
         } catch (error) {
@@ -368,6 +371,7 @@ const BookingWizard = () => {
                 <meta name="description" content="Plan your Eloquente Catering event with guided steps for event type, date availability, guests, packages, menu, logistics, and tasting." />
             </Head>
             <ClientNavbar user={user} />
+            <StaffPreviewBanner user={user} label="customer-facing booking page" />
 
             {showResumeModal && (
                 <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/55 p-4 backdrop-blur-sm">
@@ -476,7 +480,7 @@ const BookingWizard = () => {
                 confirmText={modal.confirmText}
             />
 
-            <div className="flex min-h-[calc(100vh-68px)] pt-[68px]">
+            <div className={`flex min-h-[calc(100vh-68px)] ${isStaffUser(user) ? 'pt-[104px]' : 'pt-[68px]'}`}>
                 <main className="min-w-0 flex-1">
                     <div className="border-b border-[#720101]/10 bg-white">
                         <div className="mx-auto max-w-7xl px-4 py-4 sm:px-6 lg:px-8">

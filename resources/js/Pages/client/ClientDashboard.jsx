@@ -6,6 +6,7 @@ import ClientNavbar from '../../Components/common/ClientNavbar';
 import ConfirmModal from '../../Components/common/ConfirmModal';
 import SmartImage from '../../Components/common/SmartImage';
 import CustomerAnnouncements from '../../Components/content/CustomerAnnouncements';
+import PasswordUpgradeBanner from '../../Components/auth/PasswordUpgradeBanner';
 import { customerBookingStatus, customerPaymentStatus, isSettledPaymentStatus, liveStatusLabel, paymentTypeLabel, statusToneClasses } from '../../utils/statusLabels';
 import { fetchSmartResource, getUserScopedCacheKey, writeSmartCache } from '../../utils/smartResource';
 import useRealtimeStatus from '../../hooks/useRealtimeStatus';
@@ -708,11 +709,11 @@ const ClientDashboard = () => {
         return sum;
     };
 
-    useEffect(() => {
-        const params = new URLSearchParams(window.location.search);
-        const tab = params.get('tab');
-        const booking = Number(params.get('booking'));
-        const target = params.get('target');
+    const applyDashboardQueryParams = React.useCallback((params) => {
+        const tab = params.get ? params.get('tab') : params.tab;
+        const booking = Number(params.get ? params.get('booking') : params.booking);
+        const target = params.get ? params.get('target') : params.target;
+
         if (dashboardSections.includes(tab)) {
             setActiveSection(tab);
         } else if (tab === 'tastings') {
@@ -725,8 +726,28 @@ const ClientDashboard = () => {
         if (target) {
             setPendingScrollTarget(target);
         }
+    }, []);
+
+    useEffect(() => {
+        applyDashboardQueryParams(new URLSearchParams(window.location.search));
         fetchData({ silent: Boolean(cachedDashboardData) });
     }, []);
+
+    useEffect(() => {
+        const handleNavigationQueryChange = (event) => {
+            if (event.detail?.path && event.detail.path !== window.location.pathname) return;
+
+            const params = event.detail?.params || Object.fromEntries(new URLSearchParams(event.detail?.search || window.location.search).entries());
+            applyDashboardQueryParams(params);
+        };
+
+        window.addEventListener('ecs:navigation-query-change', handleNavigationQueryChange);
+        window.addEventListener('popstate', handleNavigationQueryChange);
+        return () => {
+            window.removeEventListener('ecs:navigation-query-change', handleNavigationQueryChange);
+            window.removeEventListener('popstate', handleNavigationQueryChange);
+        };
+    }, [applyDashboardQueryParams]);
 
     useEffect(() => {
         if (activeSection !== 'menu' || menuCatalogLoaded) return undefined;
@@ -959,7 +980,6 @@ const ClientDashboard = () => {
     const activePaid = React.useMemo(() => activePayments.filter(isSettledPayment).reduce((sum, payment) => sum + Number(payment.amount || 0), 0), [activePayments]);
     const activeTotal = Number(activeBooking?.total_cost || 0);
     const activeBalance = Math.max(activeTotal - activePaid, 0);
-    const activeProgress = activeTotal > 0 ? Math.min((activePaid / activeTotal) * 100, 100) : 0;
     const activeCancellationImpact = activeBooking?.cancellationImpact || {};
     const activeRefundableAmount = Number(activeCancellationImpact.refundable_amount || 0);
     const activeNonRefundableAmount = Number(activeCancellationImpact.non_refundable_amount || 0);
@@ -1444,6 +1464,8 @@ const ClientDashboard = () => {
                     </div>
                 )}
 
+                <PasswordUpgradeBanner user={user} className="rounded-2xl shadow-sm" />
+
                 <div className="mb-4 flex justify-end">
                     <LiveSyncIndicator
                         state={dashboardError ? 'error' : (dashboardRefreshing ? 'syncing' : realtimeSyncState)}
@@ -1453,10 +1475,12 @@ const ClientDashboard = () => {
                     />
                 </div>
 
-                <CustomerAnnouncements />
+                <div id="customer-announcements">
+                    <CustomerAnnouncements />
+                </div>
 
                 {feedbackRequests.length > 0 && (
-                    <div className="mb-8 rounded-3xl border border-[#f0aa0b]/30 bg-[#fffaf3] p-6 shadow-sm">
+                    <div id="feedback-request-panel" className="mb-8 rounded-3xl border border-[#f0aa0b]/30 bg-[#fffaf3] p-6 shadow-sm">
                         <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
                             <div className="max-w-2xl">
                                 <p className="text-xs font-black uppercase tracking-widest text-[#720101]">Feedback Request</p>

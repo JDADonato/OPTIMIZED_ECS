@@ -1,10 +1,11 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { RefreshCw } from 'lucide-react';
 import StaffDrawer from '../staff/StaffDrawer';
-import StaffPagination from '../staff/StaffPagination';
 import StaffSkeleton from '../staff/StaffSkeleton';
 import { getListData, getPaginationMeta } from '../../utils/apiResponses';
 import useDebouncedValue from '../../hooks/useDebouncedValue';
 import csrfFetch from '../../utils/csrf';
+import { bookingContactName, customerAccountName, hasDifferentBookingContact } from '../../utils/customerIdentity';
 
 const readinessLabels = {
     payment: 'Accounting: payment clearance',
@@ -52,6 +53,15 @@ const taskStatusClass = (task) => {
     return 'staff-status staff-status-muted';
 };
 
+const mergeRowsByBookingId = (currentRows = [], nextRows = []) => {
+    const byBooking = new Map(currentRows.map((row) => [row.booking?.id, row]));
+    nextRows.forEach((row) => {
+        if (row.booking?.id) byBooking.set(row.booking.id, row);
+    });
+
+    return Array.from(byBooking.values());
+};
+
 const summarizeReadiness = (readiness = {}) => {
     const entries = Object.entries(readiness);
     const blocked = entries.filter(([, ready]) => !ready);
@@ -97,25 +107,57 @@ const PreparationBoard = ({ surfaceMode = 'default' }) => {
     const [perPage, setPerPage] = useState(10);
     const [pagination, setPagination] = useState(null);
     const [summary, setSummary] = useState(null);
+    const [departmentOptions, setDepartmentOptions] = useState([]);
     const [selectedBookingId, setSelectedBookingId] = useState(null);
+    const [selectedRowDetail, setSelectedRowDetail] = useState(null);
+    const [detailLoading, setDetailLoading] = useState(false);
+    const [detailError, setDetailError] = useState('');
     const debouncedQuery = useDebouncedValue(query, 250);
     const boardRequestRef = useRef(null);
+    const detailRequestRef = useRef(null);
+    const boardCacheRef = useRef(new Map());
+    const detailCacheRef = useRef(new Map());
+    const lastBoardListKeyRef = useRef('');
+    const boardListKey = useMemo(() => JSON.stringify({
+        perPage,
+        search: debouncedQuery.trim(),
+        attention: attentionFilter,
+        department: departmentFilter,
+    }), [attentionFilter, debouncedQuery, departmentFilter, perPage]);
 
-    const fetchBoard = async ({ silent = false } = {}) => {
+    const buildBoardParams = useCallback((targetPage) => new URLSearchParams({
+        paginated: '1',
+        lightweight: '1',
+        page: String(targetPage),
+        per_page: String(perPage),
+        search: debouncedQuery.trim(),
+        attention: attentionFilter,
+        department: departmentFilter,
+    }), [attentionFilter, debouncedQuery, departmentFilter, perPage]);
+
+    const applyBoardPayload = useCallback((data, { append = false } = {}) => {
+        const nextRows = getListData(data);
+        setRows((current) => append ? mergeRowsByBookingId(current, nextRows) : nextRows);
+        setPagination(getPaginationMeta(data));
+        setSummary(data?.meta?.summary || null);
+        setDepartmentOptions(Array.isArray(data?.meta?.departments) ? data.meta.departments : []);
+    }, []);
+
+    const fetchBoard = useCallback(async ({ silent = false, targetPage = page, append = targetPage > 1, force = false } = {}) => {
         if (!silent) setLoading(true);
         let controller = null;
+        const params = buildBoardParams(targetPage);
+        const cacheKey = params.toString();
+        const cached = boardCacheRef.current.get(cacheKey);
+        if (cached && !force) {
+            applyBoardPayload(cached, { append });
+            if (!silent) setLoading(false);
+        }
+
         try {
             boardRequestRef.current?.abort();
             controller = new AbortController();
             boardRequestRef.current = controller;
-            const params = new URLSearchParams({
-                paginated: '1',
-                page: String(page),
-                per_page: String(perPage),
-                search: debouncedQuery.trim(),
-                attention: attentionFilter,
-                department: departmentFilter,
-            });
 
             const response = await fetch(`/api/operations/preparation-board?${params.toString()}`, {
                 headers: { Accept: 'application/json' },
@@ -123,9 +165,8 @@ const PreparationBoard = ({ surfaceMode = 'default' }) => {
             });
             const data = await response.json().catch(() => ({}));
             if (!response.ok) throw new Error(data.error || 'Could not load preparation board.');
-            setRows(getListData(data));
-            setPagination(getPaginationMeta(data));
-            setSummary(data?.meta?.summary || null);
+            boardCacheRef.current.set(cacheKey, data);
+            applyBoardPayload(data, { append });
             setError('');
         } catch (err) {
             if (err.name === 'AbortError') return;
@@ -137,23 +178,120 @@ const PreparationBoard = ({ surfaceMode = 'default' }) => {
                 if (!silent) setLoading(false);
             }
         }
-    };
+    }, [applyBoardPayload, buildBoardParams, page]);
 
     useEffect(() => {
-        fetchBoard();
-    }, [page, perPage, debouncedQuery, attentionFilter, departmentFilter]);
+        const listChanged = lastBoardListKeyRef.current !== boardListKey;
+        if (listChanged) {
+            lastBoardListKeyRef.current = boardListKey;
+            setRows([]);
+            setPagination(null);
+            setSelectedBookingId(null);
+            setSelectedRowDetail(null);
+            if (page !== 1) {
+                setPage(1);
+                return;
+            }
+        }
 
-    useEffect(() => {
-        setPage(1);
-    }, [debouncedQuery, attentionFilter, departmentFilter, perPage]);
+        fetchBoard({ targetPage: page, append: !listChanged && page > 1 });
+    }, [boardListKey, fetchBoard, page]);
 
-    const selectedRow = useMemo(() => {
+    useEffect(() => () => {
+        boardRequestRef.current?.abort();
+        detailRequestRef.current?.abort();
+    }, []);
+
+    const selectedListRow = useMemo(() => {
         return rows.find((row) => row.booking?.id === selectedBookingId) || null;
     }, [rows, selectedBookingId]);
 
-    const departments = useMemo(() => {
-        return Array.from(new Set(rows.flatMap((row) => (row.tasks || []).map((task) => responsibleArea(task))).filter(Boolean))).sort();
-    }, [rows]);
+    const selectedRow = selectedRowDetail || selectedListRow;
+    const departments = useMemo(() => departmentOptions.length ? departmentOptions : ['Marketing', 'Accounting', 'Service prep', 'Customer'], [departmentOptions]);
+    const hasMoreRows = Boolean(pagination?.last_page && page < pagination.last_page);
+
+    const fetchHandoffDetail = useCallback(async (bookingId, { force = false, silent = false } = {}) => {
+        if (!bookingId) return null;
+        const cacheKey = String(bookingId);
+        const cached = detailCacheRef.current.get(cacheKey);
+        if (cached && !force) {
+            setSelectedRowDetail(cached);
+            return cached;
+        }
+
+        if (!silent) {
+            setDetailLoading(true);
+            setDetailError('');
+        }
+
+        let controller = null;
+        try {
+            detailRequestRef.current?.abort();
+            controller = new AbortController();
+            detailRequestRef.current = controller;
+            const response = await fetch(`/api/operations/preparation-board/${bookingId}`, {
+                headers: { Accept: 'application/json' },
+                signal: controller.signal,
+            });
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(data.error || 'Could not load handoff details.');
+            detailCacheRef.current.set(cacheKey, data);
+            setSelectedRowDetail(data);
+            setRows((current) => current.map((row) => row.booking?.id === data.booking?.id
+                ? {
+                    ...row,
+                    readiness: data.readiness,
+                    readiness_progress: data.readiness_progress,
+                    task_progress: data.task_progress,
+                    attention_flags: data.attention_flags,
+                }
+                : row));
+            return data;
+        } catch (err) {
+            if (err.name !== 'AbortError') {
+                console.error(err);
+                setDetailError(err.message || 'Could not load handoff details.');
+            }
+            return null;
+        } finally {
+            if (controller && detailRequestRef.current === controller) {
+                detailRequestRef.current = null;
+                if (!silent) setDetailLoading(false);
+            }
+        }
+    }, []);
+
+    const openHandoff = (bookingId) => {
+        setSelectedBookingId(bookingId);
+        setSelectedRowDetail(null);
+        fetchHandoffDetail(bookingId);
+    };
+
+    const applyTaskPatch = (row, updatedTask) => {
+        if (!row || !updatedTask) return row;
+        const updateTask = (task) => task.id === updatedTask.id
+            ? { ...task, ...updatedTask, responsible_area: responsibleArea(updatedTask), raw_department: updatedTask.department }
+            : task;
+        const nextTasks = (row.tasks || []).map(updateTask);
+        const nextGroups = (row.task_groups || []).map((group) => ({
+            ...group,
+            tasks: (group.tasks || []).map(updateTask),
+            completed: (group.tasks || []).map(updateTask).filter((task) => task.status === 'Done').length,
+        }));
+        const completed = nextTasks.filter((task) => task.status === 'Done').length;
+        const total = nextTasks.length || row.task_progress?.total || 0;
+
+        return {
+            ...row,
+            tasks: nextTasks,
+            task_groups: nextGroups,
+            task_progress: {
+                completed,
+                total,
+                percent: total > 0 ? Math.round((completed / total) * 100) : 0,
+            },
+        };
+    };
 
     const toggleTask = async (task) => {
         const nextStatus = task.status === 'Done' ? 'Pending' : 'Done';
@@ -170,7 +308,15 @@ const PreparationBoard = ({ surfaceMode = 'default' }) => {
             });
             const data = await response.json().catch(() => ({}));
             if (!response.ok) throw new Error(data.error || 'Could not update task.');
-            await fetchBoard({ silent: true });
+            setSelectedRowDetail((current) => {
+                const next = applyTaskPatch(current, data.task);
+                if (next?.booking?.id) detailCacheRef.current.set(String(next.booking.id), next);
+                return next;
+            });
+            const refreshed = await fetchHandoffDetail(selectedBookingId, { silent: true, force: true });
+            if (refreshed) {
+                boardCacheRef.current.clear();
+            }
         } catch (err) {
             console.error(err);
             setError(err.message || 'Could not update task.');
@@ -187,7 +333,7 @@ const PreparationBoard = ({ surfaceMode = 'default' }) => {
 
             <div className={isAdminSurface ? 'admin-embedded-workspace' : 'staff-work-surface'}>
                 {summary && (
-                    <div className={isAdminSurface ? 'admin-stat-strip' : 'mb-4 grid gap-3 sm:grid-cols-3 xl:grid-cols-5'}>
+                    <div className={isAdminSurface ? 'admin-stat-strip admin-handoff-stat-strip' : 'mb-4 grid gap-3 sm:grid-cols-3 xl:grid-cols-5'}>
                         {[
                             ['Upcoming', summary.upcoming],
                             ['Needs attention', summary.needs_attention],
@@ -202,7 +348,7 @@ const PreparationBoard = ({ surfaceMode = 'default' }) => {
                         ))}
                     </div>
                 )}
-                <div className={isAdminSurface ? 'admin-command-strip' : 'staff-filter-bar'}>
+                <div className={isAdminSurface ? 'admin-command-strip admin-handoff-command-strip' : 'staff-filter-bar'}>
                     <input
                         value={query}
                         onChange={(event) => setQuery(event.target.value)}
@@ -221,7 +367,23 @@ const PreparationBoard = ({ surfaceMode = 'default' }) => {
                         <option value="all">All responsible areas</option>
                         {departments.map((department) => <option key={department} value={department}>{department}</option>)}
                     </select>
-                    <button type="button" onClick={() => fetchBoard()} className="staff-row-action">Refresh</button>
+                    <button
+                        type="button"
+                        onClick={() => {
+                            boardCacheRef.current.clear();
+                            if (page !== 1) {
+                                setRows([]);
+                                setPage(1);
+                                return;
+                            }
+                            fetchBoard({ targetPage: 1, append: false, force: true });
+                        }}
+                        className={isAdminSurface ? 'admin-icon-action admin-refresh-action' : 'staff-row-action admin-refresh-action'}
+                        aria-label="Refresh preparation board"
+                        title="Refresh preparation board"
+                    >
+                        <RefreshCw className="h-5 w-5" aria-hidden="true" />
+                    </button>
                 </div>
 
                 {loading && rows.length === 0 ? (
@@ -255,7 +417,10 @@ const PreparationBoard = ({ surfaceMode = 'default' }) => {
                                             </td>
                                             <td>
                                                 <div className="font-black text-slate-950">{eventName(row.booking)}</div>
-                                                <div className="mt-0.5 text-xs font-bold text-slate-500">{row.booking.client_full_name || 'Customer'} / {row.booking.pax || 0} pax</div>
+                                                <div className="mt-0.5 text-xs font-bold text-slate-500">Booking contact: {bookingContactName(row.booking)} / {row.booking.pax || 0} pax</div>
+                                                {hasDifferentBookingContact(row.booking) && (
+                                                    <div className="text-xs font-bold text-amber-700">Account: {customerAccountName(row.booking)}</div>
+                                                )}
                                             </td>
                                             <td>
                                                 <div className="staff-readiness-cell">
@@ -285,7 +450,7 @@ const PreparationBoard = ({ surfaceMode = 'default' }) => {
                                                 )}
                                             </td>
                                             <td className="text-right">
-                                                <button type="button" onClick={() => setSelectedBookingId(row.booking.id)} className="staff-row-action staff-row-action-primary">
+                                                <button type="button" onClick={() => openHandoff(row.booking.id)} className="staff-row-action staff-row-action-primary">
                                                     Open handoff
                                                 </button>
                                             </td>
@@ -295,24 +460,40 @@ const PreparationBoard = ({ surfaceMode = 'default' }) => {
                                 </tbody>
                             </table>
                         </div>
-                        <StaffPagination
-                            page={page}
-                            perPage={perPage}
-                            total={pagination?.total || rows.length}
-                            onPageChange={setPage}
-                            onPerPageChange={setPerPage}
-                            perPageOptions={[10, 25, 50]}
-                        />
+                        <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                            <p className="text-xs font-black uppercase tracking-[0.14em] text-slate-400">
+                                Showing {rows.length} of {pagination?.total || rows.length}
+                            </p>
+                            <div className="flex flex-wrap items-center gap-2">
+                                <select value={perPage} onChange={(event) => setPerPage(Number(event.target.value))} className="staff-control max-w-[9rem]">
+                                    {[10, 25, 50].map((option) => <option key={option} value={option}>{option} per load</option>)}
+                                </select>
+                                {hasMoreRows && (
+                                    <button
+                                        type="button"
+                                        onClick={() => setPage((current) => current + 1)}
+                                        disabled={loading}
+                                        className="staff-row-action staff-row-action-primary"
+                                    >
+                                        {loading ? 'Loading...' : 'Show more'}
+                                    </button>
+                                )}
+                            </div>
+                        </div>
                     </>
                 )}
             </div>
 
             <StaffDrawer
-                isOpen={Boolean(selectedRow)}
+                isOpen={Boolean(selectedBookingId)}
                 title="Event Handoff Brief"
                 eyebrow={selectedRow ? eventName(selectedRow.booking) : 'Preparation handoff'}
-                onClose={() => setSelectedBookingId(null)}
-                footer={selectedRow ? (
+                onClose={() => {
+                    setSelectedBookingId(null);
+                    setSelectedRowDetail(null);
+                    setDetailError('');
+                }}
+                footer={selectedRowDetail ? (
                     <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                         <p className="text-xs font-bold text-slate-500">
                             {selectedRow.next_action?.label || 'Review the event handoff before closing.'}
@@ -330,7 +511,11 @@ const PreparationBoard = ({ surfaceMode = 'default' }) => {
                     </div>
                 ) : null}
             >
-                {selectedRow && (
+                {detailLoading && !selectedRowDetail ? (
+                    <StaffSkeleton rows={6} label="Loading handoff details" />
+                ) : detailError ? (
+                    <div className="rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-sm font-bold text-red-700">{detailError}</div>
+                ) : selectedRowDetail && (
                     <div className="space-y-4">
                         <section className="rounded-xl border border-amber-100 bg-white p-4">
                             <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
@@ -338,7 +523,7 @@ const PreparationBoard = ({ surfaceMode = 'default' }) => {
                                     <p className="marketing-kicker">{bookingRef(selectedRow.booking)}</p>
                                     <h3 className="mt-1 text-xl font-black text-slate-950">{eventName(selectedRow.booking)}</h3>
                                     <p className="mt-2 text-sm font-semibold text-slate-500">
-                                        {selectedRow.booking.client_full_name || 'Customer'} / {selectedRow.booking.status}
+                                        Booking contact: {bookingContactName(selectedRow.booking)} / {selectedRow.booking.status}
                                     </p>
                                 </div>
                                 <div className="min-w-[8rem] text-left sm:text-right">
@@ -351,6 +536,7 @@ const PreparationBoard = ({ surfaceMode = 'default' }) => {
                             <div className="mt-4 grid gap-3 sm:grid-cols-2">
                                 {[
                                     ['Schedule', `${formatDate(selectedRow.booking.event_date)} / ${formatTime(selectedRow.booking.event_time)}`],
+                                    ['Customer account', hasDifferentBookingContact(selectedRow.booking) ? customerAccountName(selectedRow.booking) : 'Same as booking contact'],
                                     ['Guests', `${selectedRow.booking.pax || 0} pax`],
                                     ['Venue', selectedRow.booking.venue_address_line || selectedRow.booking.venue_city || 'Venue TBD'],
                                     ['Owner', selectedRow.booking.owner_name || 'Unassigned'],

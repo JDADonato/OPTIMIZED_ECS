@@ -14,8 +14,7 @@ class StaffAccountLifecycleNotification extends Notification implements ShouldQu
     public function __construct(
         private readonly string $event,
         private readonly ?string $role = null,
-    ) {
-    }
+    ) {}
 
     public function via(object $notifiable): array
     {
@@ -44,7 +43,7 @@ class StaffAccountLifecycleNotification extends Notification implements ShouldQu
             ],
             'role_changed' => [
                 'subject' => 'Your Eloquente staff role was updated',
-                'line' => 'Your staff account role was updated' . ($this->role ? " to {$this->role}." : '.'),
+                'line' => 'Your staff account role was updated'.($this->role ? " to {$this->role}." : '.'),
                 'action' => 'Sign in',
             ],
             default => [

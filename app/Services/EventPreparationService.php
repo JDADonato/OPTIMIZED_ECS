@@ -44,7 +44,7 @@ class EventPreparationService
 
     public static function ensureFeedbackRequest(Booking $booking): ?FeedbackRequest
     {
-        if (!$booking->user_id) {
+        if (! $booking->user_id) {
             return null;
         }
 

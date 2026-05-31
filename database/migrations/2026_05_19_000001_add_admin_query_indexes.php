@@ -42,7 +42,7 @@ return new class extends Migration
             'payments_status_due_date_idx',
             'users_role_created_at_idx',
         ] as $index) {
-            DB::statement('DROP INDEX IF EXISTS ' . $index);
+            DB::statement('DROP INDEX IF EXISTS '.$index);
         }
     }
 };

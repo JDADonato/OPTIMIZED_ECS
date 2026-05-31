@@ -12,7 +12,7 @@ class RecordPerformanceTiming
 {
     public function handle(Request $request, Closure $next): Response
     {
-        if (!filter_var(env('PERFORMANCE_TIMING_ENABLED', false), FILTER_VALIDATE_BOOLEAN)) {
+        if (! config('performance.timing_enabled', false)) {
             return $next($request);
         }
 
@@ -31,7 +31,7 @@ class RecordPerformanceTiming
         $durationMs = round((microtime(true) - $startedAt) * 1000, 2);
         $memoryMb = round((memory_get_peak_usage(true) - $startMemory) / 1024 / 1024, 2);
         $responseSizeKb = $this->responseSizeKb($response);
-        $thresholdMs = (float) env('PERFORMANCE_TIMING_THRESHOLD_MS', 750);
+        $thresholdMs = (float) config('performance.timing_threshold_ms', 750);
 
         if ($durationMs >= $thresholdMs || $request->is('api/*')) {
             Log::info('performance.timing', [
@@ -53,13 +53,13 @@ class RecordPerformanceTiming
 
     private function responseSizeKb(Response $response): ?float
     {
-        if (!$response->headers->has('Content-Length') && !method_exists($response, 'getContent')) {
+        if (! $response->headers->has('Content-Length') && ! method_exists($response, 'getContent')) {
             return null;
         }
 
         $bytes = $response->headers->get('Content-Length');
 
-        if (!$bytes && method_exists($response, 'getContent')) {
+        if (! $bytes && method_exists($response, 'getContent')) {
             $content = $response->getContent();
             $bytes = is_string($content) ? strlen($content) : null;
         }

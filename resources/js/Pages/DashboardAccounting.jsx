@@ -23,6 +23,8 @@ import { staffPaymentStatus } from '../utils/statusLabels';
 import csrfFetch from '../utils/csrf';
 import { clearSmartCacheForPrefix, fetchSmartResource, getUserScopedCacheKey, readSmartCache } from '../utils/smartResource';
 import { operationalChannelsForUser } from '../utils/liveChannels';
+import { ACCOUNTING_WORKSPACE_NAV_GROUPS, withNavCounts } from '../utils/staffWorkspaceNav';
+import { bookingContactEmail, bookingContactName, customerAccountName, hasDifferentBookingContact } from '../utils/customerIdentity';
 
 const PAYMENT_TYPE_LABELS = {
     Reservation: { label: 'Reservation Fee', pct: '10%', icon: 'R' },
@@ -45,7 +47,7 @@ const readInitialAccountingSegment = () => {
 };
 
 const DashboardAccounting = () => {
-    const { user, logout } = useAuth();
+    const { user } = useAuth();
     const accountingWorkspacePrefs = user?.profile_preferences?.staff_workspace?.accounting || {};
     const accountingDefaultTab = ACCOUNTING_WORKSPACE_TABS.includes(accountingWorkspacePrefs.default_tab) ? accountingWorkspacePrefs.default_tab : 'today';
     const [activeTab, setActiveTab] = useStaffWorkspaceState({
@@ -657,7 +659,9 @@ const DashboardAccounting = () => {
             const haystack = [
                 item.id,
                 item.booking_id,
-                item.client_full_name,
+                bookingContactName(item),
+                bookingContactEmail(item),
+                customerAccountName(item),
                 item.payment_type,
                 item.status,
                 item.paymongo_checkout_session_id,
@@ -693,8 +697,9 @@ const DashboardAccounting = () => {
 
             return [
             item.booking_id,
-            item.client_full_name,
-            item.client_email,
+            bookingContactName(item),
+            bookingContactEmail(item),
+            customerAccountName(item),
             item.event_date,
             ].join(' ').toLowerCase().includes(needle);
         });
@@ -801,7 +806,7 @@ const DashboardAccounting = () => {
                                 <thead>
                                     <tr>
                                         <th>Tier</th>
-                                        <th className="text-right">Amount</th>
+                                        <th className="text-left">Amount</th>
                                         <th>Due</th>
                                         <th>Status</th>
                                         <th className="text-right">Actions</th>
@@ -817,7 +822,7 @@ const DashboardAccounting = () => {
                                                     <p className="font-black text-slate-950">{typeInfo.label}</p>
                                                     <p className="text-xs font-bold text-slate-400">{typeInfo.pct} of total</p>
                                                 </td>
-                                                <td className="text-right font-black text-slate-950">{'P' + toMoneyNumber(payment.amount).toLocaleString()}</td>
+                                                <td className="text-left font-black text-slate-950">{'P' + toMoneyNumber(payment.amount).toLocaleString()}</td>
                                                 <td>{formatAccountingDate(payment.due_date, '-')}</td>
                                                 <td><StaffStatusBadge tone={statusInfo.tone === 'success' ? 'good' : statusInfo.tone === 'danger' ? 'danger' : 'warn'}>{statusInfo.label}</StaffStatusBadge></td>
                                                 <td className="text-right">{renderPaymentActions(payment, booking)}</td>
@@ -865,7 +870,7 @@ const DashboardAccounting = () => {
                             <thead>
                                 <tr>
                                     <th>Payment</th>
-                                    <th>Customer</th>
+                                <th>Booking contact</th>
                                     <th>Provider references</th>
                                     <th>Issue</th>
                                     <th className="text-right">Next action</th>
@@ -882,7 +887,7 @@ const DashboardAccounting = () => {
                                                 <p className="text-xs font-bold text-slate-400">Booking #{item.booking_id} / {item.payment_type || 'Payment'} / {item.status}</p>
                                             </td>
                                             <td>
-                                                <p className="font-black text-slate-950">{item.client_full_name || 'Customer'}</p>
+                                                <p className="font-black text-slate-950">{bookingContactName(item)}</p>
                                                 <p className="text-xs font-bold text-slate-400">{formatAccountingDate(item.event_date)}</p>
                                             </td>
                                             <td>
@@ -955,7 +960,7 @@ const DashboardAccounting = () => {
             <div className="staff-filter-bar">
                 <input
                     type="text"
-                    placeholder="Search client or booking number"
+                    placeholder="Search booking contact or booking number"
                     value={bookingSearchQuery}
                     onChange={(e) => setBookingSearchQuery(e.target.value)}
                     className="staff-control"
@@ -965,8 +970,8 @@ const DashboardAccounting = () => {
                     <option value="eventDateLatest">Event date latest</option>
                     <option value="bookingNewest">Booking newest</option>
                     <option value="bookingOldest">Booking oldest</option>
-                    <option value="clientAZ">Client A-Z</option>
-                    <option value="clientZA">Client Z-A</option>
+                    <option value="clientAZ">Booking contact A-Z</option>
+                    <option value="clientZA">Booking contact Z-A</option>
                 </select>
                 <select value={bookingPaymentFilter} onChange={(e) => setBookingPaymentFilter(e.target.value)} className="staff-control">
                     <option value="all">All payments</option>
@@ -984,10 +989,10 @@ const DashboardAccounting = () => {
                         <thead>
                             <tr>
                                 <th>Booking</th>
-                                <th>Client</th>
+                                <th>Booking contact</th>
                                 <th>Event</th>
-                                <th className="text-right">Total</th>
-                                <th className="text-right">Paid</th>
+                                <th className="text-left">Total</th>
+                                <th className="text-left">Paid</th>
                                 <th>Status</th>
                                 <th className="text-right">Actions</th>
                             </tr>
@@ -1005,12 +1010,15 @@ const DashboardAccounting = () => {
                                         <td className="font-black text-[#720101]">#{booking.id}</td>
                                         <td>
                                             <p className="font-black text-slate-950">{eventDisplayName(booking)}</p>
-                                            <p className="text-xs font-semibold text-slate-500">{booking.client_full_name || booking.username || 'Customer'}</p>
-                                            <p className="text-xs font-bold text-slate-400">{booking.client_email || booking.client_phone || 'No contact info'}</p>
+                                            <p className="text-xs font-semibold text-slate-500">{bookingContactName(booking)}</p>
+                                            <p className="text-xs font-bold text-slate-400">{bookingContactEmail(booking) || 'No contact info'}</p>
+                                            {hasDifferentBookingContact(booking) && (
+                                                <p className="text-xs font-bold text-amber-700">Account: {customerAccountName(booking)}</p>
+                                            )}
                                         </td>
                                         <td>{formatAccountingDate(booking.event_date)} / {booking.pax || 0} guests</td>
-                                        <td className="text-right font-black text-slate-950">{'P' + totalCost.toLocaleString()}</td>
-                                        <td className="text-right font-black text-emerald-700">{'P' + paidAmount.toLocaleString()}</td>
+                                        <td className="text-left font-black text-slate-950">{'P' + totalCost.toLocaleString()}</td>
+                                        <td className="text-left font-black text-emerald-700">{'P' + paidAmount.toLocaleString()}</td>
                                         <td><StaffStatusBadge tone={hasPending ? 'warn' : 'good'}>{progress.verified}/{progress.total} verified</StaffStatusBadge></td>
                                         <td className="text-right">
                                             <button type="button" onClick={() => setSelectedFinanceBooking(booking)} className="staff-row-action">Open</button>
@@ -1058,20 +1066,12 @@ const DashboardAccounting = () => {
             onNavigate={setActiveTab}
             onLogout={handleLogout}
             roleKey="accounting"
-            navGroups={[
-                {
-                    label: 'Daily work',
-                    items: [
-                        { id: 'today', label: 'Today', count: dashboardSummary.pending + dashboardSummary.overdue + dashboardSummary.exceptions + dashboardSummary.refunds },
-                        { id: 'payments', label: 'Payments', count: dashboardSummary.pending + dashboardSummary.overdue + dashboardSummary.exceptions },
-                        { id: 'reconciliation', label: 'Reconciliation', count: dashboardSummary.exceptions },
-                        { id: 'refunds', label: 'Refunds', count: dashboardSummary.refunds },
-                        { id: 'ledger', label: 'Ledger & Receipts' },
-                        { id: 'settings', label: 'Settings' },
-                        { id: 'history', label: 'Event History' },
-                    ],
-                },
-            ]}
+            navGroups={withNavCounts(ACCOUNTING_WORKSPACE_NAV_GROUPS, {
+                today: dashboardSummary.pending + dashboardSummary.overdue + dashboardSummary.exceptions + dashboardSummary.refunds,
+                payments: dashboardSummary.pending + dashboardSummary.overdue + dashboardSummary.exceptions,
+                reconciliation: dashboardSummary.exceptions,
+                refunds: dashboardSummary.refunds,
+            })}
         >
                 <StaffPageHeader
                     eyebrow={activeTab === 'today' ? 'Today' : 'Finance workflow'}
@@ -1314,7 +1314,7 @@ const DashboardAccounting = () => {
                                                                 <thead>
                                                                     <tr className="text-xs uppercase text-slate-400 border-b border-amber-100">
                                                                         <th className="text-left py-2 pr-4">Payment Tier</th>
-                                                                        <th className="text-right py-2 px-4">Amount</th>
+                                                                        <th className="text-left py-2 px-4">Amount</th>
                                                                         <th className="text-center py-2 px-4">Due Date</th>
                                                                         <th className="text-center py-2 px-4">Status</th>
                                                                         <th className="text-right py-2 pl-4">Actions</th>
@@ -1336,7 +1336,7 @@ const DashboardAccounting = () => {
                                                                                         </div>
                                                                                     </div>
                                                                                 </td>
-                                                                                <td className="text-right py-3 px-4">
+                                                                                <td className="text-left py-3 px-4">
                                                                                     <span className="font-bold text-slate-950">{'P' + (payment.amount ? payment.amount.toLocaleString() : '0')}</span>
                                                                                 </td>
                                                                                 <td className="text-center py-3 px-4">
@@ -1564,7 +1564,15 @@ const DashboardAccounting = () => {
                                 <StaffSkeleton rows={6} label="Loading transactions" />
                             ) : (() => {
                                 const filteredLedgerPayments = ledgerPayments.filter(p => {
-                                    if (ledgerFilter.clientSearch && !((p.client_full_name || p.username || '').toLowerCase().includes(ledgerFilter.clientSearch.toLowerCase()))) return false;
+                                    if (ledgerFilter.clientSearch) {
+                                        const ledgerNeedle = ledgerFilter.clientSearch.toLowerCase();
+                                        const ledgerHaystack = [
+                                            bookingContactName(p),
+                                            bookingContactEmail(p),
+                                            customerAccountName(p),
+                                        ].filter(Boolean).join(' ').toLowerCase();
+                                        if (!ledgerHaystack.includes(ledgerNeedle)) return false;
+                                    }
                                     if (ledgerFilter.packageFilter && ledgerFilter.packageFilter !== 'All' && p.package_id !== ledgerFilter.packageFilter) return false;
                                     return true;
                                 });
@@ -1578,7 +1586,8 @@ const DashboardAccounting = () => {
                                     if (!grouped[p.booking_id]) {
                                         grouped[p.booking_id] = {
                                             id: p.booking_id,
-                                            client_full_name: p.client_full_name || p.username,
+                                            ...p,
+                                            client_full_name: bookingContactName(p),
                                             package_id: p.package_id,
                                             event_date: p.event_date,
                                             payments: []
@@ -1596,7 +1605,10 @@ const DashboardAccounting = () => {
                                             <div key={booking.id} className="bg-white border border-[#720101]/10 rounded-xl overflow-hidden hover:border-[#720101]/20 transition-colors">
                                                 <div className="bg-[#fffaf3] px-6 py-4 border-b border-amber-100 flex flex-wrap justify-between items-center gap-4">
                                                     <div>
-                                                        <h3 className="text-lg font-bold text-slate-950">{booking.client_full_name}</h3>
+                                                        <h3 className="text-lg font-bold text-slate-950">{bookingContactName(booking)}</h3>
+                                                        {hasDifferentBookingContact(booking) && (
+                                                            <p className="text-xs font-bold text-amber-700">Customer account: {customerAccountName(booking)}</p>
+                                                        )}
                                                         <p className="text-sm text-slate-500 mt-1">
                                                             Booking #{booking.id} <span className="mx-2">/</span>
                                                             <span className="font-medium">{booking.package_id ? booking.package_id.charAt(0).toUpperCase() + booking.package_id.slice(1) : 'Custom'} Package</span>
@@ -1614,7 +1626,7 @@ const DashboardAccounting = () => {
                                                         <thead className="bg-white border-b border-amber-100">
                                                             <tr className="text-xs font-bold text-slate-400 uppercase tracking-wider">
                                                                 <th className="text-left py-4 px-6">Payment Type</th>
-                                                                <th className="text-right py-4 px-6">Amount</th>
+                                                                <th className="text-left py-4 px-6">Amount</th>
                                                                 <th className="text-center py-4 px-6">Due Date</th>
                                                                 <th className="text-center py-4 px-6">Status</th>
                                                                 <th className="text-right py-4 px-6">Receipt</th>
@@ -1634,7 +1646,7 @@ const DashboardAccounting = () => {
                                                                                 <span className="font-bold text-slate-950">{typeInfo.label}</span>
                                                                             </div>
                                                                         </td>
-                                                                        <td className="py-4 px-6 text-right font-bold text-slate-950">
+                                                                        <td className="py-4 px-6 text-left font-bold text-slate-950">
                                                                             {'P' + (p.amount ? p.amount.toLocaleString() : '0')}
                                                                         </td>
                                                                         <td className="py-4 px-6 text-center text-slate-600 font-medium">
@@ -1688,7 +1700,7 @@ const DashboardAccounting = () => {
                                 value={reconciliationSearch}
                                 onChange={(event) => setReconciliationSearch(event.target.value)}
                                 className="staff-control"
-                                placeholder="Search booking, customer, or payment reference"
+                                placeholder="Search booking, booking contact, account, or payment reference"
                             />
                             <select value={reconciliationTypeFilter} onChange={(event) => setReconciliationTypeFilter(event.target.value)} className="staff-control">
                                 <option value="all">All issue types</option>
@@ -1712,7 +1724,7 @@ const DashboardAccounting = () => {
                                     <thead>
                                         <tr>
                                             <th className="px-6 py-4 text-left font-bold text-slate-500 uppercase tracking-wider text-xs">Payment</th>
-                                            <th className="px-6 py-4 text-left font-bold text-slate-500 uppercase tracking-wider text-xs">Customer</th>
+                                            <th className="px-6 py-4 text-left font-bold text-slate-500 uppercase tracking-wider text-xs">Booking contact</th>
                                             <th className="px-6 py-4 text-left font-bold text-slate-500 uppercase tracking-wider text-xs">Payment References</th>
                                             <th className="px-6 py-4 text-center font-bold text-slate-500 uppercase tracking-wider text-xs">Online Update</th>
                                             <th className="px-6 py-4 text-left font-bold text-slate-500 uppercase tracking-wider text-xs">Issue</th>
@@ -1730,7 +1742,10 @@ const DashboardAccounting = () => {
                                                     <div className="text-xs text-slate-500 mt-0.5">{item.payment_type || 'Payment'} / {item.status}</div>
                                                 </td>
                                                 <td className="px-6 py-4">
-                                                    <div className="font-bold text-slate-950">{item.client_full_name || 'Customer'}</div>
+                                                    <div className="font-bold text-slate-950">{bookingContactName(item)}</div>
+                                                    {hasDifferentBookingContact(item) && (
+                                                        <div className="text-xs font-bold text-amber-700">Account: {customerAccountName(item)}</div>
+                                                    )}
                                                     <div className="text-xs text-slate-500 mt-0.5">{formatAccountingDate(item.event_date)}</div>
                                                 </td>
                                                 <td className="px-6 py-4">
@@ -1805,7 +1820,7 @@ const DashboardAccounting = () => {
                                 value={refundSearch}
                                 onChange={(event) => setRefundSearch(event.target.value)}
                                 className="staff-control"
-                                placeholder="Search booking, customer, or email"
+                                placeholder="Search booking, booking contact, account, or email"
                             />
                         </div>
                         {loading ? (
@@ -1825,10 +1840,10 @@ const DashboardAccounting = () => {
                                     <thead>
                                         <tr>
                                             <th className="px-6 py-4 text-left font-bold text-slate-500 uppercase tracking-wider text-xs w-20">Booking No.</th>
-                                            <th className="px-6 py-4 text-left font-bold text-slate-500 uppercase tracking-wider text-xs">Client Name</th>
+                                            <th className="px-6 py-4 text-left font-bold text-slate-500 uppercase tracking-wider text-xs">Booking contact</th>
                                             <th className="px-6 py-4 text-center font-bold text-slate-500 uppercase tracking-wider text-xs">Event Date</th>
-                                            <th className="px-6 py-4 text-right font-bold text-slate-500 uppercase tracking-wider text-xs hidden md:table-cell">Total Paid</th>
-                                            <th className="px-6 py-4 text-right font-bold text-slate-500 uppercase tracking-wider text-xs">Refund Amount (minus 10%)</th>
+                                            <th className="px-6 py-4 text-left font-bold text-slate-500 uppercase tracking-wider text-xs hidden md:table-cell">Total Paid</th>
+                                            <th className="px-6 py-4 text-left font-bold text-slate-500 uppercase tracking-wider text-xs">Refund Amount (minus 10%)</th>
                                             <th className="px-6 py-4 text-right font-bold text-slate-500 uppercase tracking-wider text-xs">Actions</th>
                                         </tr>
                                     </thead>
@@ -1843,18 +1858,21 @@ const DashboardAccounting = () => {
                                                 <tr key={item.booking_id} className="border-b border-amber-50 hover:bg-[#fffaf3] transition-colors">
                                                     <td className="px-6 py-4 text-left font-bold text-slate-950">#{item.booking_id}</td>
                                                     <td className="px-6 py-4 text-left">
-                                                        <div className="font-bold text-slate-950">{item.client_full_name}</div>
-                                                        <div className="text-xs text-slate-500 mt-0.5">{item.client_email}</div>
+                                                        <div className="font-bold text-slate-950">{bookingContactName(item)}</div>
+                                                        <div className="text-xs text-slate-500 mt-0.5">{bookingContactEmail(item)}</div>
+                                                        {hasDifferentBookingContact(item) && (
+                                                            <div className="text-xs font-bold text-amber-700">Account: {customerAccountName(item)}</div>
+                                                        )}
                                                     </td>
                                                     <td className="px-6 py-4 text-center text-slate-600 font-medium whitespace-nowrap">{formatAccountingDate(item.event_date)}</td>
-                                                    <td className="px-6 py-4 text-right hidden md:table-cell text-slate-500 line-through">
+                                                    <td className="px-6 py-4 text-left hidden md:table-cell text-slate-500 line-through">
                                                         PHP {item.total_paid ? item.total_paid.toLocaleString() : '0'}
                                                     </td>
-                                                    <td className="px-6 py-4 text-right font-bold text-[#720101]">
+                                                    <td className="px-6 py-4 text-left font-bold text-[#720101]">
                                                         PHP {refundAmount > 0 ? refundAmount.toLocaleString() : '0'}
                                                         <div className="text-[10px] text-slate-400 font-normal mt-1">(PHP {penalty.toLocaleString()} fee deducted)</div>
                                                         <div className="mt-1 text-[10px] font-black uppercase tracking-wide text-slate-500">{item.refund_status || 'Needs Review'}</div>
-                                                        {item.refund_cases?.[0]?.notes && <div className="mt-1 max-w-[14rem] text-right text-[10px] font-semibold text-slate-400">{item.refund_cases[0].notes}</div>}
+                                                        {item.refund_cases?.[0]?.notes && <div className="mt-1 max-w-[14rem] text-left text-[10px] font-semibold text-slate-400">{item.refund_cases[0].notes}</div>}
                                                     </td>
                                                     <td className="px-6 py-4 text-right">
                                                         <div className="flex flex-wrap justify-end gap-2">

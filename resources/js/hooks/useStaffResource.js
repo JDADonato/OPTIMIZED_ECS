@@ -28,10 +28,15 @@ export default function useStaffResource(url, {
     const [refreshing, setRefreshing] = useState(false);
     const [error, setError] = useState(null);
     const abortRef = useRef(null);
+    const dataRef = useRef(initialData);
     const paramsKey = JSON.stringify(params);
     const requestUrl = useMemo(() => buildUrl(url, params), [url, paramsKey]);
     const cacheKey = useMemo(() => getUserScopedCacheKey(user, requestUrl), [requestUrl, user?.id, user?.role]);
     const cached = useMemo(() => readSmartCache(cacheKey), [cacheKey]);
+
+    useEffect(() => {
+        dataRef.current = data;
+    }, [data]);
 
     useEffect(() => {
         if (initialData || !cached?.data) return;
@@ -51,7 +56,7 @@ export default function useStaffResource(url, {
             return currentCached.data;
         }
 
-        if (!bust && currentCached && data === null) {
+        if (!bust && currentCached && dataRef.current === null) {
             setData(currentCached.data);
         }
 
@@ -89,7 +94,7 @@ export default function useStaffResource(url, {
                 setRefreshing(false);
             }
         }
-    }, [cacheKey, data, enabled, requestUrl, ttl]);
+    }, [cacheKey, enabled, requestUrl, ttl]);
 
     useEffect(() => {
         if (!enabled) return undefined;

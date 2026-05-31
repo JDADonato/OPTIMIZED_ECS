@@ -9,13 +9,13 @@ return new class extends Migration
     public function up(): void
     {
         Schema::table('conversation_participants', function (Blueprint $table) {
-            if (!Schema::hasColumn('conversation_participants', 'removed_at')) {
+            if (! Schema::hasColumn('conversation_participants', 'removed_at')) {
                 $table->timestamp('removed_at')->nullable()->index()->after('joined_at');
             }
-            if (!Schema::hasColumn('conversation_participants', 'removed_by')) {
+            if (! Schema::hasColumn('conversation_participants', 'removed_by')) {
                 $table->foreignId('removed_by')->nullable()->after('removed_at')->constrained('users')->nullOnDelete();
             }
-            if (!Schema::hasColumn('conversation_participants', 'removal_reason')) {
+            if (! Schema::hasColumn('conversation_participants', 'removal_reason')) {
                 $table->string('removal_reason')->nullable()->index()->after('removed_by');
             }
         });

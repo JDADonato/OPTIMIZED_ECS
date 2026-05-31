@@ -1,7 +1,9 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, router } from '@inertiajs/react';
 import { Loader2, LockKeyhole, Mail, Phone, UserRound } from 'lucide-react';
 import AuthShell from '../Components/auth/AuthShell';
+import PasswordStrengthField, { PasswordMatchHint } from '../Components/auth/PasswordStrengthField';
+import { evaluatePassword } from '../utils/passwordPolicy';
 
 const Register = () => {
     const [formData, setFormData] = useState({
@@ -18,6 +20,10 @@ const Register = () => {
     const [agreedToTerms, setAgreedToTerms] = useState(false);
     const [canAgree, setCanAgree] = useState(false);
     const termsRef = useRef(null);
+    const passwordEvaluation = useMemo(
+        () => evaluatePassword(formData.password, { username: formData.username, email: formData.email }),
+        [formData.password, formData.username, formData.email],
+    );
 
     useEffect(() => {
         if (showTerms && termsRef.current) {
@@ -47,6 +53,11 @@ const Register = () => {
 
         if (formData.password !== formData.confirmPassword) {
             setError('Passwords do not match');
+            return;
+        }
+
+        if (!passwordEvaluation.valid) {
+            setError('Please complete the password requirements before creating your account.');
             return;
         }
 
@@ -131,17 +142,17 @@ const Register = () => {
                     </div>
 
                     <div className="grid gap-3 sm:grid-cols-2">
-                        <div>
-                            <label htmlFor="password" className="auth-label">Password</label>
-                            <div className="auth-field auth-field-compact">
-                                <LockKeyhole className="h-4 w-4 text-slate-400" />
-                                <input
-                                    id="password" name="password" type="password" required
-                                    className="auth-input"
-                                    placeholder="Password" value={formData.password} onChange={handleChange}
-                                />
-                            </div>
-                        </div>
+                        <PasswordStrengthField
+                            id="password"
+                            name="password"
+                            label="Password"
+                            value={formData.password}
+                            username={formData.username}
+                            email={formData.email}
+                            required
+                            placeholder="Create password"
+                            onChange={(value) => setFormData((current) => ({ ...current, password: value }))}
+                        />
                         <div>
                             <label htmlFor="confirmPassword" className="auth-label">Confirm</label>
                             <div className="auth-field auth-field-compact">
@@ -152,6 +163,11 @@ const Register = () => {
                                     placeholder="Repeat password" value={formData.confirmPassword} onChange={handleChange}
                                 />
                             </div>
+                            <PasswordMatchHint
+                                password={formData.password}
+                                confirmation={formData.confirmPassword}
+                                touched={Boolean(formData.confirmPassword)}
+                            />
                         </div>
                     </div>
 

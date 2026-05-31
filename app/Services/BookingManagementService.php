@@ -5,8 +5,8 @@ namespace App\Services;
 use App\Models\Booking;
 use App\Models\Payment;
 use Carbon\Carbon;
-use Illuminate\Support\Facades\DB;
 use Exception;
+use Illuminate\Support\Facades\DB;
 
 class BookingManagementService
 {
@@ -24,7 +24,7 @@ class BookingManagementService
 
         $eventDate = Carbon::parse($booking->event_date)->startOfDay();
         $daysUntilEvent = now()->startOfDay()->diffInDays($eventDate, false);
-        
+
         return $daysUntilEvent > 14;
     }
 
@@ -36,14 +36,14 @@ class BookingManagementService
     {
         $eventDate = Carbon::parse($booking->event_date)->startOfDay();
         $daysUntilEvent = now()->startOfDay()->diffInDays($eventDate, false);
-        
+
         return $daysUntilEvent > 30;
     }
 
     /**
      * Renegotiate Core Details (Date, Pax, Venue).
      * Rule: Reset milestone_step to 1, requires re-validation against capacity limits.
-     * 
+     *
      * @throws Exception if validation fails
      */
     public function renegotiateCoreDetails(Booking $booking, array $newDetails): Booking
@@ -67,11 +67,11 @@ class BookingManagementService
                     ->count();
 
                 if ($currentEventsOnDate >= BusinessRulesService::MAX_EVENTS_PER_DAY) {
-                    throw new Exception("Maximum events reached for this date.");
+                    throw new Exception('Maximum events reached for this date.');
                 }
 
                 if (($currentPaxOnDate + $checkPax) > BusinessRulesService::MAX_PAX_PER_DAY) {
-                    throw new Exception("Maximum pax capacity reached for this date.");
+                    throw new Exception('Maximum pax capacity reached for this date.');
                 }
             }
 
@@ -85,6 +85,7 @@ class BookingManagementService
             // Optionally we can regenerate the schedule here or leave it to admin/marketing to review first.
 
             DB::commit();
+
             return $booking;
         } catch (Exception $e) {
             DB::rollBack();
@@ -94,14 +95,12 @@ class BookingManagementService
 
     /**
      * Calculate Cancellation Impact without modifying the database.
-     * 
-     * @return array
      */
     public function calculateCancellationImpact(Booking $booking): array
     {
         $eventDate = Carbon::parse($booking->event_date)->startOfDay();
         $daysUntilEvent = now()->startOfDay()->diffInDays($eventDate, false);
-        
+
         $totalPaid = $booking->payments()->active()->whereIn('status', ['Verified', 'Paid'])->sum('amount');
         $totalCost = (float) $booking->total_cost;
         $reservationFee = $totalCost * 0.10;
@@ -126,17 +125,17 @@ class BookingManagementService
             'total_paid' => $totalPaid,
             'non_refundable_amount' => $nonRefundableAmount,
             'refundable_amount' => $refundableAmount,
-            'message' => $refundableAmount > 0 
-                ? "Warning: Because your event is > 7 days away, the 10% Reservation Fee (₱" . number_format($reservationFee, 2) . ") is forfeited. The remaining ₱" . number_format($refundableAmount, 2) . " will be flagged for refund."
-                : ($daysUntilEvent <= 7 
-                    ? "Warning: Because your event is within 7 days, ALL payments (₱" . number_format($nonRefundableAmount, 2) . ") are strictly non-refundable." 
-                    : "Warning: Your 10% Reservation Fee is non-refundable. Your paid amount does not exceed this fee."),
+            'message' => $refundableAmount > 0
+                ? 'Warning: Because your event is > 7 days away, the 10% Reservation Fee (₱'.number_format($reservationFee, 2).') is forfeited. The remaining ₱'.number_format($refundableAmount, 2).' will be flagged for refund.'
+                : ($daysUntilEvent <= 7
+                    ? 'Warning: Because your event is within 7 days, ALL payments (₱'.number_format($nonRefundableAmount, 2).') are strictly non-refundable.'
+                    : 'Warning: Your 10% Reservation Fee is non-refundable. Your paid amount does not exceed this fee.'),
         ];
     }
 
     /**
      * Handle Cancellation and Refund Logic.
-     * 
+     *
      * @return array Contains summary of cancellation financial impact
      */
     public function cancelBooking(Booking $booking): array
@@ -152,6 +151,7 @@ class BookingManagementService
         });
 
         $impact['message'] = str_replace('Warning: ', 'Booking cancelled. ', $impact['message']);
+
         return $impact;
     }
 }

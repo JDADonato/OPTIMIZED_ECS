@@ -249,8 +249,6 @@ const apiPackageToCard = (pkg, categoryKey) => ({
     packageRecord: pkg,
 });
 
-const isDebutEvent = (eventType = '') => String(eventType).toLowerCase().includes('debut');
-
 const resolvePackagePricing = (pkg, pax = 0) => {
     if (pkg.pricingType === 'flat') {
         const guestCount = Number(pax || 0);

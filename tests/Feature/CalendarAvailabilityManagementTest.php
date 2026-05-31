@@ -212,8 +212,8 @@ class CalendarAvailabilityManagementTest extends TestCase
     {
         return User::create([
             'full_name' => 'Marketing Tester',
-            'username' => 'marketing_' . uniqid(),
-            'email' => uniqid('marketing_') . '@example.test',
+            'username' => 'marketing_'.uniqid(),
+            'email' => uniqid('marketing_').'@example.test',
             'password' => 'password',
             'phone' => '09170000001',
             'role' => 'Marketing',
@@ -223,8 +223,8 @@ class CalendarAvailabilityManagementTest extends TestCase
     private function clientUser(): User
     {
         return User::create([
-            'username' => 'client_' . uniqid(),
-            'email' => uniqid('client_') . '@example.test',
+            'username' => 'client_'.uniqid(),
+            'email' => uniqid('client_').'@example.test',
             'password' => 'password',
             'phone' => '09170000002',
             'role' => 'Client',

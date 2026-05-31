@@ -19,6 +19,7 @@ class MessageSent implements ShouldBroadcastNow
     use Dispatchable, InteractsWithSockets, SerializesModels;
 
     public array $messageData;
+
     public int $conversationId;
 
     public function __construct(Message $message)
@@ -46,7 +47,7 @@ class MessageSent implements ShouldBroadcastNow
     public function broadcastOn(): array
     {
         return [
-            new PrivateChannel('conversation.' . $this->conversationId),
+            new PrivateChannel('conversation.'.$this->conversationId),
         ];
     }
 

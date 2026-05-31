@@ -1,0 +1,15 @@
+includes:
+    - vendor/larastan/larastan/extension.neon
+
+parameters:
+    level: 0
+    paths:
+        - app
+        - routes
+    excludePaths:
+        analyse:
+            - app/Console/Commands/Dev*
+    treatPhpDocTypesAsCertain: false
+    ignoreErrors:
+        -
+            identifier: larastan.relationExistence

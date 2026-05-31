@@ -7,6 +7,7 @@ import StaffStatusBadge from './StaffStatusBadge';
 import { getListData, getPaginationMeta } from '../../utils/apiResponses';
 import { feedbackStatusLabel } from '../../utils/statusLabels';
 import csrfFetch from '../../utils/csrf';
+import { bookingContactEmail, bookingContactName, bookingContactPhone, customerAccountName, hasDifferentBookingContact } from '../../utils/customerIdentity';
 
 const formatDate = (value) => {
     if (!value) return '-';
@@ -92,7 +93,6 @@ const EventHistoryPanel = ({ role = 'staff', onToast, surfaceMode = 'default' })
 
     useEffect(() => {
         fetchHistory({ page: 1 });
-        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     const setFilter = (key, value) => {
@@ -160,9 +160,12 @@ const EventHistoryPanel = ({ role = 'staff', onToast, surfaceMode = 'default' })
 
                     <div className="staff-detail-grid">
                         <section className="staff-detail-card">
-                            <p className="staff-detail-label">Client</p>
-                            <p className="staff-detail-value">{selectedEvent.client_full_name || 'Customer'}</p>
-                            <p className="mt-2 text-sm font-semibold text-slate-500">{selectedEvent.client_email || selectedEvent.client_phone || 'No contact recorded'}</p>
+                            <p className="staff-detail-label">Booking contact</p>
+                            <p className="staff-detail-value">{bookingContactName(selectedEvent)}</p>
+                            <p className="mt-2 text-sm font-semibold text-slate-500">{bookingContactEmail(selectedEvent) || bookingContactPhone(selectedEvent) || 'No contact recorded'}</p>
+                            {hasDifferentBookingContact(selectedEvent) && (
+                                <p className="mt-2 text-xs font-black uppercase tracking-wide text-amber-700">Customer account: {customerAccountName(selectedEvent)}</p>
+                            )}
                         </section>
                         <section className="staff-detail-card">
                             <p className="staff-detail-label">Event</p>
@@ -254,7 +257,7 @@ const EventHistoryPanel = ({ role = 'staff', onToast, surfaceMode = 'default' })
             )}
 
             <div className={isAdminSurface ? 'admin-command-strip event-history-filter-bar' : 'staff-filter-bar event-history-filter-bar'}>
-                <input value={filters.search} onChange={(event) => setFilter('search', event.target.value)} className="staff-control" placeholder="Search client, event, venue, or booking #" />
+                <input value={filters.search} onChange={(event) => setFilter('search', event.target.value)} className="staff-control" placeholder="Search booking contact, account, event, venue, or booking #" />
                 <input type="date" value={filters.date_from} onChange={(event) => setFilter('date_from', event.target.value)} className="staff-control" />
                 <input type="date" value={filters.date_to} onChange={(event) => setFilter('date_to', event.target.value)} className="staff-control" />
                 <select value={filters.post_event_status} onChange={(event) => setFilter('post_event_status', event.target.value)} className="staff-control">
@@ -299,7 +302,7 @@ const EventHistoryPanel = ({ role = 'staff', onToast, surfaceMode = 'default' })
                             <tr>
                                 <th>Booking</th>
                                 <th>Event</th>
-                                <th>Client</th>
+                                <th>Booking contact</th>
                                 <th>Owner</th>
                                 <th>Post-event</th>
                                 <th>Feedback</th>
@@ -318,8 +321,11 @@ const EventHistoryPanel = ({ role = 'staff', onToast, surfaceMode = 'default' })
                                             <p className="text-xs font-bold text-slate-400">{formatDate(event.event_date)} / {event.pax || 0} guests</p>
                                         </td>
                                         <td>
-                                            <p className="font-black text-slate-950">{event.client_full_name || 'Customer'}</p>
-                                            <p className="text-xs font-bold text-slate-400">{event.client_email || event.client_phone || 'No contact'}</p>
+                                            <p className="font-black text-slate-950">{bookingContactName(event)}</p>
+                                            <p className="text-xs font-bold text-slate-400">{bookingContactEmail(event) || bookingContactPhone(event) || 'No contact'}</p>
+                                            {hasDifferentBookingContact(event) && (
+                                                <p className="text-xs font-bold text-amber-700">Account: {customerAccountName(event)}</p>
+                                            )}
                                         </td>
                                         <td>{event.owner_name || 'Unassigned'}</td>
                                         <td><StaffStatusBadge tone={statusTone(event.post_event_status)}>{event.post_event_status || 'Completed'}</StaffStatusBadge></td>

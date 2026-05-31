@@ -1,6 +1,7 @@
 import React from 'react';
 import { paymentMethodLabel } from '../../utils/statusLabels';
-import { Download, Printer, CheckCircle, FileText } from 'lucide-react';
+import { bookingContactEmail, bookingContactName, bookingContactPhone, customerAccountName, hasDifferentBookingContact } from '../../utils/customerIdentity';
+import { Download, Printer, CheckCircle } from 'lucide-react';
 
 const ReceiptModal = ({ isOpen, onClose, payment, booking }) => {
     if (!isOpen || !payment || !booking) return null;
@@ -32,7 +33,7 @@ const ReceiptModal = ({ isOpen, onClose, payment, booking }) => {
     const baseBudget = Number(booking.budget || totalCost - transportFee - laborSurcharge + discount);
 
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-fadeIn">
+        <div className="fixed inset-0 z-[130] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-fadeIn">
             <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[90vh]">
 
                 {/* Print Section */}
@@ -63,13 +64,16 @@ const ReceiptModal = ({ isOpen, onClose, payment, booking }) => {
                         </div>
                     </div>
 
-                    {/* Client Info */}
+                    {/* Booking contact */}
                     <div className="grid grid-cols-2 gap-8 mb-8 bg-gray-50 p-6 rounded-xl border border-gray-100">
                         <div>
-                            <p className="text-xs font-bold uppercase tracking-widest text-gray-400 mb-2">Billed To</p>
-                            <p className="font-bold text-gray-900 text-lg">{booking.client_full_name || booking.username}</p>
-                            <p className="text-sm text-gray-600 mt-1">{booking.client_email}</p>
-                            <p className="text-sm text-gray-600">{booking.client_phone}</p>
+                            <p className="text-xs font-bold uppercase tracking-widest text-gray-400 mb-2">Booking Contact</p>
+                            <p className="font-bold text-gray-900 text-lg">{bookingContactName(booking)}</p>
+                            <p className="text-sm text-gray-600 mt-1">{bookingContactEmail(booking)}</p>
+                            <p className="text-sm text-gray-600">{bookingContactPhone(booking)}</p>
+                            {hasDifferentBookingContact(booking) && (
+                                <p className="mt-2 text-xs font-bold text-amber-700">Customer account: {customerAccountName(booking)}</p>
+                            )}
                         </div>
                         <div>
                             <p className="text-xs font-bold uppercase tracking-widest text-gray-400 mb-2">Event Details</p>

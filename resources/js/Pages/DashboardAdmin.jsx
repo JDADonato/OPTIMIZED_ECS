@@ -1,26 +1,39 @@
-import React, { Suspense, lazy, useState, useEffect, useMemo, useRef } from 'react';
+import React, { Suspense, lazy, useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { router } from '@inertiajs/react';
+import logoImg from '../../images/ECS_LOGO.png';
 import { BarChart, Bar as RechartsBar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, LineChart, Line as RechartsLine } from '../Components/charts/LazyRecharts';
-import { CalendarDays, CheckCircle2, ChevronDown, ClipboardList, CreditCard, Filter, Loader2, Maximize2, Package, RefreshCw, Users, X } from 'lucide-react';
+import { CalendarDays, CheckCircle2, ChevronDown, ClipboardList, CreditCard, Filter, Loader2, Maximize2, Package, RefreshCw, Search, Users, X } from 'lucide-react';
 import useCachedJson from '../hooks/useCachedJson';
 import useSmartRefresh from '../hooks/useSmartRefresh';
-import useStaffWorkspaceState from '../hooks/useStaffWorkspaceState';
 import ConfirmModal from '../Components/common/ConfirmModal';
 import SmartImage from '../Components/common/SmartImage';
 import StaffSkeleton, { StaffWorkspaceSkeleton } from '../Components/staff/StaffSkeleton';
 import StaffWorkspaceLayout from '../Layouts/StaffWorkspaceLayout';
-import { AdminCommandStrip, AdminPageSurface, AdminResponsiveTable, AdminSurfaceSection } from '../Components/admin/AdminSurface';
+import { AdminCommandStrip, AdminPageSurface, AdminResponsiveTable } from '../Components/admin/AdminSurface';
 import StaffPageHeader from '../Components/staff/StaffPageHeader';
 import StaffEmptyState from '../Components/staff/StaffEmptyState';
+import StaffPagination from '../Components/staff/StaffPagination';
+import { StaffCommandBar, StaffInlineInsight, StaffMetricStrip, StaffPrimaryAction, StaffStatusChip, StaffWorkTable } from '../Components/staff/StaffV2';
 import EventHistoryPanel from '../Components/staff/EventHistoryPanel';
 import NextActionPanel from '../Components/staff/NextActionPanel';
 import RoleSettingsPanel from '../Components/staff/RoleSettingsPanel';
 import AssistedBookingWizard from '../Components/marketing/AssistedBookingWizard';
+import PasswordStrengthField, { PasswordMatchHint } from '../Components/auth/PasswordStrengthField';
+import PasswordUpgradeBanner from '../Components/auth/PasswordUpgradeBanner';
 import { getListData } from '../utils/apiResponses';
 import csrfFetch from '../utils/csrf';
 import { fetchSmartResource, getUserScopedCacheKey, readSmartCache } from '../utils/smartResource';
 import { operationalChannelsForUser } from '../utils/liveChannels';
+import { evaluatePassword } from '../utils/passwordPolicy';
+import {
+    ACCOUNTING_WORKSPACE_NAV_GROUPS,
+    ADMIN_WORKSPACE_NAV_GROUPS,
+    ADMIN_WORKSPACES,
+    CUSTOMER_WORKSPACE_NAV_GROUPS,
+    MARKETING_WORKSPACE_NAV_GROUPS,
+    withNavCounts,
+} from '../utils/staffWorkspaceNav';
 import {
     formatBookingRef,
     formatCurrency,
@@ -34,6 +47,7 @@ import {
     normalizeStatus,
     paginate,
 } from '../utils/dashboardUtils';
+import { bookingContactEmail, bookingContactName, bookingContactPhone, customerAccountName, customerAccountEmail, customerAccountPhone, hasDifferentBookingContact } from '../utils/customerIdentity';
 import { paymentTypeLabel, staffPaymentStatus } from '../utils/statusLabels';
 
 const AnnouncementManager = lazy(() => import('../Components/content/AnnouncementManager'));
@@ -45,6 +59,8 @@ const FoodTastingQueue = lazy(() => import('../Components/operations/FoodTasting
 const paymentLabel = paymentTypeLabel;
 const Bar = (props) => <RechartsBar animationDuration={650} {...props} />;
 const Line = (props) => <RechartsLine animationDuration={650} {...props} />;
+const isPlaceholderEmail = (email) => typeof email === 'string' && email.trim().toLowerCase().endsWith('@eloquente.invalid');
+const displayEmail = (email, fallback = 'No email') => (email && !isPlaceholderEmail(email) ? email : fallback);
 
 const PACKAGE_CATEGORY_OPTIONS = [
     { value: 'premium', label: 'Weddings & Debuts' },
@@ -73,36 +89,6 @@ const SNAPSHOT_WINDOW_OPTIONS = [
     { value: '24m', label: 'Last 24 months' },
     { value: 'ytd', label: 'Year to date' },
 ];
-
-const PUBLIC_CONTENT_TABS = [
-    ['announcements', 'Announcements'],
-    ['packages', 'Packages'],
-    ['eventTypes', 'Event Types'],
-    ['menuItems', 'Menu Items'],
-];
-
-const PUBLIC_CONTENT_META = {
-    announcements: {
-        kicker: 'Customer updates',
-        title: 'Announcements',
-        description: 'Draft, schedule, publish, and email customer announcements from one place.',
-    },
-    packages: {
-        kicker: 'Catalog setup',
-        title: 'Packages',
-        description: 'Manage package presets, pricing, connected event types, and customer-facing details.',
-    },
-    eventTypes: {
-        kicker: 'Catalog setup',
-        title: 'Event Types',
-        description: 'Manage the event categories used by booking flows and package presets.',
-    },
-    menuItems: {
-        kicker: 'Catalog setup',
-        title: 'Menu Items',
-        description: 'Review menu items by category and manage custom item records.',
-    },
-};
 
 const MENU_CATEGORY_OPTIONS = [
     { value: 'all', label: 'All dish types' },
@@ -140,6 +126,7 @@ const ANALYTICS_TIMEFRAME_OPTIONS = [
 
 const TREND_MONTH_OPTIONS = [3, 6, 9, 12, 18, 24];
 const PERFORMANCE_LIMIT_OPTIONS = [5, 8, 10, 15, 20];
+const AVAILABILITY_EVENT_PAGE_SIZE = 6;
 const HEATMAP_YEAR_OPTIONS = Array.from({ length: 5 }, (_, index) => new Date().getFullYear() - 2 + index);
 const ACCOUNT_ROLE_OPTIONS = [
     { value: 'Marketing', label: 'Marketing', description: 'Booking review, customer communication, event preparation, and feedback follow-up.' },
@@ -165,8 +152,8 @@ const DEFAULT_ANALYTICS_FILTERS = {
 const ADMIN_EMPLOYEES_URL = '/api/admin/employees?paginated=1&per_page=25';
 const ADMIN_CUSTOMERS_URL = '/api/admin/customers?paginated=1&per_page=25';
 const ADMIN_BOOKINGS_URL = '/api/admin/bookings?paginated=1&per_page=25';
-const ADMIN_WORKSPACE_TABS = ['today', 'bookings-intake', 'calendar', 'handoff', 'tastings', 'finance', 'messages-inquiries', 'public-content', 'availability', 'accounts', 'settings', 'analytics', 'reports', 'system-audit', 'history'];
-const ADMIN_FULL_SURFACE_TABS = ['bookings-intake', 'calendar', 'handoff', 'tastings', 'finance', 'messages-inquiries', 'public-content', 'availability', 'accounts', 'settings', 'system-audit', 'history'];
+const CUSTOMER_SUPPORT_TABS = ['customer-lookup', 'customer-dashboard', 'customer-menu', 'customer-payments', 'customer-history', 'customer-messages', 'customer-feedback', 'customer-announcements', 'customer-account-status'];
+const ADMIN_FULL_SURFACE_TABS = ['bookings-intake', 'calendar', 'handoff', 'tastings', 'finance', 'messages-inquiries', 'public-content', 'availability', 'accounts', 'settings', 'system-audit', 'history', ...CUSTOMER_SUPPORT_TABS];
 const ADMIN_TAB_ALIASES = {
     dashboard: 'today',
     overview: 'today',
@@ -193,6 +180,144 @@ const ADMIN_TAB_ALIASES = {
     analytics: 'analytics',
     audits: 'system-audit',
     system: 'system-audit',
+};
+const ADMIN_SEARCH_ALIASES = {
+    today: ['dashboard', 'overview', 'home', 'command', 'priority', 'urgent', 'owner'],
+    'bookings-intake': ['bookings', 'booking', 'intake', 'reservations', 'approve', 'review', 'customer booking'],
+    handoff: ['handoff', 'preparation', 'prep', 'readiness', 'tasks', 'operations'],
+    tastings: ['tasting', 'tastings', 'food tasting', 'customer experience', 'sampling'],
+    finance: ['finance', 'accounting', 'payments', 'refunds', 'ledger', 'money', 'billing'],
+    'finance:payments': ['payment', 'payments', 'proofs', 'pending payments', 'overdue', 'exceptions'],
+    'finance:refunds': ['refund', 'refunds', 'cancellations', 'provider reference', 'refundable'],
+    accounts: ['accounts', 'users', 'people', 'access', 'passwords', 'customers', 'staff'],
+    'accounts:staff': ['staff', 'employees', 'admin users', 'roles', 'temporary password', 'deactivate'],
+    'accounts:customers': ['customers', 'clients', 'customer accounts', 'reactivation', 'booking history'],
+    'messages-inquiries': ['messages', 'inquiries', 'chat', 'support', 'guest inquiries', 'communication'],
+    calendar: ['calendar', 'schedule', 'events', 'dates', 'confirmed events'],
+    availability: ['availability', 'slots', 'capacity', 'closed dates', 'date settings'],
+    'public-content': ['public content', 'content', 'catalog', 'menu', 'packages', 'announcements', 'customer-facing'],
+    'public-content:announcements': ['announcement', 'announcements', 'email', 'publish', 'scheduled updates'],
+    'public-content:packages': ['package', 'packages', 'pricing', 'presets', 'catalog'],
+    'public-content:eventTypes': ['event type', 'event types', 'event categories', 'booking flow'],
+    'public-content:menuItems': ['menu', 'menu items', 'dish', 'dishes', 'food', 'custom items'],
+    analytics: ['analytics', 'insights', 'charts', 'performance', 'trends', 'forecast'],
+    reports: ['reports', 'report builder', 'exports', 'summaries', 'pdf'],
+    'system-audit': ['system', 'audit', 'audits', 'activity', 'delivery', 'session', 'logs'],
+    history: ['history', 'event history', 'completed events', 'notes', 'post-event'],
+    settings: ['settings', 'configuration', 'preferences', 'notifications', 'business profile', 'payment rules'],
+    profile: ['profile', 'my account', 'account details', 'password', 'contact details'],
+};
+const DEFAULT_WORKSPACE_TABS = {
+    admin: 'today',
+    customer: 'lookup',
+    marketing: 'today',
+    accounting: 'today',
+};
+const WORKSPACE_TAB_TO_INTERNAL_TAB = {
+    admin: {
+        today: 'today',
+        accounts: 'accounts',
+        analytics: 'analytics',
+        reports: 'reports',
+        'system-audit': 'system-audit',
+        settings: 'settings',
+        profile: 'profile',
+    },
+    customer: {
+        lookup: 'customer-lookup',
+        dashboard: 'customer-dashboard',
+        menu: 'customer-menu',
+        payments: 'customer-payments',
+        history: 'customer-history',
+        messages: 'customer-messages',
+        feedback: 'customer-feedback',
+        announcements: 'customer-announcements',
+        'account-status': 'customer-account-status',
+    },
+    marketing: {
+        today: 'marketing-today',
+        bookings: 'bookings-intake',
+        leads: 'messages-inquiries',
+        tastings: 'tastings',
+        calendar: 'calendar',
+        handoff: 'handoff',
+        messages: 'messages-inquiries',
+        'public-content': 'public-content',
+        availability: 'availability',
+        history: 'history',
+    },
+    accounting: {
+        today: 'accounting-today',
+        payments: 'finance',
+        reconciliation: 'finance',
+        refunds: 'finance',
+        ledger: 'finance',
+        history: 'history',
+    },
+};
+const WORKSPACE_TAB_ALIASES = {
+    customer: {
+        book: 'dashboard',
+        'book-now': 'dashboard',
+        details: 'dashboard',
+        'event-details': 'dashboard',
+    },
+};
+const LEGACY_TAB_DESTINATIONS = {
+    today: { workspace: 'admin', tab: 'today' },
+    dashboard: { workspace: 'admin', tab: 'today' },
+    overview: { workspace: 'admin', tab: 'today' },
+    accounts: { workspace: 'admin', tab: 'accounts' },
+    'accounts:staff': { workspace: 'admin', tab: 'accounts', accountSegment: 'staff' },
+    'accounts:customers': { workspace: 'admin', tab: 'accounts', accountSegment: 'customers' },
+    analytics: { workspace: 'admin', tab: 'analytics' },
+    reports: { workspace: 'admin', tab: 'reports' },
+    'system-audit': { workspace: 'admin', tab: 'system-audit' },
+    settings: { workspace: 'admin', tab: 'settings' },
+    profile: { workspace: 'admin', tab: 'profile' },
+    'bookings-intake': { workspace: 'marketing', tab: 'bookings' },
+    bookings: { workspace: 'marketing', tab: 'bookings' },
+    calendar: { workspace: 'marketing', tab: 'calendar' },
+    handoff: { workspace: 'marketing', tab: 'handoff' },
+    tastings: { workspace: 'marketing', tab: 'tastings' },
+    tasting: { workspace: 'marketing', tab: 'tastings' },
+    'messages-inquiries': { workspace: 'marketing', tab: 'messages' },
+    messages: { workspace: 'marketing', tab: 'messages' },
+    inquiries: { workspace: 'marketing', tab: 'leads' },
+    'public-content': { workspace: 'marketing', tab: 'public-content' },
+    'public-content:announcements': { workspace: 'marketing', tab: 'public-content', configTab: 'announcements' },
+    'public-content:packages': { workspace: 'marketing', tab: 'public-content', configTab: 'packages' },
+    'public-content:eventTypes': { workspace: 'marketing', tab: 'public-content', configTab: 'eventTypes' },
+    'public-content:menuItems': { workspace: 'marketing', tab: 'public-content', configTab: 'menuItems' },
+    availability: { workspace: 'marketing', tab: 'availability' },
+    history: { workspace: 'marketing', tab: 'history' },
+    finance: { workspace: 'accounting', tab: 'payments', financeSegment: 'payments' },
+    accounting: { workspace: 'accounting', tab: 'payments', financeSegment: 'payments' },
+    payments: { workspace: 'accounting', tab: 'payments', financeSegment: 'payments' },
+    'finance:payments': { workspace: 'accounting', tab: 'payments', financeSegment: 'payments' },
+    refunds: { workspace: 'accounting', tab: 'refunds', financeSegment: 'refunds' },
+    'finance:refunds': { workspace: 'accounting', tab: 'refunds', financeSegment: 'refunds' },
+    ledger: { workspace: 'accounting', tab: 'ledger', financeSegment: 'payments' },
+    reconciliation: { workspace: 'accounting', tab: 'reconciliation', financeSegment: 'payments' },
+};
+const FINANCE_SEGMENT_BY_ACCOUNTING_TAB = {
+    payments: 'payments',
+    refunds: 'refunds',
+    reconciliation: 'payments',
+    ledger: 'payments',
+    today: 'payments',
+    history: 'payments',
+};
+const ADMIN_WORKSPACE_STORAGE_KEY = 'ecs:staff-workspace:admin-role-workspaces';
+
+const normalizeWorkspace = (workspace) => (
+    ADMIN_WORKSPACES.some((item) => item.id === workspace) ? workspace : 'admin'
+);
+
+const normalizeWorkspaceTab = (workspace, tab) => {
+    const allowedTabs = WORKSPACE_TAB_TO_INTERNAL_TAB[workspace] || WORKSPACE_TAB_TO_INTERNAL_TAB.admin;
+    const aliasedTab = WORKSPACE_TAB_ALIASES[workspace]?.[tab] || tab;
+    return allowedTabs[aliasedTab] ? aliasedTab : DEFAULT_WORKSPACE_TABS[workspace];
 };
 const handoffResponsibleArea = (department) => (
     ['Operations', 'Admin', 'Service prep', undefined, null, ''].includes(department) ? 'Service prep' : department
@@ -268,17 +393,90 @@ const shiftMonthValue = (value, offset) => {
     const date = new Date(year, month - 1 + offset, 1);
     return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
 };
+const createAdminNotificationContext = (params = {}) => ({
+    customerId: String(params.customer || params.customer_id || '').trim(),
+    customerQuery: String(params.customerQuery || params.customerName || params.customerEmail || '').trim(),
+    booking: String(params.booking || params.booking_id || '').trim(),
+    conversation: String(params.conversation || params.conversation_id || '').trim(),
+});
+const readInitialAdminNotificationContext = () => {
+    if (typeof window === 'undefined') return createAdminNotificationContext();
+    return createAdminNotificationContext(Object.fromEntries(new URLSearchParams(window.location.search).entries()));
+};
+const hasAdminNotificationContext = (context) => Boolean(
+    context.customerId || context.customerQuery || context.booking || context.conversation
+);
+const getAdminNotificationSearchText = (context) => (
+    context.customerQuery || (context.booking ? formatBookingRef(context.booking) : '')
+);
 
 const DashboardAdmin = () => {
-    const { user, logout } = useAuth();
+    const { user } = useAuth();
     const adminWorkspacePrefs = user?.profile_preferences?.staff_workspace?.admin || {};
-    const adminDefaultTab = ADMIN_WORKSPACE_TABS.includes(adminWorkspacePrefs.default_tab) ? adminWorkspacePrefs.default_tab : 'today';
-    const [activeTab, setActiveTab] = useStaffWorkspaceState({
-        storageKey: 'ecs:staff-workspace:admin',
-        defaultTab: adminDefaultTab,
-        allowedTabs: ADMIN_WORKSPACE_TABS,
-        tabAliases: ADMIN_TAB_ALIASES,
-    });
+    const adminDefaultDestination = LEGACY_TAB_DESTINATIONS[adminWorkspacePrefs.default_tab] || { workspace: 'admin', tab: 'today' };
+    const readInitialWorkspaceSelection = () => {
+        const defaults = {
+            ...DEFAULT_WORKSPACE_TABS,
+            admin: normalizeWorkspaceTab('admin', adminDefaultDestination.workspace === 'admin' ? adminDefaultDestination.tab : 'today'),
+        };
+        if (typeof window === 'undefined') {
+            return { workspace: 'admin', tabs: defaults, customerId: '' };
+        }
+
+        const params = new URLSearchParams(window.location.search);
+        const storedWorkspace = normalizeWorkspace(window.localStorage.getItem(`${ADMIN_WORKSPACE_STORAGE_KEY}:workspace`));
+        let storedTabs = {};
+        try {
+            storedTabs = JSON.parse(window.localStorage.getItem(`${ADMIN_WORKSPACE_STORAGE_KEY}:tabs`) || '{}');
+        } catch (error) {
+            storedTabs = {};
+        }
+
+        const urlWorkspace = params.get('workspace');
+        const urlTab = params.get('tab');
+        const aliasedUrlTab = ADMIN_TAB_ALIASES[urlTab] || urlTab;
+        const legacyDestination = LEGACY_TAB_DESTINATIONS[urlTab] || LEGACY_TAB_DESTINATIONS[aliasedUrlTab];
+        const workspace = urlWorkspace
+            ? normalizeWorkspace(urlWorkspace)
+            : legacyDestination?.workspace || storedWorkspace;
+        const tab = urlWorkspace
+            ? normalizeWorkspaceTab(workspace, urlTab)
+            : legacyDestination?.tab || normalizeWorkspaceTab(workspace, storedTabs[workspace]);
+
+        return {
+            workspace,
+            tabs: {
+                ...defaults,
+                ...storedTabs,
+                [workspace]: normalizeWorkspaceTab(workspace, tab),
+            },
+            customerId: params.get('customer') || '',
+        };
+    };
+    const initialWorkspaceSelectionRef = useRef(null);
+    if (!initialWorkspaceSelectionRef.current) {
+        initialWorkspaceSelectionRef.current = readInitialWorkspaceSelection();
+    }
+    const initialNotificationContextRef = useRef(null);
+    if (!initialNotificationContextRef.current) {
+        initialNotificationContextRef.current = readInitialAdminNotificationContext();
+    }
+    const [activeWorkspace, setActiveWorkspace] = useState(initialWorkspaceSelectionRef.current.workspace);
+    const [workspaceTabs, setWorkspaceTabs] = useState(initialWorkspaceSelectionRef.current.tabs);
+    const [selectedCustomerId, setSelectedCustomerId] = useState(initialWorkspaceSelectionRef.current.customerId);
+    const [notificationNavigationContext, setNotificationNavigationContext] = useState(initialNotificationContextRef.current);
+    const activeWorkspaceTab = normalizeWorkspaceTab(activeWorkspace, workspaceTabs[activeWorkspace]);
+    const activeTab = WORKSPACE_TAB_TO_INTERNAL_TAB[activeWorkspace]?.[activeWorkspaceTab] || 'today';
+    const [adminTabSearch, setAdminTabSearch] = useState('');
+    const [adminSearchOpen, setAdminSearchOpen] = useState(false);
+    const [adminSearchFilterOpen, setAdminSearchFilterOpen] = useState(false);
+    const [adminSearchFilters, setAdminSearchFilters] = useState({ type: 'all', workspace: 'all', scope: 'all' });
+    const [adminBookingSearchMatches, setAdminBookingSearchMatches] = useState([]);
+    const [adminBookingSearchLoading, setAdminBookingSearchLoading] = useState(false);
+    const [adminStaffSearchMatches, setAdminStaffSearchMatches] = useState([]);
+    const [adminStaffSearchLoading, setAdminStaffSearchLoading] = useState(false);
+    const adminSearchInputRef = useRef(null);
+    const adminSearchContainerRef = useRef(null);
     const liveChannels = useMemo(() => operationalChannelsForUser(user), [user?.id, user?.role]);
     const [profileForm, setProfileForm] = useState({
         username: user?.username || '',
@@ -286,7 +484,12 @@ const DashboardAdmin = () => {
         phone: user?.phone || '',
         current_password: '',
         new_password: '',
+        new_password_confirmation: '',
     });
+    const profilePasswordEvaluation = useMemo(
+        () => evaluatePassword(profileForm.new_password, { username: profileForm.username, email: profileForm.email }),
+        [profileForm.new_password, profileForm.username, profileForm.email],
+    );
     const [profileProcessing, setProfileProcessing] = useState(false);
     const [profileErrors, setProfileErrors] = useState({});
 
@@ -300,6 +503,10 @@ const DashboardAdmin = () => {
     const [empModal, setEmpModal] = useState({ open: false, mode: 'add', data: null });
     const [temporaryPasswordModal, setTemporaryPasswordModal] = useState({ open: false, userId: null, username: '', email: '', password: '', expiresAt: null, deliveryHint: '', canRevealAgain: false });
     const [empForm, setEmpForm] = useState({ full_name: '', username: '', password: '', role: 'Marketing', email: '', phone: '' });
+    const empPasswordEvaluation = useMemo(
+        () => evaluatePassword(empForm.password, { username: empForm.username, email: empForm.email }),
+        [empForm.password, empForm.username, empForm.email],
+    );
     const [empFormErrors, setEmpFormErrors] = useState({});
     const [empFormLoading, setEmpFormLoading] = useState(false);
 
@@ -351,7 +558,16 @@ const DashboardAdmin = () => {
     const [refundLoading, setRefundLoading] = useState(false);
     const [processingRefundId, setProcessingRefundId] = useState(null);
     const [activeFinanceSegment, setActiveFinanceSegment] = useState('payments');
+    const [financePaymentSearch, setFinancePaymentSearch] = useState('');
+    const [financePaymentFilter, setFinancePaymentFilter] = useState('all');
+    const [financePaymentSort, setFinancePaymentSort] = useState('priority');
+    const [financePaymentPage, setFinancePaymentPage] = useState(1);
+    const [refundSearch, setRefundSearch] = useState('');
+    const [refundStatusFilter, setRefundStatusFilter] = useState('all');
+    const [refundSort, setRefundSort] = useState('newest');
+    const [refundPage, setRefundPage] = useState(1);
     const [messageRefreshToken, setMessageRefreshToken] = useState(0);
+    const [targetConversationId, setTargetConversationId] = useState(initialNotificationContextRef.current.conversation);
     const [adminMessageMetrics, setAdminMessageMetrics] = useState({
         open: 0,
         needsAttention: 0,
@@ -368,6 +584,7 @@ const DashboardAdmin = () => {
     const [analytics, setAnalytics] = useState(null);
     const [analyticsLoading, setAnalyticsLoading] = useState(false);
     const [expandedAnalyticsPanel, setExpandedAnalyticsPanel] = useState(null);
+    const [bookingAnalysisOpen, setBookingAnalysisOpen] = useState(false);
     const [analyticsSlowLoading, setAnalyticsSlowLoading] = useState(false);
     const [analyticsChartsAnimated, setAnalyticsChartsAnimated] = useState(true);
     const [analyticsFilters, setAnalyticsFilters] = useState(DEFAULT_ANALYTICS_FILTERS);
@@ -430,6 +647,7 @@ const DashboardAdmin = () => {
     const [auditResultFilter, setAuditResultFilter] = useState('All');
     const [auditWorkspaceFilter, setAuditWorkspaceFilter] = useState('All');
     const [auditActivityFilter, setAuditActivityFilter] = useState('Operational');
+    const [expandedAuditId, setExpandedAuditId] = useState(null);
     const [availabilityMonth, setAvailabilityMonth] = useState(() => {
         const now = new Date();
         return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
@@ -439,6 +657,8 @@ const DashboardAdmin = () => {
     const [availabilityLoading, setAvailabilityLoading] = useState(false);
     const [availabilitySaving, setAvailabilitySaving] = useState(false);
     const [availabilityDate, setAvailabilityDate] = useState(() => new Date().toISOString().slice(0, 10));
+    const [availabilityEventSearch, setAvailabilityEventSearch] = useState('');
+    const [availabilityEventVisibleLimit, setAvailabilityEventVisibleLimit] = useState(AVAILABILITY_EVENT_PAGE_SIZE);
     const [availabilityForm, setAvailabilityForm] = useState({ is_locked: false, remaining_events: '', remaining_pax: '', note: '' });
 
     const analyticsSummary = analytics?.summary || {};
@@ -450,13 +670,11 @@ const DashboardAdmin = () => {
     const upcomingWorkloadData = analytics?.upcomingWorkload || analytics?.projectedPaxDemand || [];
     const packagePerformanceData = analytics?.packagePerformance || analytics?.topSellers || [];
     const menuPerformanceData = analytics?.menuPerformance || [];
-    const operationsLoadData = analytics?.operationsLoad || [];
     const operationalAlerts = analytics?.operationalAlerts || analytics?.alerts || [];
     const topSellerData = analytics?.topSellers || [];
     const peakSeasonData = Array.isArray(peakSeasonHeatmap) ? peakSeasonHeatmap : (analytics?.peakSeasons || []);
     const salesFrequencyDistribution = analytics?.salesFrequencyDistribution || {};
     const salesFrequencyData = salesFrequencyDistribution.rows || [];
-    const salesFrequencySummary = salesFrequencyDistribution.summary || {};
     const topSalesFrequency = salesFrequencyData[0] || null;
     const revenueForecast = analytics?.revenueRegression || analytics?.revenueForecast || {};
     const revenueForecastData = revenueForecast.rows || [];
@@ -561,12 +779,181 @@ const DashboardAdmin = () => {
     const [customerStatusFilter, setCustomerStatusFilter] = useState('active');
     const [employeeFilters, setEmployeeFilters] = useState({ search: '', role: 'all', account_status: 'all', must_change_password: 'all' });
     const [customerFilters, setCustomerFilters] = useState({ search: '', booking_activity: 'all' });
+    const [customerLookupQuery, setCustomerLookupQuery] = useState(initialNotificationContextRef.current.customerQuery);
+    const [customerLookupFilters, setCustomerLookupFilters] = useState({ status: 'all', bookingActivity: 'all' });
     const [confirmNotifyCustomer, setConfirmNotifyCustomer] = useState(true);
     const confirmNotifyCustomerRef = useRef(true);
     const [bookingPage, setBookingPage] = useState(1);
     const [auditPage, setAuditPage] = useState(1);
     const rowsPerPage = 8;
     const smartCacheKey = (resourceKey) => getUserScopedCacheKey(user, resourceKey);
+    const navigateToWorkspaceTab = useCallback((workspace, tab, options = {}) => {
+        const normalizedWorkspace = normalizeWorkspace(workspace);
+        const normalizedTab = normalizeWorkspaceTab(normalizedWorkspace, tab);
+
+        if (!options.preserveNotificationContext) {
+            setNotificationNavigationContext(createAdminNotificationContext());
+            setTargetConversationId('');
+        }
+
+        setActiveWorkspace(normalizedWorkspace);
+        setWorkspaceTabs((previous) => ({
+            ...previous,
+            [normalizedWorkspace]: normalizedTab,
+        }));
+
+        if (Object.prototype.hasOwnProperty.call(options, 'customerId')) {
+            setSelectedCustomerId(options.customerId ? String(options.customerId) : '');
+        }
+
+        if (normalizedWorkspace === 'accounting') {
+            setActiveFinanceSegment(options.financeSegment || FINANCE_SEGMENT_BY_ACCOUNTING_TAB[normalizedTab] || 'payments');
+        }
+
+        if (normalizedWorkspace === 'admin' && normalizedTab === 'accounts' && options.accountSegment) {
+            setAccountSegment(options.accountSegment);
+        }
+
+        if (normalizedWorkspace === 'marketing' && normalizedTab === 'public-content' && options.configTab) {
+            setActiveConfigTab(options.configTab);
+        }
+    }, []);
+    const setActiveTab = useCallback((nextTab) => {
+        const rawTab = String(nextTab || 'today');
+        const aliasedTab = ADMIN_TAB_ALIASES[rawTab] || rawTab;
+        const destination = LEGACY_TAB_DESTINATIONS[rawTab] || LEGACY_TAB_DESTINATIONS[aliasedTab];
+
+        if (destination) {
+            navigateToWorkspaceTab(destination.workspace, destination.tab, destination);
+            return;
+        }
+
+        navigateToWorkspaceTab('admin', normalizeWorkspaceTab('admin', aliasedTab));
+    }, [navigateToWorkspaceTab]);
+
+    const applyAdminNotificationContext = useCallback((params, workspace, tab) => {
+        const context = createAdminNotificationContext(params);
+        if (!hasAdminNotificationContext(context)) return;
+
+        const normalizedWorkspace = normalizeWorkspace(workspace || params.workspace);
+        const normalizedTab = normalizeWorkspaceTab(normalizedWorkspace, tab || params.tab);
+        const searchText = getAdminNotificationSearchText(context);
+
+        setNotificationNavigationContext(context);
+
+        if (context.customerId) {
+            setSelectedCustomerId(context.customerId);
+        }
+
+        if (context.conversation) {
+            setTargetConversationId(context.conversation);
+            setMessageRefreshToken((value) => value + 1);
+        }
+
+        if (normalizedWorkspace === 'customer') {
+            if (!context.customerId && searchText) {
+                setCustomerLookupQuery(searchText);
+            }
+            return;
+        }
+
+        if (!searchText) return;
+
+        if (normalizedWorkspace === 'marketing') {
+            if (['bookings', 'handoff'].includes(normalizedTab)) {
+                setBookingSearch(searchText);
+            } else if (normalizedTab === 'calendar') {
+                setAdminCalendarSearch(searchText);
+            }
+            return;
+        }
+
+        if (normalizedWorkspace === 'accounting') {
+            if (normalizedTab === 'refunds') {
+                setRefundSearch(searchText);
+            } else if (['payments', 'reconciliation', 'ledger'].includes(normalizedTab)) {
+                setFinancePaymentSearch(searchText);
+            }
+        }
+    }, []);
+
+    const applyAdminNavigationQueryParams = useCallback((params) => {
+        const rawTab = params.tab;
+        const context = createAdminNotificationContext(params);
+        const preserveNotificationContext = hasAdminNotificationContext(context);
+
+        if (params.workspace) {
+            const workspace = normalizeWorkspace(params.workspace);
+            const tab = normalizeWorkspaceTab(workspace, rawTab);
+            navigateToWorkspaceTab(workspace, tab, {
+                customerId: params.customer || '',
+                financeSegment: params.financeSegment,
+                accountSegment: params.accountSegment,
+                configTab: params.configTab,
+                preserveNotificationContext,
+            });
+            applyAdminNotificationContext(params, workspace, tab);
+            return;
+        }
+
+        if (rawTab) {
+            setActiveTab(rawTab);
+            applyAdminNotificationContext(params, null, rawTab);
+        }
+    }, [applyAdminNotificationContext, navigateToWorkspaceTab, setActiveTab]);
+
+    useEffect(() => {
+        if (typeof window === 'undefined') return undefined;
+
+        const handleNavigationQueryChange = (event) => {
+            if (event.detail?.path && event.detail.path !== window.location.pathname) return;
+
+            const params = event.detail?.params || Object.fromEntries(new URLSearchParams(event.detail?.search || window.location.search).entries());
+            applyAdminNavigationQueryParams(params);
+        };
+
+        applyAdminNavigationQueryParams(Object.fromEntries(new URLSearchParams(window.location.search).entries()));
+        window.addEventListener('ecs:navigation-query-change', handleNavigationQueryChange);
+        window.addEventListener('popstate', handleNavigationQueryChange);
+        return () => {
+            window.removeEventListener('ecs:navigation-query-change', handleNavigationQueryChange);
+            window.removeEventListener('popstate', handleNavigationQueryChange);
+        };
+    }, [applyAdminNavigationQueryParams]);
+
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+
+        window.localStorage.setItem(`${ADMIN_WORKSPACE_STORAGE_KEY}:workspace`, activeWorkspace);
+        window.localStorage.setItem(`${ADMIN_WORKSPACE_STORAGE_KEY}:tabs`, JSON.stringify(workspaceTabs));
+
+        const url = new URL(window.location.href);
+        url.searchParams.set('workspace', activeWorkspace);
+        url.searchParams.set('tab', activeWorkspaceTab);
+        if (activeWorkspace === 'customer' && selectedCustomerId) {
+            url.searchParams.set('customer', selectedCustomerId);
+        } else if (notificationNavigationContext.customerId) {
+            url.searchParams.set('customer', notificationNavigationContext.customerId);
+        } else {
+            url.searchParams.delete('customer');
+        }
+        if (notificationNavigationContext.customerQuery) {
+            url.searchParams.set('customerQuery', notificationNavigationContext.customerQuery);
+        } else {
+            url.searchParams.delete('customerQuery');
+        }
+        if (notificationNavigationContext.booking) {
+            url.searchParams.set('booking', notificationNavigationContext.booking);
+        } else {
+            url.searchParams.delete('booking');
+        }
+        if (notificationNavigationContext.conversation) {
+            url.searchParams.set('conversation', notificationNavigationContext.conversation);
+        } else {
+            url.searchParams.delete('conversation');
+        }
+        window.history.replaceState(window.history.state, '', url.toString());
+    }, [activeWorkspace, activeWorkspaceTab, notificationNavigationContext, selectedCustomerId, workspaceTabs]);
 
     useEffect(() => {
         setProfileForm(prev => ({
@@ -601,6 +988,19 @@ const DashboardAdmin = () => {
     }, [expandedAnalyticsPanel]);
 
     useEffect(() => {
+        if (!bookingAnalysisOpen) return undefined;
+
+        const handleKeyDown = (event) => {
+            if (event.key === 'Escape') {
+                setBookingAnalysisOpen(false);
+            }
+        };
+
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [bookingAnalysisOpen]);
+
+    useEffect(() => {
         setCustomerPage(1);
     }, [customerStatusFilter, customerFilters]);
 
@@ -619,11 +1019,26 @@ const DashboardAdmin = () => {
 
     const submitProfile = (event) => {
         event.preventDefault();
+        if (profileForm.new_password) {
+            const nextErrors = {};
+            if (!profilePasswordEvaluation.valid) {
+                nextErrors.new_password = 'Complete the password requirements before saving.';
+            }
+            if (profileForm.new_password !== profileForm.new_password_confirmation) {
+                nextErrors.new_password_confirmation = 'Passwords do not match.';
+            }
+            if (Object.keys(nextErrors).length > 0) {
+                setProfileErrors(nextErrors);
+                showToast('Please review the password fields.', 'error');
+                return;
+            }
+        }
+
         setProfileProcessing(true);
         router.put('/profile', profileForm, {
             preserveScroll: true,
             onSuccess: () => {
-                setProfileForm(prev => ({ ...prev, current_password: '', new_password: '' }));
+                setProfileForm(prev => ({ ...prev, current_password: '', new_password: '', new_password_confirmation: '' }));
                 setProfileErrors({});
                 showToast('Profile updated.');
             },
@@ -719,7 +1134,11 @@ const DashboardAdmin = () => {
     };
 
     const refreshCurrentTab = ({ silent = false } = {}) => {
-        if (activeTab === 'accounts') {
+        if (activeWorkspace === 'customer') {
+            bustAdminCache(ADMIN_CUSTOMERS_URL, adminCustomersUrl('active'), adminCustomersUrl('deactivated'), adminCustomersUrl('all'), ADMIN_BOOKINGS_URL);
+            fetchCustomers({ silent });
+            fetchBookings({ silent });
+        } else if (activeTab === 'accounts') {
             bustAdminCache(ADMIN_EMPLOYEES_URL, ADMIN_CUSTOMERS_URL, adminCustomersUrl('active'), adminCustomersUrl('deactivated'), adminCustomersUrl('all'));
             fetchEmployees({ silent });
             fetchCustomers({ silent });
@@ -736,12 +1155,13 @@ const DashboardAdmin = () => {
             fetchAnalytics({ silent });
             fetchReportBuilder({ silent });
             fetchReportPreview({ silent });
-        } else if (activeTab === 'bookings-intake') {
+        } else if (activeTab === 'bookings-intake' || activeTab === 'marketing-today') {
             bustAdminCache(ADMIN_BOOKINGS_URL);
             fetchBookings({ silent });
             fetchAnalyticsSummary({ silent });
-        } else if (activeTab === 'finance') {
+        } else if (activeTab === 'finance' || activeTab === 'accounting-today') {
             bustAdminCache('/api/admin/refunds/queue');
+            fetchBookings({ silent });
             fetchRefundQueue({ silent });
         } else if (activeTab === 'availability') {
             fetchAvailabilityOverrides({ silent });
@@ -751,125 +1171,383 @@ const DashboardAdmin = () => {
         }
     };
 
+    const bookingStatusMeta = {
+        pending: { tone: 'attention', label: 'Pending' },
+        confirmed: { tone: 'success', label: 'Active' },
+        completed: { tone: 'success', label: 'Completed' },
+        cancelled: { tone: 'danger', label: 'Cancelled' },
+        canceled: { tone: 'danger', label: 'Cancelled' },
+        rejected: { tone: 'danger', label: 'Rejected' },
+    };
     const bookingStatusStyles = {
         pending: 'bg-amber-100 text-amber-800 border-amber-200',
         confirmed: 'bg-emerald-100 text-emerald-800 border-emerald-200',
+        completed: 'bg-emerald-100 text-emerald-800 border-emerald-200',
+        cancelled: 'bg-rose-100 text-rose-800 border-rose-200',
+        canceled: 'bg-rose-100 text-rose-800 border-rose-200',
+        rejected: 'bg-rose-100 text-rose-800 border-rose-200',
     };
-    const pageMeta = {
-        today: {
-            eyebrow: 'Daily work',
-            title: 'Owner Today',
-            description: 'Priority bookings, finance blockers, account issues, and system activity that need attention.',
-        },
-        analytics: {
-            eyebrow: 'Business insight',
-            title: 'Analytics',
-            description: 'Understand performance signals, chart trends, and owner-level business takeaways.',
-        },
-        reports: {
-            eyebrow: 'Business insight',
-            title: 'Reports',
-            description: 'Build, preview, and export business-ready summaries with interpretations.',
-        },
-        profile: {
-            eyebrow: 'Admin profile',
-            title: 'My Account',
-            description: 'Update your admin contact details and password.',
-        },
-        'public-content': {
-            eyebrow: 'Customer-facing setup',
-            title: 'Public Content',
-            description: 'Manage announcements, packages, event types, menu pricing, and customer-facing previews.',
-        },
-        availability: {
-            eyebrow: 'Calendar control',
-            title: 'Availability',
-            description: 'Close dates or control remaining event slots and guest capacity.',
-        },
-        accounts: {
-            eyebrow: 'Access control',
-            title: 'Account Management',
-            description: 'Manage staff access, customer account status, and password recovery actions.',
-        },
-        settings: {
-            eyebrow: 'Owner controls',
-            title: 'Settings',
-            description: 'Manage workspace preferences, notifications, business profile, and payment rules.',
-        },
-        'bookings-intake': {
-            eyebrow: 'Booking operations',
-            title: 'Bookings & Intake',
-            description: 'Review, approve, adjust, and create customer bookings without switching accounts.',
-        },
-        finance: {
-            eyebrow: 'Accounting override',
-            title: 'Finance',
-            description: 'Review payment exposure, process refunds, and open finance records from one place.',
-        },
-        calendar: {
-            eyebrow: 'Event calendar',
-            title: 'Calendar',
-            description: 'Review confirmed event dates and open event details without handoff clutter.',
-        },
-        handoff: {
-            eyebrow: 'Event handoff',
-            title: 'Handoff',
-            description: 'Track readiness, blockers, and preparation tasks for upcoming confirmed events.',
-        },
-        tastings: {
-            eyebrow: 'Customer experience',
-            title: 'Food Tastings',
-            description: 'Manage tasting requests, confirmations, and tasting outcomes.',
-        },
-        'messages-inquiries': {
-            eyebrow: 'Support desk',
-            title: 'Messages & Inquiries',
-            description: 'Review guest inquiries and route booking-linked communication.',
-        },
-        'system-audit': {
-            eyebrow: 'System control',
-            title: 'System & Audit',
-            description: 'Monitor delivery health, account/session checks, and staff/admin activity.',
-        },
-        history: {
-            eyebrow: 'Shared history',
-            title: 'Event History',
-            description: 'Completed events, staff notes, and limited post-event follow-up context.',
-        },
+    const workspaceNavSource = {
+        admin: ADMIN_WORKSPACE_NAV_GROUPS,
+        customer: CUSTOMER_WORKSPACE_NAV_GROUPS,
+        marketing: MARKETING_WORKSPACE_NAV_GROUPS,
+        accounting: ACCOUNTING_WORKSPACE_NAV_GROUPS,
     };
-    const adminNavGroups = [
-        {
-            label: 'Owner Workbench',
-            items: [
-                { id: 'today', label: 'Today' },
-                { id: 'bookings-intake', label: 'Bookings & Intake' },
-                { id: 'calendar', label: 'Calendar' },
-                { id: 'handoff', label: 'Handoff' },
-                { id: 'tastings', label: 'Food Tastings' },
-                { id: 'finance', label: 'Finance' },
-                { id: 'messages-inquiries', label: 'Messages & Inquiries' },
-            ],
-        },
-        {
-            label: 'Business Control',
-            items: [
-                { id: 'public-content', label: 'Public Content' },
-                { id: 'availability', label: 'Availability' },
-                { id: 'accounts', label: 'Accounts' },
-                { id: 'settings', label: 'Settings' },
-            ],
-        },
-        {
-            label: 'Insight & Governance',
-            items: [
-                { id: 'analytics', label: 'Analytics' },
-                { id: 'reports', label: 'Reports' },
-                { id: 'system-audit', label: 'System & Audit' },
-                { id: 'history', label: 'Event History' },
-            ],
-        },
-    ];
-    const currentPage = pageMeta[activeTab] || pageMeta.today;
+    const workspaceNavCounts = useMemo(() => {
+        const pendingBookings = bookings.filter((booking) => normalizeStatus(booking.status) === 'pending').length;
+        const confirmedBookings = bookings.filter((booking) => normalizeStatus(booking.status) === 'confirmed').length;
+        const customerBookingCount = selectedCustomerId
+            ? bookings.filter((booking) => String(booking.user_id) === String(selectedCustomerId)).length
+            : 0;
+
+        return {
+            admin: {
+                accounts: employees.length + customers.length,
+                reports: reportTemplates.length,
+            },
+            customer: {
+                lookup: customers.length,
+                dashboard: customerBookingCount,
+                payments: customerBookingCount,
+                history: customerBookingCount,
+            },
+            marketing: {
+                today: pendingBookings,
+                bookings: pendingBookings,
+                tastings: 0,
+                calendar: confirmedBookings,
+                handoff: confirmedBookings,
+            },
+            accounting: {
+                today: pendingBookings + refundQueue.length,
+                payments: pendingBookings,
+                reconciliation: pendingBookings,
+                refunds: refundQueue.length,
+            },
+        };
+    }, [bookings, customers.length, employees.length, refundQueue.length, reportTemplates.length, selectedCustomerId]);
+    const adminNavGroups = useMemo(() => (
+        withNavCounts(workspaceNavSource[activeWorkspace] || ADMIN_WORKSPACE_NAV_GROUPS, workspaceNavCounts[activeWorkspace] || {})
+    ), [activeWorkspace, workspaceNavCounts]);
+    const adminActiveNavId = activeWorkspaceTab;
+    const handleAdminNavigate = (nextId) => {
+        const rawId = String(nextId || '');
+        const activeWorkspaceTabs = WORKSPACE_TAB_TO_INTERNAL_TAB[activeWorkspace] || {};
+        if (activeWorkspaceTabs[rawId]) {
+            navigateToWorkspaceTab(activeWorkspace, rawId);
+            return;
+        }
+
+        const legacyDestination = LEGACY_TAB_DESTINATIONS[rawId] || LEGACY_TAB_DESTINATIONS[ADMIN_TAB_ALIASES[rawId]];
+        if (legacyDestination) {
+            navigateToWorkspaceTab(legacyDestination.workspace, legacyDestination.tab, legacyDestination);
+            return;
+        }
+
+        navigateToWorkspaceTab(activeWorkspace, rawId);
+    };
+
+    useEffect(() => {
+        const query = adminTabSearch.trim();
+        if (query.length < 2) {
+            setAdminBookingSearchMatches([]);
+            setAdminBookingSearchLoading(false);
+            return undefined;
+        }
+
+        const controller = new AbortController();
+        const timer = window.setTimeout(async () => {
+            setAdminBookingSearchLoading(true);
+            try {
+                const params = new URLSearchParams({
+                    paginated: '1',
+                    per_page: '8',
+                    include_history: '1',
+                    search: query,
+                });
+                const response = await fetch(`/api/admin/bookings?${params.toString()}`, {
+                    headers: { Accept: 'application/json' },
+                    signal: controller.signal,
+                });
+
+                if (!response.ok) throw new Error('Could not search bookings');
+
+                const data = await response.json();
+                setAdminBookingSearchMatches(getListData(data));
+            } catch (error) {
+                if (error.name !== 'AbortError') {
+                    setAdminBookingSearchMatches([]);
+                }
+            } finally {
+                if (!controller.signal.aborted) setAdminBookingSearchLoading(false);
+            }
+        }, 220);
+
+        return () => {
+            window.clearTimeout(timer);
+            controller.abort();
+        };
+    }, [adminTabSearch]);
+
+    useEffect(() => {
+        const query = adminTabSearch.trim();
+        if (query.length < 2) {
+            setAdminStaffSearchMatches([]);
+            setAdminStaffSearchLoading(false);
+            return undefined;
+        }
+
+        const controller = new AbortController();
+        const timer = window.setTimeout(async () => {
+            setAdminStaffSearchLoading(true);
+            try {
+                const params = new URLSearchParams({
+                    paginated: '1',
+                    per_page: '8',
+                    search: query,
+                });
+                const response = await fetch(`/api/admin/employees?${params.toString()}`, {
+                    headers: { Accept: 'application/json' },
+                    signal: controller.signal,
+                });
+
+                if (!response.ok) throw new Error('Could not search staff accounts');
+
+                const data = await response.json();
+                setAdminStaffSearchMatches(getListData(data));
+            } catch (error) {
+                if (error.name !== 'AbortError') {
+                    setAdminStaffSearchMatches([]);
+                }
+            } finally {
+                if (!controller.signal.aborted) setAdminStaffSearchLoading(false);
+            }
+        }, 220);
+
+        return () => {
+            window.clearTimeout(timer);
+            controller.abort();
+        };
+    }, [adminTabSearch]);
+
+    const adminSearchEntries = useMemo(() => {
+        const entries = [];
+
+        ADMIN_WORKSPACES.forEach((workspace) => {
+            const groups = workspaceNavSource[workspace.id] || [];
+            groups.forEach((group) => {
+                group.items.forEach((item) => {
+                    const internalTab = WORKSPACE_TAB_TO_INTERNAL_TAB[workspace.id]?.[item.id] || item.id;
+                    const parentPath = `${workspace.label} / ${group.label}`;
+                    const aliases = [...(item.aliases || []), ...(ADMIN_SEARCH_ALIASES[internalTab] || [])];
+                    entries.push({
+                        id: `${workspace.id}:${item.id}`,
+                        kind: 'page',
+                        workspace: workspace.id,
+                        tab: item.id,
+                        label: item.label,
+                        description: item.description || '',
+                        path: parentPath,
+                        nameText: [workspace.label, group.label, item.label, item.description, parentPath, ...aliases].filter(Boolean).join(' ').toLowerCase(),
+                        contactText: '',
+                        refText: '',
+                        searchText: [workspace.label, group.label, item.label, item.description, parentPath, ...aliases].filter(Boolean).join(' ').toLowerCase(),
+                    });
+                });
+            });
+        });
+
+        customers.slice(0, 60).forEach((customer) => {
+            const label = customer.full_name || customer.username || `Customer #${customer.id}`;
+            const contact = [displayEmail(customer.email, ''), customer.phone].filter(Boolean).join(' / ');
+            entries.push({
+                id: `customer:${customer.id}`,
+                kind: 'customer',
+                workspace: 'customer',
+                tab: 'dashboard',
+                customerId: customer.id,
+                label,
+                description: contact || 'Customer account',
+                path: 'Customer / Customer Lookup',
+                nameText: [label, customer.username, 'customer account dashboard'].filter(Boolean).join(' ').toLowerCase(),
+                contactText: [customer.email, customer.phone, contact].filter(Boolean).join(' ').toLowerCase(),
+                refText: '',
+                searchText: [label, customer.username, customer.email, customer.phone, contact, 'customer client account dashboard'].filter(Boolean).join(' ').toLowerCase(),
+            });
+        });
+
+        const indexedStaffIds = new Set();
+        [...employees, ...adminStaffSearchMatches].forEach((employee) => {
+            if (!employee?.id || indexedStaffIds.has(String(employee.id))) return;
+            indexedStaffIds.add(String(employee.id));
+
+            const label = employee.full_name || employee.username || `Staff #${employee.id}`;
+            const email = displayEmail(employee.email, '');
+            const contact = [email, employee.phone].filter(Boolean).join(' / ');
+            const roleLabel = employee.role || 'Staff';
+            const statusLabel = employee.account_status === 'deactivated'
+                ? 'Deactivated'
+                : employee.must_change_password
+                    ? 'Password change needed'
+                    : 'Active';
+
+            entries.push({
+                id: `staff:${employee.id}`,
+                kind: 'staff',
+                workspace: 'admin',
+                tab: 'accounts',
+                staffId: employee.id,
+                staffQuery: label || employee.username || employee.email || employee.phone || '',
+                label,
+                description: [roleLabel, contact, statusLabel].filter(Boolean).join(' / '),
+                path: 'Admin / Accounts',
+                nameText: [label, employee.username, roleLabel, statusLabel, 'staff employee account admin accounts'].filter(Boolean).join(' ').toLowerCase(),
+                contactText: [employee.email, employee.phone, contact].filter(Boolean).join(' ').toLowerCase(),
+                refText: '',
+                searchText: [
+                    label,
+                    employee.username,
+                    employee.email,
+                    employee.phone,
+                    roleLabel,
+                    statusLabel,
+                    employee.account_status,
+                    'staff employee account admin accounts users roles',
+                ].filter(Boolean).join(' ').toLowerCase(),
+            });
+        });
+
+        const indexedBookingIds = new Set();
+        [...bookings, ...adminBookingSearchMatches].forEach((booking) => {
+            if (!booking?.id || indexedBookingIds.has(String(booking.id))) return;
+            indexedBookingIds.add(String(booking.id));
+
+            const ref = formatBookingRef(booking.id);
+            const contactName = bookingContactName(booking);
+            const contactEmail = bookingContactEmail(booking);
+            const contactPhone = bookingContactPhone(booking);
+            const accountName = customerAccountName(booking);
+            const accountEmail = customerAccountEmail(booking);
+            const accountPhone = customerAccountPhone(booking);
+            const contactLine = [ref, contactEmail || contactPhone].filter(Boolean).join(' / ');
+            const description = hasDifferentBookingContact(booking) && accountName
+                ? `${contactLine} / Account: ${accountName}`
+                : contactLine;
+
+            entries.push({
+                id: `booking-contact:${booking.id}`,
+                kind: 'booking',
+                workspace: 'marketing',
+                tab: 'bookings',
+                bookingId: booking.id,
+                customerId: booking.user_id,
+                customerQuery: contactName || contactEmail || contactPhone || ref,
+                label: contactName || ref,
+                description: description || 'Booking contact',
+                path: 'Marketing / Bookings',
+                nameText: [contactName, accountName, booking.username, booking.event_name, booking.event_display_name, booking.event_type, 'booking contact'].filter(Boolean).join(' ').toLowerCase(),
+                contactText: [contactEmail, contactPhone, accountEmail, accountPhone].filter(Boolean).join(' ').toLowerCase(),
+                refText: [ref, booking.id ? `BK-${booking.id}` : '', booking.id ? `#BK-${booking.id}` : ''].filter(Boolean).join(' ').toLowerCase(),
+                searchText: [
+                    ref,
+                    contactName,
+                    contactEmail,
+                    contactPhone,
+                    accountName,
+                    accountEmail,
+                    accountPhone,
+                    booking.username,
+                    booking.event_name,
+                    booking.event_display_name,
+                    booking.event_type,
+                    booking.venue_city,
+                    'booking contact client customer booking reservations',
+                ].filter(Boolean).join(' ').toLowerCase(),
+            });
+        });
+
+        return entries;
+    }, [adminBookingSearchMatches, adminStaffSearchMatches, bookings, customers, employees]);
+    const adminSearchResults = useMemo(() => {
+        const query = adminTabSearch.trim().toLowerCase();
+        const filteredEntries = adminSearchEntries.filter((entry) => {
+            if (adminSearchFilters.type !== 'all' && entry.kind !== adminSearchFilters.type) return false;
+            if (adminSearchFilters.workspace !== 'all' && entry.workspace !== adminSearchFilters.workspace) return false;
+            return true;
+        });
+        const getScopedSearchText = (entry) => {
+            if (adminSearchFilters.scope === 'name') return entry.nameText || entry.searchText;
+            if (adminSearchFilters.scope === 'contact') return entry.contactText || '';
+            if (adminSearchFilters.scope === 'booking') return entry.refText || '';
+            return entry.searchText;
+        };
+
+        if (!query) return filteredEntries.slice(0, 8);
+
+        const terms = query.split(/\s+/).filter(Boolean);
+        return filteredEntries
+            .filter((entry) => terms.every((term) => getScopedSearchText(entry).includes(term)))
+            .sort((a, b) => {
+                const score = (entry) => {
+                    const label = entry.label.toLowerCase();
+                    const path = entry.path.toLowerCase();
+                    const description = entry.description.toLowerCase();
+                    const scopedText = getScopedSearchText(entry);
+                    if (label === query) return 0;
+                    if (label.includes(query)) return 1;
+                    if (path.includes(query)) return 2;
+                    if (description.includes(query)) return 3;
+                    if (scopedText.includes(query)) return 4;
+                    return 5;
+                };
+
+                return score(a) - score(b) || a.label.localeCompare(b.label);
+            })
+            .slice(0, 8);
+    }, [adminSearchEntries, adminSearchFilters, adminTabSearch]);
+    const showAdminSearchResults = adminSearchOpen || adminSearchFilterOpen || adminTabSearch.trim().length > 0;
+    const adminSearchFilterCount = Object.values(adminSearchFilters).filter((value) => value !== 'all').length;
+    const navigateToAdminSearchResult = (result) => {
+        if (result.bookingId) {
+            navigateToWorkspaceTab(result.workspace, result.tab, { preserveNotificationContext: true });
+            applyAdminNotificationContext({
+                workspace: result.workspace,
+                tab: result.tab,
+                booking: result.bookingId,
+                customer: result.customerId || '',
+                customerQuery: result.customerQuery || result.label,
+            }, result.workspace, result.tab);
+        } else if (result.customerId) {
+            navigateToWorkspaceTab('customer', 'dashboard', { customerId: result.customerId });
+        } else if (result.staffId) {
+            navigateToWorkspaceTab('admin', 'accounts', { accountSegment: 'staff' });
+            setEmployeeFilters({
+                search: result.staffQuery || result.label || '',
+                role: 'all',
+                account_status: 'all',
+                must_change_password: 'all',
+            });
+            setEmployeePage(1);
+        } else {
+            navigateToWorkspaceTab(result.workspace, result.tab);
+        }
+        setAdminTabSearch('');
+        setAdminSearchOpen(false);
+        setAdminSearchFilterOpen(false);
+        adminSearchInputRef.current?.blur();
+    };
+    const handleAdminSearchKeyDown = (event) => {
+        if (event.key === 'Escape') {
+            setAdminSearchOpen(false);
+            if (adminTabSearch) setAdminTabSearch('');
+            return;
+        }
+
+        if (event.key === 'Enter' && adminSearchResults[0]) {
+            event.preventDefault();
+            navigateToAdminSearchResult(adminSearchResults[0]);
+        }
+    };
     const bookingStats = useMemo(() => {
         const activeBookings = bookings.filter((booking) => normalizeStatus(booking.status) === 'confirmed');
         const pendingBookings = bookings.filter((booking) => normalizeStatus(booking.status) === 'pending');
@@ -943,6 +1621,79 @@ const DashboardAdmin = () => {
         }).sort((a, b) => a.priority - b.priority || a.dueTime - b.dueTime || Number(b.booking?.id || 0) - Number(a.booking?.id || 0));
     }, [bookings]);
 
+    const visibleFinancePaymentRows = useMemo(() => {
+        const query = financePaymentSearch.trim().toLowerCase();
+        const filteredRows = financePaymentRows.filter(({ booking, payment, statusLabel, queueLabel }) => {
+            const matchesSearch = !query || [
+                formatBookingRef(booking.id),
+                bookingContactName(booking),
+                bookingContactEmail(booking),
+                bookingContactPhone(booking),
+                customerAccountName(booking),
+                customerAccountEmail(booking),
+                customerAccountPhone(booking),
+                eventDisplayName(booking),
+                paymentLabel(payment.payment_type),
+                statusLabel,
+                queueLabel,
+            ].some((value) => String(value || '').toLowerCase().includes(query));
+            const matchesFilter = financePaymentFilter === 'all'
+                || String(queueLabel || '').toLowerCase().replace(/\s+/g, '-') === financePaymentFilter;
+
+            return matchesSearch && matchesFilter;
+        });
+
+        return [...filteredRows].sort((a, b) => {
+            if (financePaymentSort === 'due') return a.dueTime - b.dueTime || a.priority - b.priority;
+            if (financePaymentSort === 'amount') return Number(b.payment?.amount || 0) - Number(a.payment?.amount || 0);
+            if (financePaymentSort === 'newest') return Number(b.booking?.id || 0) - Number(a.booking?.id || 0);
+            return a.priority - b.priority || a.dueTime - b.dueTime || Number(b.booking?.id || 0) - Number(a.booking?.id || 0);
+        });
+    }, [financePaymentFilter, financePaymentRows, financePaymentSearch, financePaymentSort]);
+
+    const financePaymentQueueStats = useMemo(() => (
+        visibleFinancePaymentRows.reduce((stats, item) => {
+            const queueLabel = String(item.queueLabel || '').toLowerCase();
+            stats.amount += Number(item.payment?.amount || 0);
+            stats.review += queueLabel === 'needs review' ? 1 : 0;
+            stats.overdue += queueLabel === 'overdue' ? 1 : 0;
+            stats.exceptions += queueLabel === 'exception' ? 1 : 0;
+            return stats;
+        }, { amount: 0, review: 0, overdue: 0, exceptions: 0 })
+    ), [visibleFinancePaymentRows]);
+
+    const visibleRefundRows = useMemo(() => {
+        const query = refundSearch.trim().toLowerCase();
+        const filteredRows = refundQueue.filter((item) => {
+            const refundCase = item.refund_cases?.[0] || null;
+            const status = String(item.refund_status || refundCase?.status || 'needs_review').toLowerCase();
+            const needsRetry = refundCase?.next_actions?.includes('retry_provider_refund');
+            const matchesSearch = !query || [
+                formatBookingRef(item.booking_id),
+                bookingContactName(item),
+                bookingContactEmail(item),
+                customerAccountName(item),
+                customerAccountEmail(item),
+                item.event_date,
+                item.refund_status,
+                refundCase?.provider_reference,
+                refundCase?.status,
+            ].some((value) => String(value || '').toLowerCase().includes(query));
+            const matchesFilter = refundStatusFilter === 'all'
+                || (refundStatusFilter === 'retry' && needsRetry)
+                || (refundStatusFilter === 'needs_review' && !needsRetry && !['processed', 'refunded', 'completed'].includes(status))
+                || status === refundStatusFilter;
+
+            return matchesSearch && matchesFilter;
+        });
+
+        return [...filteredRows].sort((a, b) => {
+            if (refundSort === 'event_date') return new Date(a.event_date || 0).getTime() - new Date(b.event_date || 0).getTime();
+            if (refundSort === 'amount') return Number(b.total_paid || 0) - Number(a.total_paid || 0);
+            return Number(b.booking_id || 0) - Number(a.booking_id || 0);
+        });
+    }, [refundQueue, refundSearch, refundSort, refundStatusFilter]);
+
     const upcomingConfirmedEvents = useMemo(() => {
         const today = new Date();
         today.setHours(0, 0, 0, 0);
@@ -967,11 +1718,12 @@ const DashboardAdmin = () => {
                     formatBookingRef(booking.id),
                     eventDisplayName(booking),
                     booking.event_type,
-                    booking.client_full_name,
-                    booking.client_name,
-                    booking.username,
-                    booking.client_email,
-                    booking.client_phone,
+                    bookingContactName(booking),
+                    bookingContactEmail(booking),
+                    bookingContactPhone(booking),
+                    customerAccountName(booking),
+                    customerAccountEmail(booking),
+                    customerAccountPhone(booking),
                     booking.venue_name,
                     booking.venue_address,
                 ].filter(Boolean).some((value) => String(value).toLowerCase().includes(search));
@@ -990,65 +1742,87 @@ const DashboardAdmin = () => {
     const changeAdminCalendarMonth = (offset) => {
         setAdminCalendarMonth((current) => new Date(current.getFullYear(), current.getMonth() + offset, 1));
     };
+    const openOperationalAlertQueue = useCallback((alert) => {
+        switch (alert?.label) {
+            case 'Pending bookings older than 48 hours':
+            case 'Events within 7 days missing logistics':
+                setActiveTab('bookings-intake');
+                break;
+            case 'Overdue unpaid payment milestones':
+                setActiveFinanceSegment('payments');
+                setActiveTab('finance');
+                break;
+            default:
+                setActiveTab('analytics');
+                break;
+        }
+    }, []);
 
     const adminNextActions = useMemo(() => {
         const failedAudits = audits.filter((audit) => Number(audit.status_code || 0) >= 400).length;
         const blockedStaff = employees.filter((employee) => employee.account_status === 'deactivated' || employee.must_change_password).length;
         const topAlertCount = visibleOperationalAlerts.reduce((sum, alert) => sum + Number(alert.count || 0), 0);
+        const topOperationalAlert = [...visibleOperationalAlerts].sort((a, b) => Number(b.count || 0) - Number(a.count || 0))[0];
 
         return [
-            {
+            bookingStats.pending > 0 && {
                 id: 'booking-oversight',
-                priority: bookingStats.pending > 0 ? 'action' : 'info',
+                priority: 'action',
                 title: 'Review booking oversight',
-                description: bookingStats.pending > 0 ? `${bookingStats.pending} bookings are still awaiting review.` : 'No pending booking requests need admin oversight.',
+                description: `${bookingStats.pending} bookings are still awaiting review.`,
                 badge: bookingStats.pending,
                 primaryLabel: 'Open',
-                tone: bookingStats.pending > 0 ? 'warn' : 'good',
+                tone: 'warn',
                 onOpen: () => setActiveTab('bookings-intake'),
             },
-            {
+            refundQueue.length > 0 && {
                 id: 'refund-oversight',
-                priority: refundQueue.length > 0 ? 'urgent' : 'info',
-                title: 'Monitor refund queue',
-                description: refundQueue.length > 0 ? `${refundQueue.length} refund cases may need approval or processing.` : 'No refund cases are waiting.',
+                priority: 'urgent',
+                title: 'Review refund cases',
+                description: `${refundQueue.length} refund cases may need approval or processing.`,
                 badge: refundQueue.length,
                 primaryLabel: 'Open',
-                tone: refundQueue.length > 0 ? 'danger' : 'good',
-                onOpen: () => setActiveTab('finance'),
+                tone: 'danger',
+                onOpen: () => {
+                    setActiveFinanceSegment('refunds');
+                    setActiveTab('finance');
+                },
             },
-            {
+            blockedStaff > 0 && {
                 id: 'people-accounts',
-                priority: blockedStaff > 0 ? 'action' : 'info',
+                priority: 'action',
                 title: 'Check staff account access',
-                description: blockedStaff > 0 ? `${blockedStaff} staff accounts need account-status or password attention.` : 'Staff account access looks clear.',
+                description: `${blockedStaff} staff accounts need account-status or password attention.`,
                 badge: blockedStaff,
                 primaryLabel: 'Open',
-                tone: blockedStaff > 0 ? 'warn' : 'good',
-                onOpen: () => setActiveTab('accounts'),
+                tone: 'warn',
+                onOpen: () => {
+                    setAccountSegment('staff');
+                    setActiveTab('accounts');
+                },
             },
-            {
+            failedAudits > 0 && {
                 id: 'system-activity',
-                priority: failedAudits > 0 ? 'urgent' : 'info',
+                priority: 'urgent',
                 title: 'Inspect activity exceptions',
-                description: failedAudits > 0 ? `${failedAudits} recent activity records ended with blocked or failed results.` : 'No failed activity records in the recent log.',
+                description: `${failedAudits} recent activity records ended with blocked or failed results.`,
                 badge: failedAudits,
                 primaryLabel: 'Open',
-                tone: failedAudits > 0 ? 'danger' : 'good',
+                tone: 'danger',
                 onOpen: () => setActiveTab('system-audit'),
             },
-            {
+            topAlertCount > 0 && {
                 id: 'operational-alerts',
-                priority: topAlertCount > 0 ? 'followup' : 'info',
-                title: 'Review operational alerts',
-                description: topAlertCount > 0 ? `${topAlertCount} alert items are showing in the overview.` : 'Operational alerts are quiet for this filter.',
+                priority: 'followup',
+                title: topOperationalAlert?.label || 'Review operational alerts',
+                description: `${topAlertCount} alert items are showing in operational queues.`,
                 badge: topAlertCount,
                 primaryLabel: 'Review',
-                tone: topAlertCount > 0 ? 'warn' : 'good',
-                onOpen: () => setActiveTab('today'),
+                tone: 'warn',
+                onOpen: () => openOperationalAlertQueue(topOperationalAlert),
             },
-        ];
-    }, [audits, bookingStats.pending, employees, refundQueue.length, visibleOperationalAlerts]);
+        ].filter(Boolean);
+    }, [audits, bookingStats.pending, employees, openOperationalAlertQueue, refundQueue.length, visibleOperationalAlerts]);
 
     const visibleBookings = useMemo(() => {
         const query = bookingSearch.trim().toLowerCase();
@@ -1068,22 +1842,21 @@ const DashboardAdmin = () => {
 
                 const searchable = [
                     formatBookingRef(booking.id),
-                    booking.client_full_name,
-                    booking.client_name,
-                    booking.client_email,
-                    booking.client_phone,
+                    bookingContactName(booking),
+                    bookingContactEmail(booking),
+                    bookingContactPhone(booking),
+                    customerAccountName(booking),
+                    customerAccountEmail(booking),
+                    customerAccountPhone(booking),
                     booking.event_type,
-                    booking.username,
-                    booking.user_email,
-                    booking.user_phone,
                 ].filter(Boolean).join(' ').toLowerCase();
 
                 return searchable.includes(query);
             })
             .sort((a, b) => {
                 if (bookingSort === 'az' || bookingSort === 'za') {
-                    const left = String(a.client_full_name || a.client_name || a.username || '').toLowerCase();
-                    const right = String(b.client_full_name || b.client_name || b.username || '').toLowerCase();
+                    const left = String(bookingContactName(a)).toLowerCase();
+                    const right = String(bookingContactName(b)).toLowerCase();
                     return bookingSort === 'az' ? left.localeCompare(right) : right.localeCompare(left);
                 }
 
@@ -1093,7 +1866,11 @@ const DashboardAdmin = () => {
             });
     }, [bookings, bookingSearch, bookingStatusFilter, bookingSourceFilter, bookingSort]);
 
+    const getAuditMetadata = (audit) => (audit?.metadata && typeof audit.metadata === 'object' ? audit.metadata : {});
     const getAuditWorkspace = (audit) => {
+        const metadata = getAuditMetadata(audit);
+        if (audit.workspace || metadata.workspace) return audit.workspace || metadata.workspace;
+
         const path = String(audit.path || '').toLowerCase();
 
         if (path.includes('/dashboard/admin') || path.includes('/api/admin')) return 'Admin workspace';
@@ -1111,6 +1888,14 @@ const DashboardAdmin = () => {
     };
 
     const getAuditResult = (audit) => {
+        const metadata = getAuditMetadata(audit);
+        if (audit.result_label || metadata.result) {
+            const label = audit.result_label || metadata.result;
+            if (label === 'Completed') return { label, className: 'bg-emerald-50 text-emerald-700' };
+            if (label === 'Access blocked' || label === 'Not found') return { label, className: 'bg-amber-50 text-amber-700' };
+            return { label, className: 'bg-red-50 text-red-700' };
+        }
+
         const statusCode = Number(audit.status_code || 0);
 
         if (!statusCode || statusCode < 400) {
@@ -1126,6 +1911,123 @@ const DashboardAdmin = () => {
         }
 
         return { label: 'Needs review', className: 'bg-red-50 text-red-700' };
+    };
+    const getAuditTargetLabel = (audit) => {
+        const metadata = getAuditMetadata(audit);
+        return audit.target_label || metadata.target_label || metadata.booking_ref || metadata.affected_user_label || null;
+    };
+    const getAuditTargetType = (audit) => {
+        const metadata = getAuditMetadata(audit);
+        return audit.target_type || metadata.target_type || null;
+    };
+    const formatAuditField = (field) => String(field || '')
+        .replace(/[_-]+/g, ' ')
+        .replace(/\b\w/g, (letter) => letter.toUpperCase());
+    const getAuditChangedFields = (audit) => {
+        const metadata = getAuditMetadata(audit);
+        const fields = audit.changed_fields || metadata.changed_fields || [];
+        return Array.isArray(fields) ? fields.filter(Boolean) : [];
+    };
+    const getAuditSourceLabel = (audit) => {
+        const metadata = getAuditMetadata(audit);
+        const sourceText = `${metadata.route || ''} ${metadata.path || audit.path || ''}`.toLowerCase();
+
+        if (sourceText.includes('profile')) return 'Profile settings';
+        if (sourceText.includes('chat') || sourceText.includes('conversation') || sourceText.includes('message')) return 'Messages';
+        if (sourceText.includes('payment')) return 'Payments';
+        if (sourceText.includes('refund')) return 'Refunds';
+        if (sourceText.includes('preparation') || sourceText.includes('handoff')) return 'Event handoff';
+        if (sourceText.includes('calendar-availability') || sourceText.includes('availability')) return 'Availability calendar';
+        if (sourceText.includes('booking')) return 'Bookings';
+        if (sourceText.includes('menu')) return 'Menu';
+        if (sourceText.includes('package')) return 'Packages';
+        if (sourceText.includes('event-type')) return 'Event types';
+        if (sourceText.includes('announcement')) return 'Announcements';
+        if (sourceText.includes('audit')) return 'Audit trail';
+        if (sourceText.includes('settings')) return 'Settings';
+        if (sourceText.includes('login')) return 'Sign in';
+        if (sourceText.includes('logout')) return 'Sign out';
+
+        return getAuditWorkspace(audit);
+    };
+    const getAuditTargetDisplay = (audit) => {
+        const label = getAuditTargetLabel(audit);
+        const type = getAuditTargetType(audit);
+
+        if (label) {
+            return {
+                primary: label,
+                secondary: type ? formatAuditField(type) : 'Record',
+            };
+        }
+
+        const source = getAuditSourceLabel(audit);
+
+        return {
+            primary: source || 'Activity record',
+            secondary: type ? formatAuditField(type) : 'No specific record',
+        };
+    };
+    const getAuditChangeSummary = (audit) => {
+        const fields = getAuditChangedFields(audit);
+
+        if (fields.length === 0) return 'No field changes';
+        if (fields.length === 1) return formatAuditField(fields[0]);
+        return `${fields.length} fields changed`;
+    };
+    const getAuditBrowserLabel = (audit) => {
+        const agent = String(audit.user_agent || '').trim();
+
+        if (!agent) return 'Not recorded';
+
+        const browser = agent.includes('Edg/')
+            ? 'Microsoft Edge'
+            : agent.includes('Chrome/')
+                ? 'Chrome'
+                : agent.includes('Firefox/')
+                    ? 'Firefox'
+                    : agent.includes('Safari/')
+                        ? 'Safari'
+                        : 'Browser';
+        const os = agent.includes('Windows')
+            ? 'Windows'
+            : agent.includes('Mac OS')
+                ? 'macOS'
+                : agent.includes('Android')
+                    ? 'Android'
+                    : agent.includes('iPhone') || agent.includes('iPad')
+                        ? 'iOS'
+                        : '';
+
+        return os ? `${browser} on ${os}` : browser;
+    };
+    const getAuditSearchText = (audit) => {
+        const metadata = getAuditMetadata(audit);
+        return [
+            audit.username,
+            audit.role,
+            audit.action,
+            getAuditWorkspace(audit),
+            getAuditResult(audit).label,
+            getAuditTargetLabel(audit),
+            getAuditTargetType(audit),
+            metadata.booking_ref,
+            metadata.booking_contact_name,
+            metadata.customer_account_name,
+            metadata.affected_user_label,
+            metadata.route,
+            metadata.path,
+            ...getAuditChangedFields(audit),
+            JSON.stringify(metadata),
+        ].filter(Boolean).join(' ').toLowerCase();
+    };
+    const getAuditExtraDetailRows = (audit) => {
+        const changedFields = getAuditChangedFields(audit);
+        return [
+            ['Information changed', changedFields.length > 0 ? changedFields.map(formatAuditField).join(', ') : 'No field changes recorded.'],
+            ['Device', getAuditBrowserLabel(audit)],
+            ['Network address', audit.ip_address || 'Not recorded'],
+        ];
     };
 
     const visibleAudits = useMemo(() => {
@@ -1144,13 +2046,7 @@ const DashboardAdmin = () => {
             if (auditActivityFilter === 'System access' && !isSystemAccess) return false;
             if (!query) return true;
 
-            return [
-                audit.username,
-                audit.role,
-                audit.action,
-                workspace,
-                result,
-            ].filter(Boolean).join(' ').toLowerCase().includes(query);
+            return getAuditSearchText(audit).includes(query);
         });
     }, [audits, auditActivityFilter, auditResultFilter, auditRoleFilter, auditSearch, auditWorkspaceFilter]);
     const auditWorkspaceOptions = useMemo(() => Array.from(new Set(audits.map(getAuditWorkspace).filter(Boolean))).sort(), [audits]);
@@ -1186,6 +2082,32 @@ const DashboardAdmin = () => {
     const monthlyAvailabilityEventCount = useMemo(() => (
         availabilityEvents.reduce((count, event) => count + (event.date ? 1 : 0), 0)
     ), [availabilityEvents]);
+    const availabilityEventSearchTerm = availabilityEventSearch.trim().toLowerCase();
+    const filteredAvailabilityEvents = useMemo(() => {
+        if (!availabilityEventSearchTerm) return availabilityEvents;
+
+        return availabilityEvents.filter((event) => [
+            event.name,
+            event.event_display_name,
+            event.type,
+            event.client,
+            event.city,
+            event.status,
+            event.date,
+            formatDate(event.date),
+            formatTime(event.time),
+            event.time,
+            event.pax,
+            event.id ? `BK-${event.id}` : '',
+        ].some((value) => String(value || '').toLowerCase().includes(availabilityEventSearchTerm)));
+    }, [availabilityEventSearchTerm, availabilityEvents]);
+    const visibleAvailabilityEvents = filteredAvailabilityEvents.slice(0, availabilityEventVisibleLimit);
+    const hasMoreAvailabilityEvents = filteredAvailabilityEvents.length > availabilityEventVisibleLimit;
+    const availabilityEventCountLabel = availabilityEventSearchTerm
+        ? `${filteredAvailabilityEvents.length} of ${monthlyAvailabilityEventCount}`
+        : hasMoreAvailabilityEvents
+            ? `${visibleAvailabilityEvents.length} of ${filteredAvailabilityEvents.length}`
+            : `${filteredAvailabilityEvents.length} shown`;
 
     const paginatedPackages = paginate(packages, packagePage, rowsPerPage);
     const paginatedEventTypes = paginate(eventTypes, eventTypePage, rowsPerPage);
@@ -1203,43 +2125,117 @@ const DashboardAdmin = () => {
         deactivated: customers.filter((customer) => customer.account_status === 'deactivated').length,
         withBookings: customers.filter((customer) => Number(customer.bookings_count || 0) > 0).length,
     }), [customers]);
+    const selectedCustomer = useMemo(() => {
+        if (!selectedCustomerId) return null;
+        const directMatch = customers.find((customer) => String(customer.id) === String(selectedCustomerId));
+        if (directMatch) return directMatch;
+
+        const bookingMatch = bookings.find((booking) => String(booking.user_id) === String(selectedCustomerId));
+        if (!bookingMatch) return null;
+
+        return {
+            id: selectedCustomerId,
+            full_name: customerAccountName(bookingMatch),
+            username: bookingMatch.username,
+            email: customerAccountEmail(bookingMatch) || bookingContactEmail(bookingMatch),
+            phone: customerAccountPhone(bookingMatch) || bookingContactPhone(bookingMatch),
+            account_status: 'active',
+        };
+    }, [bookings, customers, selectedCustomerId]);
+    const customerScopedBookings = useMemo(() => (
+        selectedCustomerId
+            ? bookings.filter((booking) => String(booking.user_id) === String(selectedCustomerId))
+            : []
+    ), [bookings, selectedCustomerId]);
+    const customerActiveBookings = useMemo(() => (
+        customerScopedBookings.filter((booking) => !['cancelled', 'completed'].includes(normalizeStatus(booking.status)))
+    ), [customerScopedBookings]);
+    const customerHistoryBookings = useMemo(() => (
+        customerScopedBookings.filter((booking) => ['cancelled', 'completed'].includes(normalizeStatus(booking.status)))
+    ), [customerScopedBookings]);
+    const customerPayments = useMemo(() => (
+        customerScopedBookings.flatMap((booking) => (
+            (Array.isArray(booking.payments) ? booking.payments : []).map((payment) => ({ booking, payment }))
+        ))
+    ), [customerScopedBookings]);
+    const customerLookupResults = useMemo(() => {
+        const query = customerLookupQuery.trim().toLowerCase();
+
+        return customers
+            .filter((customer) => {
+                if (customerLookupFilters.status === 'active') return customer.account_status !== 'deactivated';
+                if (customerLookupFilters.status === 'deactivated') return customer.account_status === 'deactivated';
+                return true;
+            })
+            .filter((customer) => {
+                const bookingCount = Number(customer.bookings_count || 0);
+                if (customerLookupFilters.bookingActivity === 'with_bookings') return bookingCount > 0;
+                if (customerLookupFilters.bookingActivity === 'no_bookings') return bookingCount === 0;
+                return true;
+            })
+            .filter((customer) => {
+                if (!query) return true;
+
+                return [
+                    customer.full_name,
+                    customer.username,
+                    customer.email,
+                    customer.phone,
+                ].some((value) => String(value || '').toLowerCase().includes(query));
+            })
+            .slice(0, 12);
+    }, [customerLookupFilters, customerLookupQuery, customers]);
+    const selectCustomerForSupport = (customer, tab = 'dashboard') => {
+        navigateToWorkspaceTab('customer', tab, { customerId: customer?.id || '' });
+    };
+    const handleAdminContextNavigate = useCallback((target = {}) => {
+        const workspace = normalizeWorkspace(target.workspace);
+        const tab = normalizeWorkspaceTab(workspace, target.tab);
+        const customerId = target.customerId ? String(target.customerId) : '';
+        const searchText = String(target.searchText || target.bookingRef || target.customerName || target.customerEmail || '').trim();
+
+        if (workspace === 'marketing' && tab === 'bookings' && searchText) {
+            setBookingSearch(searchText);
+        }
+
+        if (workspace === 'accounting' && searchText) {
+            if (tab === 'refunds') {
+                setRefundSearch(searchText);
+            } else {
+                setFinancePaymentSearch(searchText);
+            }
+        }
+
+        navigateToWorkspaceTab(workspace, tab, {
+            customerId,
+            financeSegment: target.financeSegment || FINANCE_SEGMENT_BY_ACCOUNTING_TAB[tab],
+        });
+    }, [navigateToWorkspaceTab]);
     const roleBadgeClass = (role) => {
         if (role === 'Admin') return 'border-[#720101]/15 bg-[#720101]/5 text-[#720101]';
         if (role === 'Marketing') return 'border-purple-200 bg-purple-50 text-purple-800';
         return 'border-green-200 bg-green-50 text-green-800';
     };
     const paginatedBookings = paginate(visibleBookings, bookingPage, rowsPerPage);
+    const paginatedFinancePaymentRows = paginate(visibleFinancePaymentRows, financePaymentPage, rowsPerPage);
+    const paginatedRefundRows = paginate(visibleRefundRows, refundPage, rowsPerPage);
     const paginatedAudits = paginate(visibleAudits, auditPage, 12);
 
-    const PaginationControls = ({ pageInfo, onPageChange }) => (
-        <div className="admin-pagination">
-            <span>
-                Showing <strong>{pageInfo.start}</strong>-<strong>{pageInfo.end}</strong> of <strong>{pageInfo.total}</strong>
-            </span>
-            <div className="flex items-center gap-2">
-                <button
-                    type="button"
-                    disabled={pageInfo.page <= 1}
-                    onClick={() => onPageChange(pageInfo.page - 1)}
-                    className="admin-page-btn"
-                >
-                    Prev
-                </button>
-                <span className="text-xs font-black text-slate-500">Page {pageInfo.page} / {pageInfo.totalPages}</span>
-                <button
-                    type="button"
-                    disabled={pageInfo.page >= pageInfo.totalPages}
-                    onClick={() => onPageChange(pageInfo.page + 1)}
-                    className="admin-page-btn"
-                >
-                    Next
-                </button>
-            </div>
-        </div>
+    const PaginationControls = ({ pageInfo, onPageChange, perPage = rowsPerPage }) => (
+        <StaffPagination
+            page={pageInfo.page}
+            perPage={perPage}
+            total={pageInfo.total}
+            onPageChange={onPageChange}
+        />
     );
 
     useEffect(() => {
-        if (activeTab === 'accounts') {
+        if (activeWorkspace === 'customer') {
+            fetchCustomers();
+            fetchBookings();
+            if (activeWorkspaceTab === 'book' && (!packages.length || !eventTypes.length)) fetchPackages();
+        } else if (activeTab === 'accounts') {
             fetchEmployees();
             fetchCustomers();
         } else if (activeTab === 'public-content') {
@@ -1254,10 +2250,10 @@ const DashboardAdmin = () => {
             fetchAnalytics();
             fetchReportBuilder();
             fetchReportPreview();
-        } else if (activeTab === 'bookings-intake') {
+        } else if (activeTab === 'bookings-intake' || activeTab === 'marketing-today') {
             fetchBookings();
             fetchAnalyticsSummary();
-        } else if (activeTab === 'finance') {
+        } else if (activeTab === 'finance' || activeTab === 'accounting-today') {
             fetchBookings();
             fetchRefundQueue();
         } else if (activeTab === 'calendar' || activeTab === 'handoff') {
@@ -1267,7 +2263,7 @@ const DashboardAdmin = () => {
         } else if (activeTab === 'system-audit') {
             fetchAudits();
         }
-    }, [activeTab, availabilityMonth, customerStatusFilter, employeeFilters, customerFilters]);
+    }, [activeWorkspace, activeWorkspaceTab, activeTab, availabilityMonth, customerStatusFilter, employeeFilters, customerFilters]);
 
     useEffect(() => {
         if (activeTab === 'today') {
@@ -1276,7 +2272,7 @@ const DashboardAdmin = () => {
     }, [activeTab, peakSeasonFilters]);
 
     useSmartRefresh({
-        enabled: ['today', 'analytics', 'reports', 'bookings-intake', 'calendar', 'handoff', 'finance', 'accounts', 'public-content', 'availability', 'system-audit'].includes(activeTab),
+        enabled: activeWorkspace === 'customer' || ['today', 'analytics', 'reports', 'bookings-intake', 'marketing-today', 'calendar', 'handoff', 'finance', 'accounting-today', 'accounts', 'public-content', 'availability', 'system-audit'].includes(activeTab),
         interval: activeTab === 'today' || activeTab === 'analytics' || activeTab === 'reports' ? 120000 : 90000,
         idleAfter: 180000,
         channels: liveChannels,
@@ -1299,8 +2295,21 @@ const DashboardAdmin = () => {
     }, [bookingSearch, bookingStatusFilter, bookingSourceFilter, bookingSort]);
 
     useEffect(() => {
+        setFinancePaymentPage(1);
+    }, [financePaymentSearch, financePaymentFilter, financePaymentSort]);
+
+    useEffect(() => {
+        setRefundPage(1);
+    }, [refundSearch, refundStatusFilter, refundSort]);
+
+    useEffect(() => {
         setAuditPage(1);
-    }, [auditSearch, auditRoleFilter]);
+        setExpandedAuditId(null);
+    }, [auditSearch, auditRoleFilter, auditActivityFilter, auditWorkspaceFilter, auditResultFilter]);
+
+    useEffect(() => {
+        setAvailabilityEventVisibleLimit(AVAILABILITY_EVENT_PAGE_SIZE);
+    }, [availabilityEventSearch, availabilityMonth]);
 
     const fetchAvailabilityOverrides = async ({ silent = false } = {}) => {
         if (!silent) setAvailabilityLoading(true);
@@ -1419,7 +2428,8 @@ const DashboardAdmin = () => {
     const fetchCustomers = async ({ silent = false } = {}) => {
         if (!silent) setCustomerLoading(true);
         try {
-            const data = await fetchCachedJson(adminCustomersUrl(customerStatusFilter, customerFilters), 60000);
+            const status = activeWorkspace === 'customer' ? 'all' : customerStatusFilter;
+            const data = await fetchCachedJson(adminCustomersUrl(status, customerFilters), 60000);
             setCustomers(getListData(data));
         } catch (error) {
             console.error(error);
@@ -2444,6 +3454,18 @@ const DashboardAdmin = () => {
         return insight;
     };
 
+    const readableInsightText = (text) => {
+        if (!text) return '';
+        const trimmed = String(text).trim();
+        if (!trimmed) return '';
+        const withoutTrailingPeriod = trimmed.replace(/\.+$/, '');
+        if (withoutTrailingPeriod === withoutTrailingPeriod.toUpperCase() && /[A-Z]/.test(withoutTrailingPeriod)) {
+            const lowered = withoutTrailingPeriod.toLowerCase();
+            return `${lowered.charAt(0).toUpperCase()}${lowered.slice(1)}.`;
+        }
+        return trimmed.endsWith('.') ? trimmed : `${trimmed}.`;
+    };
+
     const InsightLine = ({ insight, compact = true }) => {
         const normalized = normalizeInsight(insight);
         if (!normalized) return null;
@@ -2490,6 +3512,51 @@ const DashboardAdmin = () => {
             )}
         </div>
     );
+
+    const dominantBookingCategory = topSalesFrequency?.label || 'Current booking mix';
+    const dominantBookingPercentage = Number(topSalesFrequency?.percentage || 0);
+    const bookingRevenueForecast = Number(revenueForecastSummary.nextForecast || 0);
+    const bookingGuestBaseline = Number(paxDemandSummary.nextForecast || 0);
+    const bookingSalesInsight = normalizeInsight(
+        salesFrequencyDistribution.insight,
+        `${dominantBookingCategory} leads verified package volume`
+    ) || chartInsight(
+        `${dominantBookingCategory} leads verified package volume`,
+        `${dominantBookingCategory} represents ${dominantBookingPercentage.toFixed(1)}% of verified package volume in this view.`,
+        'Use the leading category for campaign targeting and package recommendation defaults.',
+        'watch'
+    );
+    const bookingRevenueInsight = normalizeInsight(
+        revenueForecast.interpretation || revenueForecast.insight,
+        'Revenue trajectory is ready'
+    ) || chartInsight(
+        'Revenue trajectory is ready',
+        `The next projected revenue point is ${formatCurrency(bookingRevenueForecast)} based on the current regression model.`,
+        'Review approvals and discounts against the expected revenue trajectory.',
+        'watch'
+    );
+    const bookingGuestInsight = normalizeInsight(
+        paxDemandProjection.interpretation || paxDemandProjection.insight,
+        'Guest demand baseline is ready'
+    ) || chartInsight(
+        'Guest demand baseline is ready',
+        `The smoothed moving average projects ${bookingGuestBaseline.toLocaleString()} guests for the next planning period.`,
+        'Check staffing, ingredients, and supplier commitments against this baseline.',
+        'watch'
+    );
+    const bookingDecisionSignals = [
+        { label: 'verified volume', value: `${dominantBookingPercentage.toFixed(1)}%` },
+        { label: 'forecast', value: formatCurrency(bookingRevenueForecast) },
+        { label: 'guest baseline', value: bookingGuestBaseline.toLocaleString() },
+    ];
+    const bookingDecisionSupportNumbers = [
+        ['Dominant category', dominantBookingCategory],
+        ['Verified volume', `${dominantBookingPercentage.toFixed(1)}%`],
+        ['Revenue forecast', formatCurrency(bookingRevenueForecast)],
+        ['Revenue model', `${revenueForecastSummary.method || 'OLS linear regression'} / ${revenueForecastSummary.direction || 'upward'}`],
+        ['Guest baseline', bookingGuestBaseline.toLocaleString()],
+        ['Guest model', `${paxDemandSummary.method || 'SMA'} projected guests`],
+    ];
 
     const AnalyticsPanel = ({ id, filterKey = null, kicker, title, description, insight, fallbackInsight = null, guide = null, actions, children, loading = false, className = '', chartHeight = 'h-64' }) => (
         <section className={`admin-panel admin-analytics-panel ${className}`}>
@@ -2724,9 +3791,15 @@ const DashboardAdmin = () => {
                         </div>
                         <div className="flex flex-wrap gap-2">
                             {renderAnalyticsFilterControl('snapshot', businessSnapshot.label || 'Timeframe')}
-                            <button type="button" onClick={() => fetchAnalytics()} disabled={analyticsLoading} className="admin-button-primary inline-flex items-center justify-center gap-2 px-5 py-2.5 text-sm font-black">
-                                <RefreshCw className={`h-4 w-4 ${analyticsLoading ? 'animate-spin' : ''}`} />
-                                {analyticsLoading ? 'Refreshing...' : 'Refresh insights'}
+                            <button
+                                type="button"
+                                onClick={() => fetchAnalytics()}
+                                disabled={analyticsLoading}
+                                className="admin-icon-action admin-refresh-action"
+                                aria-label={analyticsLoading ? 'Refreshing insights' : 'Refresh insights'}
+                                title={analyticsLoading ? 'Refreshing insights' : 'Refresh insights'}
+                            >
+                                <RefreshCw className={`h-5 w-5 ${analyticsLoading ? 'animate-spin' : ''}`} aria-hidden="true" />
                             </button>
                         </div>
                     </div>
@@ -3081,7 +4154,7 @@ const DashboardAdmin = () => {
                                 <div key={`${alert.label}-${index}`} className="rounded-xl border border-amber-100 bg-[#fffaf3] p-4">
                                     <p className="text-sm font-black text-gray-950">{alert.label || alert.title}</p>
                                     <p className="mt-1 text-sm font-semibold text-gray-500">{alert.detail || alert.message || 'Review this item before the next operations update.'}</p>
-                                    <button onClick={() => alert.label?.toLowerCase().includes('payment') ? setActiveTab('finance') : setActiveTab('bookings-intake')} className="mt-3 text-xs font-black uppercase tracking-widest text-[#720101]">Open queue</button>
+                                    <button onClick={() => openOperationalAlertQueue(alert)} className="mt-3 text-xs font-black uppercase tracking-widest text-[#720101]">Open queue</button>
                                 </div>
                             ))}
                             {!topAlerts.length && <div className="rounded-xl bg-gray-50 p-6 text-sm font-bold text-gray-400">No priority alerts for this timeframe.</div>}
@@ -3336,6 +4409,12 @@ const DashboardAdmin = () => {
             if (isCustomerEdit) {
                 delete payload.role;
             }
+            if (payload.password && !empPasswordEvaluation.valid) {
+                setEmpFormErrors({ password: ['Complete the password requirements before saving.'] });
+                showToast('Please review the password fields.', 'error');
+                setEmpFormLoading(false);
+                return;
+            }
 
             const res = await csrfFetch(url, {
                 method,
@@ -3587,7 +4666,7 @@ const DashboardAdmin = () => {
             username: customer.username,
             password: '',
             role: 'Client',
-            email: customer.email || '',
+            email: isPlaceholderEmail(customer.email) ? '' : customer.email || '',
             phone: customer.phone || ''
         });
         setEmpModal({ open: true, mode: 'edit', data: customer });
@@ -3741,6 +4820,362 @@ const DashboardAdmin = () => {
         </div>
     );
 
+    const renderCustomerBookingRows = (items, emptyTitle) => (
+        items.length ? (
+            <div className="admin-responsive-table">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Booking</th>
+                            <th>Event Date</th>
+                            <th>Status</th>
+                            <th>Total</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {items.map((booking) => (
+                            <tr key={booking.id}>
+                                <td>
+                                    <p className="font-black text-slate-950">{eventDisplayName(booking)}</p>
+                                    <p className="text-xs font-bold text-slate-400">{formatBookingRef(booking.id)} / {booking.pax || 0} guests</p>
+                                    {hasDifferentBookingContact(booking) && (
+                                        <p className="text-xs font-bold text-amber-700">Booking contact: {bookingContactName(booking)}</p>
+                                    )}
+                                </td>
+                                <td>{formatDate(booking.event_date)}</td>
+                                <td>
+                                    <StaffStatusChip tone={bookingStatusMeta[normalizeStatus(booking.status)]?.tone || 'neutral'}>
+                                        {bookingStatusMeta[normalizeStatus(booking.status)]?.label || booking.status || 'Unknown'}
+                                    </StaffStatusChip>
+                                </td>
+                                <td>{formatCurrency(getBookingTotal(booking))}</td>
+                                <td>
+                                    <button type="button" onClick={() => setEventDetailsModal({ open: true, data: booking })} className="admin-button-secondary px-3 py-2 text-xs font-black">
+                                        Open details
+                                    </button>
+                                </td>
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+            </div>
+        ) : (
+            <StaffEmptyState title={emptyTitle} message="Customer-linked records will appear here when available." />
+        )
+    );
+
+    const renderCustomerLookup = () => (
+        <AdminPageSurface className="admin-customer-support-surface">
+            <div className="admin-section-heading">
+                <div>
+                    <p className="admin-kicker">Customer module access</p>
+                    <h3>Customer Lookup</h3>
+                    <p>Select a customer to review their dashboard, bookings, payments, messages, and account status from the admin workspace.</p>
+                </div>
+            </div>
+            <AdminCommandStrip>
+                <div className="admin-search-field">
+                    <Search className="h-4 w-4" aria-hidden="true" />
+                    <input
+                        value={customerLookupQuery}
+                        onChange={(event) => setCustomerLookupQuery(event.target.value)}
+                        placeholder="Search customers by name, email, username, or phone"
+                    />
+                </div>
+                <label className="admin-lookup-filter">
+                    <span>Status</span>
+                    <select
+                        value={customerLookupFilters.status}
+                        onChange={(event) => setCustomerLookupFilters((previous) => ({ ...previous, status: event.target.value }))}
+                    >
+                        <option value="all">All statuses</option>
+                        <option value="active">Active only</option>
+                        <option value="deactivated">Deactivated</option>
+                    </select>
+                </label>
+                <label className="admin-lookup-filter">
+                    <span>Bookings</span>
+                    <select
+                        value={customerLookupFilters.bookingActivity}
+                        onChange={(event) => setCustomerLookupFilters((previous) => ({ ...previous, bookingActivity: event.target.value }))}
+                    >
+                        <option value="all">All bookings</option>
+                        <option value="with_bookings">With bookings</option>
+                        <option value="no_bookings">No bookings</option>
+                    </select>
+                </label>
+                <span className="admin-account-count-chip">{customerLookupResults.length} shown</span>
+            </AdminCommandStrip>
+            {customerLoading ? (
+                <StaffSkeleton rows={6} label="Loading customer accounts" />
+            ) : customerLookupResults.length ? (
+                <div className="admin-responsive-table admin-customer-lookup-table">
+                    <table>
+                        <colgroup>
+                            <col className="admin-customer-lookup-col-customer" />
+                            <col className="admin-customer-lookup-col-contact" />
+                            <col className="admin-customer-lookup-col-status" />
+                            <col className="admin-customer-lookup-col-bookings" />
+                            <col className="admin-customer-lookup-col-action" />
+                        </colgroup>
+                        <thead>
+                            <tr>
+                                <th>Customer</th>
+                                <th>Contact</th>
+                                <th>Status</th>
+                                <th>Bookings</th>
+                                <th>Action</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {customerLookupResults.map((customer) => (
+                                <tr key={customer.id}>
+                                    <td>
+                                        <p className="font-black text-slate-950">{customer.full_name || customer.username}</p>
+                                        <p className="text-xs font-bold text-slate-400">@{customer.username || 'customer'}</p>
+                                    </td>
+                                    <td>
+                                        <p>{displayEmail(customer.email)}</p>
+                                        <p className="text-xs font-bold text-slate-400">{customer.phone || 'No phone'}</p>
+                                    </td>
+                                    <td>{customer.account_status === 'deactivated' ? 'Deactivated' : 'Active'}</td>
+                                    <td>{Number(customer.bookings_count || 0).toLocaleString()}</td>
+                                    <td>
+                                        <button type="button" onClick={() => selectCustomerForSupport(customer)} className="admin-button-primary px-3 py-2 text-xs font-black">
+                                            Select customer
+                                        </button>
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            ) : (
+                <StaffEmptyState title="No customer accounts found" message="Try a broader name, email, username, or phone search." />
+            )}
+        </AdminPageSurface>
+    );
+
+    const renderCustomerWorkspace = () => {
+        if (activeWorkspaceTab === 'lookup' || !selectedCustomer) {
+            return renderCustomerLookup();
+        }
+
+        const customerName = selectedCustomer.full_name || selectedCustomer.username || `Customer #${selectedCustomer.id}`;
+        const accountActive = selectedCustomer.account_status !== 'deactivated';
+
+        return (
+            <div className="admin-customer-support-stack animate-fadeIn">
+                <section className="admin-customer-context-strip">
+                    <div>
+                        <p className="admin-kicker">Selected customer</p>
+                        <h3>{customerName}</h3>
+                        <p>{displayEmail(selectedCustomer.email)} / {selectedCustomer.phone || 'No phone'}</p>
+                    </div>
+                    <div className="admin-customer-context-metrics">
+                        <span><strong>{customerActiveBookings.length}</strong> Active</span>
+                        <span><strong>{customerHistoryBookings.length}</strong> History</span>
+                        <span><strong>{customerPayments.length}</strong> Payments</span>
+                        <span className={accountActive ? 'is-active' : 'is-deactivated'}>{accountActive ? 'Active account' : 'Deactivated account'}</span>
+                    </div>
+                    <button type="button" onClick={() => navigateToWorkspaceTab('customer', 'lookup', { customerId: '' })} className="admin-button-secondary px-3 py-2 text-xs font-black">
+                        Change customer
+                    </button>
+                </section>
+
+                {activeWorkspaceTab === 'dashboard' && (
+                    <AdminPageSurface>
+                        <div className="admin-section-heading">
+                            <div>
+                                <p className="admin-kicker">Customer dashboard</p>
+                                <h3>{customerName}</h3>
+                                <p>Admin support view of this customer's active bookings, payments, and event progress.</p>
+                            </div>
+                            <button type="button" onClick={() => setAssistedBookingOpen(true)} className="admin-button-primary px-4 py-2.5 text-sm font-black">
+                                Book Now on behalf of customer
+                            </button>
+                        </div>
+                        <div className="admin-flat-strip">
+                            <div className="admin-flat-strip-item"><strong>{customerScopedBookings.length}</strong><span>Total bookings</span></div>
+                            <div className="admin-flat-strip-item"><strong>{customerActiveBookings.length}</strong><span>Active bookings</span></div>
+                            <div className="admin-flat-strip-item"><strong>{customerPayments.length}</strong><span>Payments</span></div>
+                            <div className="admin-flat-strip-item"><strong>{formatCurrency(customerScopedBookings.reduce((sum, booking) => sum + getBookingTotal(booking), 0))}</strong><span>Total exposure</span></div>
+                        </div>
+                        {renderCustomerBookingRows(customerActiveBookings, 'No active bookings for this customer')}
+                    </AdminPageSurface>
+                )}
+
+                {activeWorkspaceTab === 'menu' && (
+                    <AdminPageSurface>
+                        <div className="admin-section-heading">
+                            <div>
+                                <p className="admin-kicker">Customer booking</p>
+                                <h3>Menu</h3>
+                                <p>Review selected menu data from the customer's active bookings.</p>
+                            </div>
+                        </div>
+                        {renderCustomerBookingRows(customerActiveBookings.filter((booking) => getSelectedDishes(booking).length > 0), 'No menu selections recorded')}
+                    </AdminPageSurface>
+                )}
+
+                {activeWorkspaceTab === 'payments' && (
+                    <AdminPageSurface>
+                        <div className="admin-section-heading">
+                            <div>
+                                <p className="admin-kicker">Customer finance</p>
+                                <h3>Payments</h3>
+                                <p>Review customer payment records. Checkout remains customer-facing; admin support can route the customer to payment.</p>
+                            </div>
+                        </div>
+                        {customerPayments.length ? (
+                            <div className="admin-responsive-table">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>Booking</th>
+                                            <th>Payment</th>
+                                            <th>Due</th>
+                                            <th>Status</th>
+                                            <th>Amount</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {customerPayments.map(({ booking, payment }) => (
+                                            <tr key={`${booking.id}-${payment.id}`}>
+                                                <td>{formatBookingRef(booking.id)}</td>
+                                                <td>{paymentLabel(payment.payment_type)}</td>
+                                                <td>{formatDate(payment.due_date)}</td>
+                                                <td>{staffPaymentStatus(payment.status, payment.due_date).label}</td>
+                                                <td>{formatCurrency(payment.amount)}</td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        ) : (
+                            <StaffEmptyState title="No payments found" message="Payment records will appear here after a customer booking creates payment terms." />
+                        )}
+                    </AdminPageSurface>
+                )}
+
+                {activeWorkspaceTab === 'history' && (
+                    <AdminPageSurface>
+                        <div className="admin-section-heading">
+                            <div>
+                                <p className="admin-kicker">Customer records</p>
+                                <h3>History</h3>
+                                <p>Completed and cancelled events connected to this customer.</p>
+                            </div>
+                        </div>
+                        {renderCustomerBookingRows(customerHistoryBookings, 'No customer history found')}
+                    </AdminPageSurface>
+                )}
+
+                {activeWorkspaceTab === 'messages' && (
+                    <div className="admin-messages-page-surface admin-customer-messages-surface">
+                        <Suspense fallback={<StaffSkeleton variant="panel" rows={6} label="Loading message desk" />}>
+                            <StaffMessaging
+                                variant="admin-oversight"
+                                surfaceMode="admin-full"
+                                memoryScope={`customer:${selectedCustomer.id}`}
+                                customerId={selectedCustomer.id}
+                                defaultAdminFilter="all-active"
+                                refreshToken={messageRefreshToken}
+                                targetConversationId={targetConversationId}
+                                onMetricsChange={setAdminMessageMetrics}
+                                onAdminContextNavigate={handleAdminContextNavigate}
+                            />
+                        </Suspense>
+                    </div>
+                )}
+
+                {activeWorkspaceTab === 'feedback' && (
+                    <AdminPageSurface>
+                        <div className="admin-section-heading">
+                            <div>
+                                <p className="admin-kicker">Customer follow-up</p>
+                                <h3>Feedback Request</h3>
+                                <p>Feedback is reviewed through staff event history and post-event follow-up records.</p>
+                            </div>
+                        </div>
+                        {renderCustomerBookingRows(customerHistoryBookings, 'No completed events ready for feedback review')}
+                    </AdminPageSurface>
+                )}
+
+                {activeWorkspaceTab === 'announcements' && (
+                    <AdminPageSurface>
+                        <div className="admin-section-heading">
+                            <div>
+                                <p className="admin-kicker">Customer updates</p>
+                                <h3>Announcements</h3>
+                                <p>Open Public Content to review announcements visible to customers.</p>
+                            </div>
+                            <button type="button" onClick={() => navigateToWorkspaceTab('marketing', 'public-content', { configTab: 'announcements' })} className="admin-button-primary px-4 py-2.5 text-sm font-black">
+                                Open announcements
+                            </button>
+                        </div>
+                    </AdminPageSurface>
+                )}
+
+                {activeWorkspaceTab === 'account-status' && (
+                    <AdminPageSurface>
+                        <div className="admin-section-heading">
+                            <div>
+                                <p className="admin-kicker">Customer account</p>
+                                <h3>Account Status</h3>
+                                <p>Review customer access and account lifecycle actions.</p>
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                                <button type="button" onClick={() => openCustomerModal(selectedCustomer)} className="admin-button-secondary px-3 py-2 text-xs font-black">
+                                    Edit customer account
+                                </button>
+                                {accountActive ? (
+                                    <button type="button" onClick={() => handleDeleteCustomer(selectedCustomer.id)} className="admin-button-danger px-3 py-2 text-xs font-black">
+                                        Deactivate customer
+                                    </button>
+                                ) : (
+                                    <button type="button" onClick={() => handleReactivateCustomer(selectedCustomer.id)} className="admin-button-primary px-3 py-2 text-xs font-black">
+                                        Reactivate customer
+                                    </button>
+                                )}
+                            </div>
+                        </div>
+                    </AdminPageSurface>
+                )}
+            </div>
+        );
+    };
+
+    const renderWorkspaceOverview = (workspace) => (
+        <AdminPageSurface className="admin-workspace-overview">
+            <div className="admin-section-heading">
+                <div>
+                    <p className="admin-kicker">{workspace === 'marketing' ? 'Marketing workspace' : 'Accounting workspace'}</p>
+                    <h3>Today</h3>
+                    <p>{workspace === 'marketing'
+                        ? 'Admin monitoring view for marketing queues and takeover-ready work.'
+                        : 'Admin monitoring view for accounting queues and override-ready finance work.'}</p>
+                </div>
+            </div>
+            {workspace === 'marketing' ? (
+                <div className="admin-flat-strip">
+                    <button type="button" onClick={() => navigateToWorkspaceTab('marketing', 'bookings')} className="admin-flat-strip-item admin-flat-strip-action"><strong>{bookingStats.pending}</strong><span>Bookings</span></button>
+                    <button type="button" onClick={() => navigateToWorkspaceTab('marketing', 'calendar')} className="admin-flat-strip-item admin-flat-strip-action"><strong>{bookingStats.active}</strong><span>Calendar</span></button>
+                    <button type="button" onClick={() => navigateToWorkspaceTab('marketing', 'messages')} className="admin-flat-strip-item admin-flat-strip-action"><strong>{adminMessageMetrics.open}</strong><span>Messages</span></button>
+                    <button type="button" onClick={() => navigateToWorkspaceTab('marketing', 'handoff')} className="admin-flat-strip-item admin-flat-strip-action"><strong>{bookingStats.active}</strong><span>Event Handoff</span></button>
+                </div>
+            ) : (
+                <div className="admin-flat-strip">
+                    <button type="button" onClick={() => navigateToWorkspaceTab('accounting', 'payments')} className="admin-flat-strip-item admin-flat-strip-action"><strong>{financePaymentQueueStats.review}</strong><span>Payments</span></button>
+                    <button type="button" onClick={() => navigateToWorkspaceTab('accounting', 'reconciliation')} className="admin-flat-strip-item admin-flat-strip-action"><strong>{financePaymentQueueStats.exceptions}</strong><span>Reconciliation</span></button>
+                    <button type="button" onClick={() => navigateToWorkspaceTab('accounting', 'refunds')} className="admin-flat-strip-item admin-flat-strip-action"><strong>{refundQueue.length}</strong><span>Refunds</span></button>
+                    <button type="button" onClick={() => navigateToWorkspaceTab('accounting', 'ledger')} className="admin-flat-strip-item admin-flat-strip-action"><strong>{financePaymentRows.length}</strong><span>Ledger & Receipts</span></button>
+                </div>
+            )}
+        </AdminPageSurface>
+    );
+
     if (analyticsLoading && activeTab === 'today' && !analytics?.summary) {
         return (
             <StaffWorkspaceSkeleton
@@ -3748,9 +5183,13 @@ const DashboardAdmin = () => {
                 roleLabel="Owner operations"
                 label="Preparing admin console"
                 navGroups={[
-                    { label: 'Owner Workbench', items: ['Today', 'Bookings & Intake', 'Calendar', 'Handoff', 'Finance', 'Messages & Inquiries'] },
-                    { label: 'Business Control', items: ['Public Content', 'Availability', 'Accounts'] },
+                    { label: 'Daily Work', items: ['Command Center'] },
+                    { label: 'Queues', items: ['Bookings & Intake', 'Handoff', 'Food Tastings', 'Finance', 'Accounts'] },
+                    { label: 'Communication', items: ['Messages & Inquiries'] },
+                    { label: 'Scheduling', items: ['Calendar', 'Availability'] },
+                    { label: 'Customer Content', items: ['Announcements', 'Packages', 'Event Types', 'Menu Items'] },
                     { label: 'Insight & Governance', items: ['Analytics', 'Reports', 'System & Audit', 'Event History'] },
+                    { label: 'Settings', items: ['Settings'] },
                 ]}
             />
         );
@@ -3761,35 +5200,189 @@ const DashboardAdmin = () => {
             title="Admin Console"
             roleLabel="Owner operations"
             username={user?.username}
-            active={activeTab}
-            onNavigate={setActiveTab}
+            active={adminActiveNavId}
+            onNavigate={handleAdminNavigate}
             onLogout={handleLogout}
+            brandLogo={logoImg}
+            workspaceBadge="Admin"
             navGroups={adminNavGroups}
             roleKey="admin"
-            workspaceClassName="admin-page"
-        >
+            workspaceClassName={`admin-page ${['messages-inquiries', 'customer-messages'].includes(activeTab) ? 'is-messages-workspace' : ''}`}
+            hideSidebarBrand
+            topBar={(
                 <StaffPageHeader
-                    eyebrow={currentPage.eyebrow}
-                    title={currentPage.title}
-                    description={currentPage.description}
-                    metrics={[
-                        { label: 'Bookings', value: bookingStats.total },
-                        { label: 'Customers', value: customers.length },
-                        { label: 'Staff', value: employees.length },
-                        { label: 'Refunds', value: refundQueue.length },
-                    ]}
+                    notificationVariant="light"
+                    primaryContent={(
+                        <div className="admin-navbar-primary">
+                            <button type="button" className="admin-navbar-brand" onClick={() => navigateToWorkspaceTab('admin', 'today')} aria-label="Open admin command center">
+                                <img src={logoImg} alt="ECS" />
+                                <span>Admin</span>
+                            </button>
+                            <div className="admin-workspace-switcher" role="tablist" aria-label="Admin workspaces">
+                                {ADMIN_WORKSPACES.map((workspace) => (
+                                    <button
+                                        key={workspace.id}
+                                        type="button"
+                                        className={activeWorkspace === workspace.id ? 'is-active' : ''}
+                                        onClick={() => navigateToWorkspaceTab(workspace.id, workspaceTabs[workspace.id] || DEFAULT_WORKSPACE_TABS[workspace.id])}
+                                        role="tab"
+                                        aria-selected={activeWorkspace === workspace.id}
+                                        title={workspace.description}
+                                    >
+                                        {workspace.label}
+                                    </button>
+                                ))}
+                            </div>
+                            <div
+                                ref={adminSearchContainerRef}
+                                className="admin-header-search"
+                                onBlur={() => window.setTimeout(() => {
+                                    if (!adminSearchContainerRef.current?.contains(document.activeElement)) {
+                                        setAdminSearchOpen(false);
+                                        setAdminSearchFilterOpen(false);
+                                    }
+                                }, 120)}
+                            >
+                                <label className="sr-only" htmlFor="admin-tab-search">Search pages, customers, staff, or booking contacts</label>
+                                <Search className="admin-header-search-icon" aria-hidden="true" />
+                                <input
+                                    ref={adminSearchInputRef}
+                                    id="admin-tab-search"
+                                    type="search"
+                                    value={adminTabSearch}
+                                    onFocus={() => setAdminSearchOpen(true)}
+                                    onChange={(event) => {
+                                        setAdminTabSearch(event.target.value);
+                                        setAdminSearchOpen(true);
+                                    }}
+                                    onKeyDown={handleAdminSearchKeyDown}
+                                    placeholder="Search pages, customers, staff, or booking contacts..."
+                                    autoComplete="off"
+                                />
+                                {adminTabSearch && (
+                                    <button
+                                        type="button"
+                                        className="admin-header-search-clear"
+                                        onMouseDown={(event) => event.preventDefault()}
+                                        onClick={() => {
+                                            setAdminTabSearch('');
+                                            setAdminSearchOpen(true);
+                                            adminSearchInputRef.current?.focus();
+                                        }}
+                                        aria-label="Clear admin search"
+                                    >
+                                        <X aria-hidden="true" />
+                                    </button>
+                                )}
+                                <button
+                                    type="button"
+                                    className={`admin-header-search-filter ${adminSearchFilterOpen || adminSearchFilterCount > 0 ? 'is-active' : ''}`}
+                                    onMouseDown={(event) => event.preventDefault()}
+                                    onClick={() => {
+                                        setAdminSearchFilterOpen((open) => !open);
+                                        setAdminSearchOpen(true);
+                                        adminSearchInputRef.current?.focus();
+                                    }}
+                                    aria-label="Open search filters"
+                                    aria-expanded={adminSearchFilterOpen}
+                                >
+                                    <Filter aria-hidden="true" />
+                                    {adminSearchFilterCount > 0 && <span>{adminSearchFilterCount}</span>}
+                                </button>
+                                {adminSearchFilterOpen && (
+                                    <div className="admin-header-search-filter-popover" role="dialog" aria-label="Search filters">
+                                        <div className="admin-header-search-filter-heading">
+                                            <strong>Search filters</strong>
+                                            <button
+                                                type="button"
+                                                onMouseDown={(event) => event.preventDefault()}
+                                                onClick={() => setAdminSearchFilters({ type: 'all', workspace: 'all', scope: 'all' })}
+                                            >
+                                                Reset
+                                            </button>
+                                        </div>
+                                        <label>
+                                            <span>Show</span>
+                                            <select
+                                                value={adminSearchFilters.type}
+                                                onChange={(event) => setAdminSearchFilters((filters) => ({ ...filters, type: event.target.value }))}
+                                            >
+                                                <option value="all">Everything</option>
+                                                <option value="page">Pages</option>
+                                                <option value="customer">Customer accounts</option>
+                                                <option value="staff">Staff accounts</option>
+                                                <option value="booking">Booking contacts</option>
+                                            </select>
+                                        </label>
+                                        <label>
+                                            <span>Workspace</span>
+                                            <select
+                                                value={adminSearchFilters.workspace}
+                                                onChange={(event) => setAdminSearchFilters((filters) => ({ ...filters, workspace: event.target.value }))}
+                                            >
+                                                <option value="all">All workspaces</option>
+                                                {ADMIN_WORKSPACES.map((workspace) => (
+                                                    <option key={workspace.id} value={workspace.id}>{workspace.label}</option>
+                                                ))}
+                                            </select>
+                                        </label>
+                                        <label>
+                                            <span>Search in</span>
+                                            <select
+                                                value={adminSearchFilters.scope}
+                                                onChange={(event) => setAdminSearchFilters((filters) => ({ ...filters, scope: event.target.value }))}
+                                            >
+                                                <option value="all">All details</option>
+                                                <option value="name">Names and page labels</option>
+                                                <option value="contact">Email or phone</option>
+                                                <option value="booking">Booking number</option>
+                                            </select>
+                                        </label>
+                                    </div>
+                                )}
+                                {showAdminSearchResults && !adminSearchFilterOpen && (
+                                    <div className="admin-header-search-results" role="listbox" aria-label="Admin search results">
+                                        {adminSearchResults.length > 0 ? adminSearchResults.map((result) => (
+                                            <button
+                                                key={result.id}
+                                                type="button"
+                                                onMouseDown={(event) => event.preventDefault()}
+                                                onClick={() => navigateToAdminSearchResult(result)}
+                                                className={`admin-header-search-result ${activeWorkspace === result.workspace && activeWorkspaceTab === result.tab ? 'is-active' : ''}`}
+                                                role="option"
+                                                aria-selected={activeWorkspace === result.workspace && activeWorkspaceTab === result.tab}
+                                            >
+                                                <span>
+                                                    <strong>{result.label}</strong>
+                                                    <small>{result.path}</small>
+                                                </span>
+                                                {result.description && <em>{result.description}</em>}
+                                            </button>
+                                        )) : adminBookingSearchLoading || adminStaffSearchLoading ? (
+                                            <div className="admin-header-search-empty">Searching accounts and booking contacts...</div>
+                                        ) : (
+                                            <div className="admin-header-search-empty">No matching pages, customers, staff, or booking contacts found.</div>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    )}
                 />
-
-                <div className={ADMIN_FULL_SURFACE_TABS.includes(activeTab) ? 'admin-full-surface-tab-shell' : 'space-y-5'}>
+            )}
+        >
+                <div className={ADMIN_FULL_SURFACE_TABS.includes(activeTab) ? `admin-full-surface-tab-shell ${['messages-inquiries', 'customer-messages'].includes(activeTab) ? 'admin-messages-tab-shell' : ''}` : 'space-y-5'}>
+                    {activeWorkspace === 'customer' && renderCustomerWorkspace()}
+                    {activeTab === 'marketing-today' && renderWorkspaceOverview('marketing')}
+                    {activeTab === 'accounting-today' && renderWorkspaceOverview('accounting')}
                     {activeTab === 'today' && (
                         <div className="animate-fadeIn">
-                            <div className="space-y-6">
+                            <div className="admin-command-center-stack">
                                 <section className="admin-panel admin-today-command overflow-visible">
                                     <div className="admin-compact-command border-0 bg-[#fffaf3]">
                                         <div>
-                                            <p className="admin-kicker">Daily work</p>
-                                            <h3>What needs attention today</h3>
-                                            <p>A focused view of bookings, collections, refunds, and activity that may need staff action.</p>
+                                            <p className="admin-kicker">Quick actions</p>
+                                            <p>Use shortcuts first, then scan the live metrics below.</p>
                                         </div>
                                         <div className="admin-command-actions">
                                             <div className="admin-primary-actions">
@@ -3826,14 +5419,28 @@ const DashboardAdmin = () => {
                                                 <button
                                                     onClick={() => fetchAnalytics()}
                                                     disabled={analyticsLoading}
-                                                    className="admin-icon-action"
+                                                    className="admin-icon-action admin-refresh-action"
                                                     title={analyticsLoading ? 'Refreshing dashboard data' : 'Refresh dashboard data'}
                                                     aria-label={analyticsLoading ? 'Refreshing dashboard data' : 'Refresh dashboard data'}
                                                 >
-                                                    <RefreshCw className={`h-4 w-4 ${analyticsLoading ? 'animate-spin' : ''}`} />
+                                                    <RefreshCw className={`h-5 w-5 ${analyticsLoading ? 'animate-spin' : ''}`} />
                                                 </button>
                                             </div>
                                         </div>
+                                    </div>
+                                    <div className="admin-stat-strip admin-overview-strip" aria-label="Admin workspace overview">
+                                        {[
+                                            ['Bookings', bookingStats.total, 'Current booking records'],
+                                            ['Customers', customers.length, 'Customer accounts'],
+                                            ['Staff', employees.length, 'Staff accounts'],
+                                            ['Refunds', refundQueue.length, 'Refund requests'],
+                                        ].map(([label, value, hint]) => (
+                                            <span key={label} className="admin-stat-chip admin-stat-chip-wide">
+                                                <strong>{value}</strong>
+                                                <em>{label}</em>
+                                                <small>{hint}</small>
+                                            </span>
+                                        ))}
                                     </div>
                                     <div className="admin-stat-strip border-t border-gray-100 bg-white px-4 py-3">
                                         {[
@@ -3851,60 +5458,32 @@ const DashboardAdmin = () => {
                                     </div>
                                 </section>
 
-                                <section className="admin-panel overflow-hidden">
-                                    <div className="flex flex-col gap-2 border-b border-gray-100 bg-white p-5 md:flex-row md:items-end md:justify-between">
-                                        <div>
-                                            <p className="admin-kicker">Decision support</p>
-                                            <h3 className="mt-1 text-xl font-black text-gray-950">Advanced analytics snapshot</h3>
-                                            <p className="mt-1 text-sm font-semibold text-gray-500">Sales concentration, revenue trajectory, and smoothed guest demand for today&apos;s admin decisions.</p>
-                                        </div>
-                                        {salesFrequencyDistribution.is_fallback && (
-                                            <span className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-black uppercase tracking-widest text-amber-700">Fallback data</span>
-                                        )}
-                                    </div>
-                                    <div className="grid gap-4 p-5 xl:grid-cols-3">
-                                        <div className="rounded-xl border border-gray-100 bg-[#fffaf3] p-4">
-                                            <p className="text-xs font-black uppercase tracking-widest text-[#9f6500]">Dominant package category</p>
-                                            <p className="mt-2 text-2xl font-black text-gray-950">{topSalesFrequency?.label || 'No category yet'}</p>
-                                            <p className="mt-1 text-sm font-semibold text-gray-600">{Number(topSalesFrequency?.percentage || 0).toFixed(1)}% of verified booking volume</p>
-                                            <div className="mt-4 h-40">
-                                                {salesFrequencyData.length ? (
-                                                    <ResponsiveContainer width="100%" height="100%">
-                                                        <BarChart data={salesFrequencyData}>
-                                                            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E5E7EB" />
-                                                            <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{ fontSize: 9, fill: '#6B7280' }} />
-                                                            <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#6B7280' }} />
-                                                            <RechartsTooltip />
-                                                            <Bar dataKey="frequency" fill="#720101" radius={[6, 6, 0, 0]} name="Bookings" />
-                                                        </BarChart>
-                                                    </ResponsiveContainer>
-                                                ) : <div className="flex h-full items-center justify-center text-sm font-bold text-gray-400">Waiting for sales data.</div>}
-                                            </div>
-                                        </div>
-                                        <div className="rounded-xl border border-gray-100 bg-white p-4">
-                                            <p className="text-xs font-black uppercase tracking-widest text-[#9f6500]">Next revenue trajectory</p>
-                                            <p className="mt-2 text-2xl font-black text-gray-950">{formatCurrency(revenueForecastSummary.nextForecast || 0)}</p>
-                                            <p className="mt-1 text-sm font-semibold text-gray-600">{revenueForecastSummary.method || 'OLS linear regression'} / {revenueForecastSummary.direction || 'upward'}</p>
-                                            <InsightLine insight={revenueForecast.interpretation || normalizeInsight(revenueForecast.insight)} compact={false} />
-                                        </div>
-                                        <div className="rounded-xl border border-gray-100 bg-white p-4">
-                                            <p className="text-xs font-black uppercase tracking-widest text-[#9f6500]">Guest demand baseline</p>
-                                            <p className="mt-2 text-2xl font-black text-gray-950">{Number(paxDemandSummary.nextForecast || 0).toLocaleString()} guests</p>
-                                            <p className="mt-1 text-sm font-semibold text-gray-600">{paxDemandSummary.method || 'SMA'} / next planning period</p>
-                                            <InsightLine insight={paxDemandProjection.interpretation || normalizeInsight(paxDemandProjection.insight)} compact={false} />
-                                        </div>
-                                    </div>
-                                </section>
+                                <div className="admin-command-center-focus">
+                                    <NextActionPanel
+                                        eyebrow="Start here"
+                                        title="Open the first item that needs a decision"
+                                        description="Only active booking, refund, account, system, and operational exceptions appear here."
+                                        actions={adminNextActions}
+                                        emptyTitle="No admin actions waiting"
+                                        emptyMessage="Booking, refund, account, and system exceptions will appear here."
+                                    />
+                                </div>
 
-                                <NextActionPanel
-                                    eyebrow="Oversight"
-                                    title="Admin work needing attention"
-                                    description="Exceptions, account access, refunds, and system activity are grouped here before the detailed reports."
-                                    actions={adminNextActions}
-                                    emptyTitle="No admin actions waiting"
-                                    emptyMessage="Booking, refund, account, and system exceptions will appear here."
+                                <StaffInlineInsight
+                                    eyebrow="Decision support"
+                                    title={`${topSalesFrequency?.label || 'Booking demand'} is the strongest planning signal right now`}
+                                    signals={[
+                                        { label: 'verified volume', value: `${Number(topSalesFrequency?.percentage || 0).toFixed(1)}%` },
+                                        { label: 'forecast', value: formatCurrency(revenueForecastSummary.nextForecast || 0) },
+                                        { label: 'guest baseline', value: Number(paxDemandSummary.nextForecast || 0).toLocaleString() },
+                                    ]}
+                                    actionLabel="Open analytics"
+                                    onAction={() => setActiveTab('analytics')}
                                 />
 
+                                <PasswordUpgradeBanner user={user} variant="compact" className="admin-security-task" />
+
+                                <div className="hidden">
                                 <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
                                     <section className="admin-panel p-6 xl:col-span-2">
                                         <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -3977,7 +5556,7 @@ const DashboardAdmin = () => {
                                                         <p className="text-sm font-black text-gray-900">{alert.label}</p>
                                                         <span className="rounded-full bg-white px-3 py-1 text-sm font-black text-gray-950 shadow-sm">{alert.count}</span>
                                                     </div>
-                                                    <button onClick={() => alert.label.includes('payment') ? setActiveTab('finance') : setActiveTab('bookings-intake')} className="mt-3 text-xs font-black uppercase tracking-widest text-gray-500 hover:text-gray-900">Open queue</button>
+                                                    <button onClick={() => openOperationalAlertQueue(alert)} className="mt-3 text-xs font-black uppercase tracking-widest text-gray-500 hover:text-gray-900">Open queue</button>
                                                 </div>
                                             ))}
                                             {!visibleOperationalAlerts.length && <div className="rounded-xl bg-gray-50 p-6 text-sm font-bold text-gray-400">No alerts match this severity.</div>}
@@ -4253,7 +5832,8 @@ const DashboardAdmin = () => {
                                         </div>
                                     </section>
                                 </div>
-                            </div>
+                                </div>
+                                </div>
 
                             <div className="hidden">
                             <section className="admin-hero rounded-2xl p-6 text-white">
@@ -4412,9 +5992,15 @@ const DashboardAdmin = () => {
                                         <h3 className="mt-1 text-2xl font-black text-gray-950">Business Forecasting & Operational Signals</h3>
                                         <p className="mt-2 max-w-3xl text-sm font-semibold leading-6 text-gray-500">Forecast revenue and guest demand with simple moving averages, then review the operational signals admins need for staffing, purchasing, and payment follow-up.</p>
                                     </div>
-                                    <button onClick={() => fetchAnalytics()} disabled={analyticsLoading} className="admin-button-primary inline-flex w-full items-center justify-center gap-2 px-5 py-2.5 text-sm font-black sm:w-auto">
-                                        <RefreshCw className={`h-4 w-4 ${analyticsLoading ? 'animate-spin' : ''}`} />
-                                        {analyticsLoading ? 'Refreshing...' : 'Refresh Analytics'}
+                                    <button
+                                        type="button"
+                                        onClick={() => fetchAnalytics()}
+                                        disabled={analyticsLoading}
+                                        className="admin-icon-action admin-refresh-action"
+                                        aria-label={analyticsLoading ? 'Refreshing analytics' : 'Refresh analytics'}
+                                        title={analyticsLoading ? 'Refreshing analytics' : 'Refresh analytics'}
+                                    >
+                                        <RefreshCw className={`h-5 w-5 ${analyticsLoading ? 'animate-spin' : ''}`} aria-hidden="true" />
                                     </button>
                                 </div>
                                 <div className="p-5">
@@ -4659,33 +6245,13 @@ const DashboardAdmin = () => {
                                 ) : (
                                     <>
                                     <div className="admin-surface-grid overflow-hidden">
-                                        <div className="staff-catalog-head">
-                                            <div>
-                                                <p className="admin-kicker">{PUBLIC_CONTENT_META[activeConfigTab]?.kicker || 'Public content'}</p>
-                                                <h3 className="staff-section-title">
-                                                    {PUBLIC_CONTENT_META[activeConfigTab]?.title || 'Public Content'}
-                                                </h3>
-                                                <p className="staff-section-copy">
-                                                    {PUBLIC_CONTENT_META[activeConfigTab]?.description || 'Manage customer-facing content.'}
-                                                </p>
-                                            </div>
-                                            {activeConfigTab === 'packages' && <button type="button" onClick={() => openPackageDrawer()} className="staff-button-primary">Create package</button>}
-                                            {activeConfigTab === 'eventTypes' && <button type="button" onClick={() => openEventTypeDrawer()} className="staff-button-primary">Create event type</button>}
-                                            {activeConfigTab === 'menuItems' && <button type="button" onClick={openMenuItemModal} className="staff-button-primary">Add menu item</button>}
-                                        </div>
-                                        <div className="staff-catalog-tabs">
-                                            <nav className="flex gap-2 overflow-x-auto">
-                                                {PUBLIC_CONTENT_TABS.map(([key, label]) => (
-                                                    <button
-                                                        key={key}
-                                                        onClick={() => setActiveConfigTab(key)}
-                                                        className={`staff-catalog-tab ${activeConfigTab === key ? 'is-active' : ''}`}
-                                                    >
-                                                        {label}
-                                                    </button>
-                                                ))}
-                                            </nav>
-                                        </div>
+                                        {activeConfigTab !== 'announcements' && (
+                                            <AdminCommandStrip className="admin-catalog-action-strip">
+                                                {activeConfigTab === 'packages' && <button type="button" onClick={() => openPackageDrawer()} className="staff-button-primary">Create package</button>}
+                                                {activeConfigTab === 'eventTypes' && <button type="button" onClick={() => openEventTypeDrawer()} className="staff-button-primary">Create event type</button>}
+                                                {activeConfigTab === 'menuItems' && <button type="button" onClick={openMenuItemModal} className="staff-button-primary">Add menu item</button>}
+                                            </AdminCommandStrip>
+                                        )}
 
                                         {activeConfigTab === 'announcements' && (
                                             <Suspense fallback={<StaffSkeleton variant="panel" rows={3} label="Loading announcements" />}>
@@ -4703,7 +6269,7 @@ const DashboardAdmin = () => {
                                                                 <th className="px-6 py-4 text-left">Event Type</th>
                                                                 <th className="px-6 py-4 text-left">Category</th>
                                                                 <th className="px-6 py-4 text-left">Connected To</th>
-                                                                <th className="px-6 py-4 text-right">Price / Head</th>
+                                                                <th className="px-6 py-4 text-left">Price / Head</th>
                                                                 <th className="px-6 py-4 text-right">Minimum Guests</th>
                                                                 <th className="px-6 py-4 text-left">Description</th>
                                                                 <th className="px-6 py-4 text-right">Actions</th>
@@ -4716,7 +6282,7 @@ const DashboardAdmin = () => {
                                                                     <td className="px-6 py-4 text-sm font-bold text-gray-700">{eventTypes.find(type => type.slug === pkg.type)?.label || pkg.type}</td>
                                                                     <td className="px-6 py-4 text-gray-600">{getCategoryLabel(pkg.package_category)}</td>
                                                                     <td className="px-6 py-4 text-gray-600">{(pkg.event_type_slugs || [pkg.type]).map(slug => eventTypes.find(type => type.slug === slug)?.label || slug).join(', ')}</td>
-                                                                    <td className="px-6 py-4 text-right font-bold text-gray-900">PHP {Number(pkg.base_price_per_head || 0).toLocaleString()}</td>
+                                                                    <td className="px-6 py-4 text-left font-bold text-gray-900">PHP {Number(pkg.base_price_per_head || 0).toLocaleString()}</td>
                                                                     <td className="px-6 py-4 text-right text-gray-600">{pkg.minimum_pax}</td>
                                                                     <td className="px-6 py-4 text-gray-600">{pkg.description || 'No description'}</td>
                                                                     <td className="px-6 py-4 text-right">
@@ -4790,7 +6356,7 @@ const DashboardAdmin = () => {
                                                             <tr>
                                                                 <th className="px-6 py-4 text-left">Menu Item</th>
                                                                 <th className="px-6 py-4 text-left">Category</th>
-                                                                <th className="px-6 py-4 text-right">Current Price</th>
+                                                                <th className="px-6 py-4 text-left">Current Price</th>
                                                                 <th className="px-6 py-4 text-right">Actions</th>
                                                             </tr>
                                                         </thead>
@@ -4817,7 +6383,7 @@ const DashboardAdmin = () => {
                                                                             </div>
                                                                         </td>
                                                                         <td className="px-6 py-4 capitalize text-gray-600">{item.category}</td>
-                                                                        <td className="px-6 py-4 text-right font-bold text-gray-900">PHP {Number(item.costPerHead || 0).toLocaleString()}</td>
+                                                                        <td className="px-6 py-4 text-left font-bold text-gray-900">PHP {Number(item.costPerHead || 0).toLocaleString()}</td>
                                                                         <td className="px-6 py-4 text-right">
                                                                             <button onClick={() => openEditMenuItemModal(item)} className="mr-2 rounded-lg bg-[#720101] px-3 py-2 text-xs font-bold text-white hover:bg-[#5a0101]">Edit</button>
                                                                             {item._isCustom && item.isActive && <button onClick={() => handleArchiveMenuItem(item._dbId)} className="rounded-lg bg-red-50 px-3 py-2 text-xs font-bold text-red-700 hover:bg-red-100">Archive</button>}
@@ -5316,40 +6882,20 @@ const DashboardAdmin = () => {
                     }
                     {activeTab === 'messages-inquiries' && (
                         <div className="admin-messages-page-surface animate-fadeIn">
-                            <div className="admin-flat-strip">
-                                {[
-                                    ['Open conversations', adminMessageMetrics.open],
-                                    ['Needs admin attention', adminMessageMetrics.needsAttention],
-                                    ['Unassigned', adminMessageMetrics.unassigned],
-                                    ['Resolved today', adminMessageMetrics.resolvedToday],
-                                ].map(([label, value]) => (
-                                    <div key={label} className="admin-flat-strip-item">
-                                        <strong>{value}</strong>
-                                        <span>{label}</span>
-                                    </div>
-                                ))}
-                                <button
-                                    type="button"
-                                    onClick={() => setMessageRefreshToken((value) => value + 1)}
-                                    className="admin-flat-strip-item admin-flat-strip-action inline-flex justify-center text-[#720101] transition hover:bg-[#fff7ed]"
-                                    aria-label="Refresh conversations"
-                                    title="Refresh conversations"
-                                >
-                                    <RefreshCw className="h-4 w-4" aria-hidden="true" />
-                                </button>
-                            </div>
                             <Suspense fallback={<StaffSkeleton variant="panel" rows={6} label="Loading message desk" />}>
                                 <StaffMessaging
                                     variant="admin-oversight"
                                     surfaceMode="admin-full"
                                     refreshToken={messageRefreshToken}
+                                    targetConversationId={targetConversationId}
                                     onMetricsChange={setAdminMessageMetrics}
+                                    onAdminContextNavigate={handleAdminContextNavigate}
                                 />
                             </Suspense>
                         </div>
                     )}
                     {activeTab === 'settings' && (
-                        <AdminPageSurface className="admin-settings-surface">
+                        <AdminPageSurface className="admin-settings-surface admin-settings-tab-surface">
                             <RoleSettingsPanel role="admin" onNavigate={setActiveTab} />
                         </AdminPageSurface>
                     )}
@@ -5395,10 +6941,28 @@ const DashboardAdmin = () => {
                                         <input type="password" value={profileForm.current_password} onChange={(event) => updateProfileField('current_password', event.target.value)} placeholder="Only needed to change password" className="admin-input mt-2" />
                                         {profileErrors.current_password && <span className="admin-field-error">{profileErrors.current_password}</span>}
                                     </label>
-                                    <label className="admin-field-label">
-                                        New password
-                                        <input type="password" value={profileForm.new_password} onChange={(event) => updateProfileField('new_password', event.target.value)} placeholder="Leave blank to keep current" className="admin-input mt-2" />
-                                        {profileErrors.new_password && <span className="admin-field-error">{profileErrors.new_password}</span>}
+                                    <PasswordStrengthField
+                                        id="admin-profile-new-password"
+                                        name="new_password"
+                                        label="New password"
+                                        value={profileForm.new_password}
+                                        username={profileForm.username}
+                                        email={profileForm.email}
+                                        placeholder="Leave blank to keep current"
+                                        labelClassName="admin-field-label"
+                                        fieldClassName="auth-field auth-field-compact mt-2"
+                                        error={profileErrors.new_password}
+                                        onChange={(value) => updateProfileField('new_password', value)}
+                                    />
+                                    <label className="admin-field-label md:col-span-2">
+                                        Confirm new password
+                                        <input type="password" value={profileForm.new_password_confirmation} onChange={(event) => updateProfileField('new_password_confirmation', event.target.value)} placeholder="Repeat new password" className="admin-input mt-2" />
+                                        {profileErrors.new_password_confirmation && <span className="admin-field-error">{profileErrors.new_password_confirmation}</span>}
+                                        <PasswordMatchHint
+                                            password={profileForm.new_password}
+                                            confirmation={profileForm.new_password_confirmation}
+                                            touched={Boolean(profileForm.new_password_confirmation)}
+                                        />
                                     </label>
                                 </div>
 
@@ -5532,17 +7096,56 @@ const DashboardAdmin = () => {
                                             {availabilityEvents.length === 0 ? (
                                                 <p className="rounded-xl bg-gray-50 p-4 text-sm font-bold text-gray-500">No booked events for this month.</p>
                                             ) : (
-                                                <div className="space-y-3">
-                                                    {availabilityEvents.map((event) => (
-                                                        <button key={event.id} type="button" onClick={() => selectAvailabilityDate(event.date)} className={`w-full rounded-xl border p-4 text-left transition ${availabilityDate === event.date ? 'border-emerald-300 bg-emerald-50' : 'border-gray-100 bg-gray-50 hover:bg-white'}`}>
-                                                            <div className="flex items-center justify-between gap-3">
-                                                                <span className="text-sm font-black text-gray-950">{formatDate(event.date)}</span>
-                                                                <span className="text-xs font-black text-gray-500">{formatTime(event.time) || 'Time to confirm'}</span>
-                                                            </div>
-                                                            <p className="mt-2 text-xs font-black text-gray-800">{event.name}</p>
-                                                            <p className="mt-1 text-xs font-semibold text-gray-500">{event.client || 'Client'} / {Number(event.pax || 0).toLocaleString()} guests</p>
-                                                        </button>
-                                                    ))}
+                                                <div className="admin-availability-event-panel">
+                                                    <div className="admin-availability-event-tools">
+                                                        <label className="admin-availability-event-search">
+                                                            <Search aria-hidden="true" />
+                                                            <input
+                                                                type="search"
+                                                                value={availabilityEventSearch}
+                                                                onChange={(event) => setAvailabilityEventSearch(event.target.value)}
+                                                                placeholder="Search events"
+                                                                aria-label="Search booked events"
+                                                            />
+                                                        </label>
+                                                        <span className="admin-availability-event-count">{availabilityEventCountLabel}</span>
+                                                    </div>
+                                                    {filteredAvailabilityEvents.length === 0 ? (
+                                                        <p className="admin-availability-event-empty">No booked events match this search.</p>
+                                                    ) : (
+                                                        <div className="admin-availability-event-list">
+                                                            {visibleAvailabilityEvents.map((event) => {
+                                                                const eventType = event.type || 'Event';
+                                                                const eventTime = formatTime(event.time) || 'Time to confirm';
+
+                                                                return (
+                                                                    <button key={event.id} type="button" onClick={() => selectAvailabilityDate(event.date)} className={`admin-availability-event-row ${availabilityDate === event.date ? 'is-active' : ''}`}>
+                                                                        <span className="admin-availability-event-date">
+                                                                            <strong>{formatDate(event.date)}</strong>
+                                                                            <em>{eventTime}</em>
+                                                                        </span>
+                                                                        <span className="admin-availability-event-main">
+                                                                            <strong>{event.name}</strong>
+                                                                            <em>{event.client || 'Client'} / {Number(event.pax || 0).toLocaleString()} guests</em>
+                                                                        </span>
+                                                                        <span className="admin-availability-event-tags">
+                                                                            <span>{eventType}</span>
+                                                                            {event.city && <span>{event.city}</span>}
+                                                                        </span>
+                                                                    </button>
+                                                                );
+                                                            })}
+                                                            {hasMoreAvailabilityEvents && (
+                                                                <button
+                                                                    type="button"
+                                                                    className="admin-availability-load-more"
+                                                                    onClick={() => setAvailabilityEventVisibleLimit((limit) => limit + AVAILABILITY_EVENT_PAGE_SIZE)}
+                                                                >
+                                                                    Show more events
+                                                                </button>
+                                                            )}
+                                                        </div>
+                                                    )}
                                                 </div>
                                             )}
                                         </div>
@@ -5575,71 +7178,34 @@ const DashboardAdmin = () => {
                     )}
                     {
                         activeTab === 'accounts' && (
-                            <AdminPageSurface>
-                                <AdminCommandStrip>
-                                    <div>
-                                        <p className="admin-kicker">Access controls</p>
-                                        <p className="admin-command-copy">Staff access, customer account status, temporary passwords, and reactivation.</p>
+                            <AdminPageSurface className="admin-accounts-surface">
+                                <AdminCommandStrip className="admin-account-overview-strip">
+                                    <div className="admin-stat-strip admin-account-stat-strip">
+                                        {[
+                                            { label: 'Active staff', value: employeeAccountStats.active },
+                                            { label: 'Need password change', value: employeeAccountStats.password },
+                                            { label: 'Deactivated staff', value: employeeAccountStats.deactivated },
+                                            { label: 'Customers with bookings', value: customerAccountStats.withBookings },
+                                        ].map((stat) => (
+                                            <span key={stat.label} className="admin-stat-chip">
+                                                <strong>{stat.value}</strong>
+                                                <em>{stat.label}</em>
+                                            </span>
+                                        ))}
                                     </div>
-                                    <button onClick={() => openEmpModal('add')} className="inline-flex items-center justify-center gap-2 rounded-xl bg-[#720101] px-4 py-3 text-sm font-black text-white shadow-sm transition-colors hover:bg-[#5a0101]">
-                                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
-                                        Add staff account
-                                    </button>
+                                    <div className="admin-account-actions">
+                                        {accountSegment === 'staff' && (
+                                            <button onClick={() => openEmpModal('add')} className="admin-button-primary inline-flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-black">
+                                                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
+                                                Add staff account
+                                            </button>
+                                        )}
+                                    </div>
                                 </AdminCommandStrip>
 
-                                <div className="admin-stat-strip border-b border-[#720101]/10">
-                                    {[
-                                        { label: 'Active staff', value: employeeAccountStats.active },
-                                        { label: 'Need password change', value: employeeAccountStats.password },
-                                        { label: 'Deactivated staff', value: employeeAccountStats.deactivated },
-                                        { label: 'Customers with bookings', value: customerAccountStats.withBookings },
-                                    ].map((stat) => (
-                                        <span key={stat.label} className="admin-stat-chip">
-                                            <strong>{stat.value}</strong>
-                                            <em>{stat.label}</em>
-                                        </span>
-                                    ))}
-                                </div>
-
-                                <details className="admin-help-disclosure m-0 rounded-none border-x-0 border-t-0 shadow-none">
-                                    <summary>Account action guide</summary>
-                                    <div className="mt-3 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-                                        <div>
-                                            <p className="text-sm font-black text-amber-950">Account emails are available as a fallback, and temporary passwords can be shown again until they expire or are changed.</p>
-                                            <p className="mt-1 text-xs font-bold text-amber-800">Deactivate preserves records. Reset creates a temporary password. Force change keeps the current password but requires a new one on next sign-in.</p>
-                                        </div>
-                                        <button type="button" onClick={() => setActiveTab('public-content')} className="rounded-xl border border-amber-200 bg-white px-4 py-2 text-xs font-black text-amber-900 hover:bg-amber-100">
-                                            Open delivery settings
-                                        </button>
-                                    </div>
-                                </details>
-
-                                <AdminCommandStrip>
-                                    {[
-                                        { value: 'staff', label: 'Staff Accounts', count: employees.length },
-                                        { value: 'customers', label: 'Customer Accounts', count: customerAccountStats.shown },
-                                    ].map((segment) => (
-                                        <button
-                                            key={segment.value}
-                                            type="button"
-                                            onClick={() => setAccountSegment(segment.value)}
-                                            className={`rounded-xl px-4 py-2 text-sm font-black transition ${accountSegment === segment.value ? 'bg-[#720101] text-white' : 'text-slate-500 hover:bg-[#fff7e8] hover:text-[#720101]'}`}
-                                        >
-                                            {segment.label}<span className="ml-2 rounded-full bg-white/20 px-2 py-0.5 text-xs">{segment.count}</span>
-                                        </button>
-                                    ))}
-                                </AdminCommandStrip>
-
-                                <div>
-                                    {accountSegment === 'staff' && <AdminSurfaceSection className="border-t-0">
-                                        <div className="mb-3 flex items-center justify-between">
-                                            <div>
-                                                <h3 className="text-sm font-bold text-gray-900 uppercase tracking-wide">Staff Accounts</h3>
-                                                <p className="text-xs text-gray-500 mt-1">Marketing and Accounting personnel accounts.</p>
-                                            </div>
-                                            <span className="text-xs font-bold text-[#720101] bg-[#fff7e8] border border-[#720101]/10 rounded-full px-3 py-1">{employees.length} staff</span>
-                                        </div>
-                                        <AdminCommandStrip className="-mx-4 mb-0 border-x-0 md:grid md:grid-cols-[minmax(220px,1fr)_160px_170px_190px]">
+                                <div className="admin-account-workspace">
+                                    {accountSegment === 'staff' && <>
+                                        <AdminCommandStrip className="admin-account-filter-strip admin-account-filter-strip-staff">
                                             <input
                                                 type="search"
                                                 value={employeeFilters.search}
@@ -5665,13 +7231,21 @@ const DashboardAdmin = () => {
                                             </select>
                                         </AdminCommandStrip>
 
-                                        <AdminResponsiveTable className="-mx-4">
+                                        <AdminResponsiveTable className="admin-account-table-wrap">
                                             {empLoading ? (
                                                 <StaffSkeleton rows={6} label="Loading staff accounts" />
                                             ) : employees.length === 0 ? (
                                                 <div className="p-12 text-center text-gray-500">No employee accounts found.</div>
                                             ) : (
                                                 <table className="staff-table">
+                                                    <colgroup>
+                                                        <col className="admin-account-staff-col-name" />
+                                                        <col className="admin-account-staff-col-email" />
+                                                        <col className="admin-account-staff-col-role" />
+                                                        <col className="admin-account-staff-col-status" />
+                                                        <col className="admin-account-staff-col-created" />
+                                                        <col className="admin-account-staff-col-action" />
+                                                    </colgroup>
                                                     <thead>
                                                         <tr>
                                                             <th className="px-6 py-3 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Name</th>
@@ -5685,9 +7259,9 @@ const DashboardAdmin = () => {
                                                     <tbody>
                                                         {paginatedEmployees.items.map(emp => (
                                                             <tr key={emp.id} className="hover:bg-gray-50/80 transition-colors">
-                                                                <td className="px-6 py-4 whitespace-nowrap">
+                                                                <td className="px-6 py-4">
                                                                     <div className="flex items-center">
-                                                                        <div className="flex-shrink-0 h-8 w-8 rounded-full bg-gradient-to-br from-[#fff7e8] to-[#f8d58b] flex items-center justify-center text-[#720101] font-bold">
+                                                                        <div className="flex-shrink-0 h-8 w-8 rounded-full bg-white flex items-center justify-center text-[#720101] font-bold">
                                                                             {(emp.full_name || emp.username).charAt(0).toUpperCase()}
                                                                         </div>
                                                                         <div className="ml-4">
@@ -5696,23 +7270,23 @@ const DashboardAdmin = () => {
                                                                         </div>
                                                                     </div>
                                                                 </td>
-                                                                <td className="px-6 py-4 whitespace-nowrap">
+                                                                <td className="px-6 py-4">
                                                                     <div className="text-sm text-gray-700">{emp.email || <span className="text-gray-400 italic">No email</span>}</div>
                                                                 </td>
-                                                                <td className="px-6 py-4 whitespace-nowrap">
+                                                                <td className="px-6 py-4">
                                                                     <span className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-bold ${roleBadgeClass(emp.role)}`}>
                                                                         {emp.role}
                                                                     </span>
                                                                 </td>
-                                                                <td className="px-6 py-4 whitespace-nowrap">
+                                                                <td className="px-6 py-4">
                                                                     <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold border ${emp.account_status === 'deactivated' ? 'bg-red-50 text-red-700 border-red-100' : emp.must_change_password ? 'bg-amber-50 text-amber-700 border-amber-100' : 'bg-green-100 text-green-800 border-green-200'}`}>
                                                                         {emp.account_status === 'deactivated' ? 'Deactivated' : emp.must_change_password ? 'Password change needed' : 'Active'}
                                                                     </span>
                                                                 </td>
-                                                                <td className="px-6 py-4 whitespace-nowrap">
+                                                                <td className="px-6 py-4">
                                                                     <div className="text-sm text-gray-500">{formatDate(emp.created_at)}</div>
                                                                 </td>
-                                                                <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                                                                <td className="account-action-cell px-6 py-4 text-right text-sm font-medium">
                                                                     <details className="relative inline-block text-left">
                                                                         <summary className="list-none rounded-xl border border-[#720101]/10 bg-white px-3 py-2 text-xs font-black text-[#720101] shadow-sm marker:hidden hover:bg-[#fff7e8]">
                                                                             Actions <ChevronDown className="ml-1 inline h-3.5 w-3.5" />
@@ -5755,15 +7329,11 @@ const DashboardAdmin = () => {
                                         {!empLoading && employees.length > 0 && (
                                             <PaginationControls pageInfo={paginatedEmployees} onPageChange={setEmployeePage} />
                                         )}
-                                    </AdminSurfaceSection>}
+                                    </>}
 
-                                    {accountSegment === 'customers' && <AdminSurfaceSection className="border-t-0">
-                                        <div className="mb-3 flex items-center justify-between">
-                                            <div>
-                                                <h3 className="text-sm font-bold text-gray-900 uppercase tracking-wide">Customer Accounts</h3>
-                                                <p className="text-xs text-gray-500 mt-1">Active customer accounts by default. Deactivated customers are preserved for booking and payment history.</p>
-                                            </div>
-                                            <div className="flex flex-wrap items-center justify-end gap-2">
+                                    {accountSegment === 'customers' && <>
+                                        <AdminCommandStrip className="admin-account-filter-strip admin-account-filter-strip-customers">
+                                            <div className="admin-account-inline-tabs" aria-label="Customer account status filter">
                                                 {[
                                                     { value: 'active', label: 'Active' },
                                                     { value: 'deactivated', label: 'Deactivated' },
@@ -5773,15 +7343,12 @@ const DashboardAdmin = () => {
                                                         key={option.value}
                                                         type="button"
                                                         onClick={() => setCustomerStatusFilter(option.value)}
-                                                        className={`rounded-full border px-3 py-1 text-xs font-black transition ${customerStatusFilter === option.value ? 'border-rose-700 bg-rose-700 text-white' : 'border-rose-100 bg-white text-rose-700 hover:bg-rose-50'}`}
+                                                        className={`admin-account-inline-tab ${customerStatusFilter === option.value ? 'is-active' : ''}`}
                                                     >
                                                         {option.label}
                                                     </button>
                                                 ))}
-                                                <span className="text-xs font-bold text-rose-700 bg-rose-50 border border-rose-100 rounded-full px-3 py-1">{customers.length} shown</span>
                                             </div>
-                                        </div>
-                                        <AdminCommandStrip className="-mx-4 mb-0 border-x-0 md:grid md:grid-cols-[minmax(220px,1fr)_190px]">
                                             <input
                                                 type="search"
                                                 value={customerFilters.search}
@@ -5794,15 +7361,23 @@ const DashboardAdmin = () => {
                                                 <option value="with_bookings">With bookings</option>
                                                 <option value="without_bookings">No bookings</option>
                                             </select>
+                                            <span className="admin-account-count-chip">{customers.length} shown</span>
                                         </AdminCommandStrip>
 
-                                        <AdminResponsiveTable className="-mx-4">
+                                        <AdminResponsiveTable className="admin-account-table-wrap">
                                             {customerLoading ? (
                                                 <StaffSkeleton rows={6} label="Loading customer accounts" />
                                             ) : customers.length === 0 ? (
                                                 <div className="p-12 text-center text-gray-500">No customer accounts found.</div>
                                             ) : (
                                                 <table className="staff-table">
+                                                    <colgroup>
+                                                        <col className="admin-account-customer-col-name" />
+                                                        <col className="admin-account-customer-col-contact" />
+                                                        <col className="admin-account-customer-col-bookings" />
+                                                        <col className="admin-account-customer-col-created" />
+                                                        <col className="admin-account-customer-col-action" />
+                                                    </colgroup>
                                                     <thead>
                                                         <tr>
                                                             <th className="px-6 py-3 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Customer</th>
@@ -5815,36 +7390,37 @@ const DashboardAdmin = () => {
                                                     <tbody>
                                                         {paginatedCustomers.items.map(customer => (
                                                             <tr key={customer.id} className="hover:bg-gray-50/80 transition-colors">
-                                                                <td className="px-6 py-4 whitespace-nowrap">
+                                                                <td className="px-6 py-4">
                                                                     <div className="flex items-center">
                                                                         <div className="flex-shrink-0 h-8 w-8 rounded-full bg-rose-100 flex items-center justify-center text-rose-700 font-bold">
                                                                             {(customer.username || customer.full_name || 'C').charAt(0).toUpperCase()}
                                                                         </div>
                                                                         <div className="ml-4">
                                                                             <div className="text-sm font-bold text-gray-900">{customer.username || customer.full_name || 'Customer'}</div>
-                                                                            <div className="mt-1 flex flex-wrap gap-1">
-                                                                                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold bg-rose-50 text-rose-700 border border-rose-100">
-                                                                                    {customer.role}
-                                                                                </span>
-                                                                                <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold border ${customer.account_status === 'deactivated' ? 'bg-slate-100 text-slate-600 border-slate-200' : 'bg-emerald-50 text-emerald-700 border-emerald-100'}`}>
-                                                                                    {customer.account_status === 'deactivated' ? 'Deactivated' : 'Active'}
-                                                                                </span>
-                                                                            </div>
+                                                                            {customerStatusFilter === 'all' && (
+                                                                                <div className="mt-1 flex flex-wrap gap-1">
+                                                                                    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold border ${customer.account_status === 'deactivated' ? 'bg-slate-100 text-slate-600 border-slate-200' : 'bg-emerald-50 text-emerald-700 border-emerald-100'}`}>
+                                                                                        {customer.account_status === 'deactivated' ? 'Deactivated' : 'Active'}
+                                                                                    </span>
+                                                                                </div>
+                                                                            )}
                                                                         </div>
                                                                     </div>
                                                                 </td>
                                                                 <td className="px-6 py-4">
-                                                                    <div className="text-sm text-gray-700">{customer.email || <span className="text-gray-400 italic">No email</span>}</div>
+                                                                    <div className="text-sm text-gray-700">
+                                                                        {displayEmail(customer.email, <span className="text-gray-400 italic">No email on file</span>)}
+                                                                    </div>
                                                                     <div className="text-xs text-gray-500 mt-1">{customer.phone || 'No phone'}</div>
                                                                 </td>
-                                                                <td className="px-6 py-4 whitespace-nowrap">
+                                                                <td className="px-6 py-4">
                                                                     <div className="text-sm font-bold text-gray-900">{customer.bookings_count || 0}</div>
                                                                     <div className="text-xs text-gray-500">Latest: {formatDate(customer.bookings_max_event_date)}</div>
                                                                 </td>
-                                                                <td className="px-6 py-4 whitespace-nowrap">
+                                                                <td className="px-6 py-4">
                                                                     <div className="text-sm text-gray-500">{formatDate(customer.created_at)}</div>
                                                                 </td>
-                                                                <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                                                                <td className="account-action-cell px-6 py-4 text-right text-sm font-medium">
                                                                     <details className="relative inline-block text-left">
                                                                         <summary className="list-none rounded-xl border border-[#720101]/10 bg-white px-3 py-2 text-xs font-black text-[#720101] shadow-sm marker:hidden hover:bg-[#fff7e8]">
                                                                             Actions <ChevronDown className="ml-1 inline h-3.5 w-3.5" />
@@ -5868,7 +7444,7 @@ const DashboardAdmin = () => {
                                         {!customerLoading && customers.length > 0 && (
                                             <PaginationControls pageInfo={paginatedCustomers} onPageChange={setCustomerPage} />
                                         )}
-                                    </AdminSurfaceSection>}
+                                    </>}
                                 </div>
                             </AdminPageSurface>
                         )
@@ -5876,114 +7452,75 @@ const DashboardAdmin = () => {
                     {
                         activeTab === 'bookings-intake' && (
                             <AdminPageSurface>
-                                <AdminCommandStrip className="admin-booking-command">
-                                    <div className="admin-stat-strip admin-booking-stat-strip">
-                                        {[
-                                            { label: 'Current', value: bookingStats.total },
-                                            { label: 'Pending', value: bookingStats.pending },
-                                            { label: 'Active', value: bookingStats.active },
-                                            { label: 'Expected', value: formatCurrency(bookingStats.value) },
-                                        ].map((stat) => (
-                                            <span key={stat.label} className="admin-stat-chip">
-                                                <strong>{stat.value}</strong>
-                                                <em>{stat.label}</em>
-                                            </span>
+                                <StaffMetricStrip
+                                    className="admin-booking-command"
+                                    metrics={[
+                                        { label: 'Current', value: bookingStats.total },
+                                        { label: 'Pending', value: bookingStats.pending, tone: bookingStats.pending > 0 ? 'attention' : 'neutral' },
+                                        { label: 'Active', value: bookingStats.active, tone: 'success' },
+                                        { label: 'Expected', value: formatCurrency(bookingStats.value) },
+                                    ]}
+                                    actions={(
+                                        <StaffPrimaryAction onClick={() => setAssistedBookingOpen(true)}>
+                                            Create booking
+                                        </StaffPrimaryAction>
+                                    )}
+                                />
+
+                                <StaffInlineInsight
+                                    eyebrow="Decision support"
+                                    title={`${dominantBookingCategory} leads verified volume`}
+                                    signals={bookingDecisionSignals}
+                                    onAction={() => setBookingAnalysisOpen(true)}
+                                />
+
+                                <StaffCommandBar>
+                                    <div className="relative min-w-0 flex-1">
+                                        <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" aria-hidden="true" />
+                                        <input
+                                            type="search"
+                                            value={bookingSearch}
+                                            onChange={(e) => setBookingSearch(e.target.value)}
+                                            placeholder="Search booking ref, client, email, phone, event type..."
+                                            className="staff-control w-full pl-10"
+                                        />
+                                    </div>
+                                    <div className="staff-v2-segmented">
+                                        {['All', 'Pending', 'Active'].map((filter) => (
+                                            <button
+                                                key={filter}
+                                                type="button"
+                                                onClick={() => setBookingStatusFilter(filter)}
+                                                className={bookingStatusFilter === filter ? 'is-active' : ''}
+                                            >
+                                                {filter}
+                                            </button>
                                         ))}
                                     </div>
-                                    <button type="button" onClick={() => setAssistedBookingOpen(true)} className="admin-button-primary admin-booking-command-button inline-flex items-center justify-center px-4 py-2.5 text-sm font-black">
-                                        Create booking
-                                    </button>
-                                </AdminCommandStrip>
+                                    <select
+                                        value={bookingSort}
+                                        onChange={(e) => setBookingSort(e.target.value)}
+                                        className="staff-control"
+                                    >
+                                        <option value="latest">Latest to Oldest</option>
+                                        <option value="oldest">Oldest to Latest</option>
+                                        <option value="az">A-Z</option>
+                                        <option value="za">Z-A</option>
+                                    </select>
+                                    <select
+                                        value={bookingSourceFilter}
+                                        onChange={(e) => setBookingSourceFilter(e.target.value)}
+                                        className="staff-control"
+                                    >
+                                        <option value="all">All sources</option>
+                                        <option value="customer">Customer submitted</option>
+                                        <option value="assisted">Any assisted</option>
+                                        <option value="marketing_assisted">Marketing assisted</option>
+                                        <option value="admin_assisted">Admin assisted</option>
+                                    </select>
+                                </StaffCommandBar>
 
-                                <AdminSurfaceSection
-                                    kicker="Booking decision support"
-                                    title="What the current booking queue means"
-                                    description="Advanced sales and demand models stay visible here so approving or discounting bookings is tied to revenue concentration and operations capacity."
-                                >
-                                    <div className="grid gap-3 lg:grid-cols-3">
-                                        {[
-                                            {
-                                                label: 'Dominant category',
-                                                value: topSalesFrequency?.label || 'No category yet',
-                                                hint: `${Number(topSalesFrequency?.percentage || 0).toFixed(1)}% of verified volume`,
-                                            },
-                                            {
-                                                label: 'Revenue trajectory',
-                                                value: formatCurrency(revenueForecastSummary.nextForecast || 0),
-                                                hint: `${revenueForecastSummary.method || 'OLS linear regression'} / ${revenueForecastSummary.direction || 'upward'}`,
-                                            },
-                                            {
-                                                label: 'Guest baseline',
-                                                value: Number(paxDemandSummary.nextForecast || 0).toLocaleString(),
-                                                hint: `${paxDemandSummary.method || 'SMA'} projected guests`,
-                                            },
-                                        ].map((item) => (
-                                            <div key={item.label} className="rounded-xl border border-gray-100 bg-white p-4">
-                                                <p className="text-[11px] font-black uppercase tracking-widest text-gray-400">{item.label}</p>
-                                                <p className="mt-2 text-xl font-black text-gray-950">{item.value}</p>
-                                                <p className="mt-1 text-sm font-semibold text-gray-500">{item.hint}</p>
-                                            </div>
-                                        ))}
-                                    </div>
-                                    <div className="mt-4 grid gap-3 xl:grid-cols-2">
-                                        <InsightLine insight={salesFrequencyDistribution.insight} compact={false} />
-                                        <InsightLine insight={paxDemandProjection.interpretation || normalizeInsight(paxDemandProjection.insight)} compact={false} />
-                                    </div>
-                                </AdminSurfaceSection>
-
-                                <AdminCommandStrip>
-                                    <div className="flex w-full flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-                                        <div className="relative flex-1">
-                                            <svg className="pointer-events-none absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-4.35-4.35m1.85-5.15a7 7 0 11-14 0 7 7 0 0114 0z" />
-                                            </svg>
-                                            <input
-                                                type="search"
-                                                value={bookingSearch}
-                                                onChange={(e) => setBookingSearch(e.target.value)}
-                                                placeholder="Search booking ref, client, email, phone, event type..."
-                                                className="w-full rounded-lg border border-gray-200 bg-gray-50 py-3 pl-10 pr-4 text-sm font-medium text-gray-800 outline-none transition-all focus:border-[#720101] focus:bg-white focus:ring-2 focus:ring-[#720101]/10"
-                                            />
-                                        </div>
-                                        <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-                                            <div className="inline-flex rounded-lg border border-gray-200 bg-gray-50 p-1">
-                                                {['All', 'Pending', 'Active'].map((filter) => (
-                                                    <button
-                                                        key={filter}
-                                                        type="button"
-                                                        onClick={() => setBookingStatusFilter(filter)}
-                                                        className={`rounded-md px-4 py-2 text-xs font-black uppercase tracking-wider transition-colors ${bookingStatusFilter === filter ? 'bg-white text-[#720101] shadow-sm' : 'text-gray-500 hover:text-gray-900'}`}
-                                                    >
-                                                        {filter}
-                                                    </button>
-                                                ))}
-                                            </div>
-                                            <select
-                                                value={bookingSort}
-                                                onChange={(e) => setBookingSort(e.target.value)}
-                                                className="rounded-lg border border-gray-200 bg-white px-4 py-2.5 text-sm font-bold text-gray-700 outline-none transition-all focus:border-[#720101] focus:ring-2 focus:ring-[#720101]/10"
-                                            >
-                                                <option value="latest">Latest to Oldest</option>
-                                                <option value="oldest">Oldest to Latest</option>
-                                                <option value="az">A-Z</option>
-                                                <option value="za">Z-A</option>
-                                            </select>
-                                            <select
-                                                value={bookingSourceFilter}
-                                                onChange={(e) => setBookingSourceFilter(e.target.value)}
-                                                className="rounded-lg border border-gray-200 bg-white px-4 py-2.5 text-sm font-bold text-gray-700 outline-none transition-all focus:border-[#720101] focus:ring-2 focus:ring-[#720101]/10"
-                                            >
-                                                <option value="all">All sources</option>
-                                                <option value="customer">Customer submitted</option>
-                                                <option value="assisted">Any assisted</option>
-                                                <option value="marketing_assisted">Marketing assisted</option>
-                                                <option value="admin_assisted">Admin assisted</option>
-                                            </select>
-                                        </div>
-                                    </div>
-                                </AdminCommandStrip>
-
-                                <AdminResponsiveTable className="admin-bookings-table-wrap">
+                                <StaffWorkTable className="admin-bookings-table-wrap">
                                     {bookingsLoading ? (
                                         <StaffSkeleton rows={7} label="Loading bookings" />
                                     ) : visibleBookings.length === 0 ? (
@@ -6007,18 +7544,32 @@ const DashboardAdmin = () => {
                                             <thead>
                                                 <tr>
                                                     <th>Booking</th>
-                                                    <th>Client</th>
+                                                    <th>Booking contact</th>
                                                     <th>Event</th>
-                                                    <th className="text-right">Total</th>
+                                                    <th className="text-left">Total</th>
                                                     <th className="text-center">Status</th>
-                                                    <th className="text-right">Actions</th>
+                                                    <th className="text-center">Actions</th>
                                                 </tr>
                                             </thead>
                                             <tbody>
                                                 {paginatedBookings.items.map(booking => {
                                                     const status = normalizeStatus(booking.status);
+                                                    const statusMeta = bookingStatusMeta[status] || { tone: 'neutral', label: booking.status || 'Unassigned' };
+                                                    const openBookingDetails = () => setEventDetailsModal({ open: true, data: booking });
                                                     return (
-                                                    <tr key={booking.id} className="cursor-pointer transition-colors" onClick={() => setEventDetailsModal({ open: true, data: booking })}>
+                                                    <tr
+                                                        key={booking.id}
+                                                        className="cursor-pointer transition-colors"
+                                                        tabIndex={0}
+                                                        aria-label={`Open details for ${formatBookingRef(booking.id)}`}
+                                                        onClick={openBookingDetails}
+                                                        onKeyDown={(event) => {
+                                                            if (event.key === 'Enter' || event.key === ' ') {
+                                                                event.preventDefault();
+                                                                openBookingDetails();
+                                                            }
+                                                        }}
+                                                    >
                                                         <td>
                                                             <div className="admin-booking-ref">{formatBookingRef(booking.id)}</div>
                                                             <div className="admin-booking-muted">Submitted {formatDate(booking.created_at)}</div>
@@ -6029,16 +7580,19 @@ const DashboardAdmin = () => {
                                                             )}
                                                         </td>
                                                         <td>
-                                                            <div className="admin-booking-primary">{booking.client_full_name || booking.client_name || booking.username || 'Unnamed client'}</div>
-                                                            <div className="admin-booking-muted admin-booking-truncate">{booking.client_email || booking.user_email || 'No email'}</div>
-                                                            <div className="admin-booking-muted">{booking.client_phone || booking.user_phone || 'No phone'}</div>
+                                                            <div className="admin-booking-value">{bookingContactName(booking)}</div>
+                                                            <div className="admin-booking-muted admin-booking-truncate">{bookingContactEmail(booking) || 'No email'}</div>
+                                                            <div className="admin-booking-muted">{bookingContactPhone(booking) || 'No phone'}</div>
+                                                            {hasDifferentBookingContact(booking) && (
+                                                                <div className="admin-booking-muted admin-booking-truncate">Customer account: {customerAccountName(booking)}</div>
+                                                            )}
                                                         </td>
                                                         <td>
-                                                            <div className="admin-booking-primary admin-booking-truncate">{eventDisplayName(booking)}</div>
+                                                            <div className="admin-booking-value admin-booking-truncate">{eventDisplayName(booking)}</div>
                                                             <div className="admin-booking-date">{formatDate(booking.event_date)} / {formatTime(booking.event_time)}</div>
                                                             <div className="admin-booking-muted">{booking.event_type || 'Event'} / {booking.pax} guests</div>
                                                         </td>
-                                                        <td className="text-right">
+                                                        <td className="text-left">
                                                             <div className="admin-booking-money">{formatCurrency(getBookingTotal(booking))}</div>
                                                             {Number(booking.discount_value || 0) > 0 && (
                                                                 <div className="admin-booking-discount">
@@ -6047,14 +7601,22 @@ const DashboardAdmin = () => {
                                                             )}
                                                         </td>
                                                         <td className="text-center">
-                                                            <span className={`admin-booking-status ${bookingStatusStyles[status] || 'bg-gray-100 text-gray-700 border-gray-200'}`}>
-                                                                {status === 'confirmed' ? 'Active' : booking.status}
-                                                            </span>
+                                                            <StaffStatusChip tone={statusMeta.tone} className="admin-booking-status">
+                                                                {statusMeta.label}
+                                                            </StaffStatusChip>
                                                         </td>
-                                                        <td className="text-right" onClick={(e) => e.stopPropagation()}>
+                                                        <td className="text-center" onClick={(e) => e.stopPropagation()}>
                                                             <div className="admin-booking-actions">
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={openBookingDetails}
+                                                                    className="admin-booking-action admin-booking-action-review"
+                                                                >
+                                                                    Review
+                                                                </button>
                                                                 {status === 'pending' && (
                                                                     <button
+                                                                        type="button"
                                                                         onClick={(e) => {
                                                                             e.stopPropagation();
                                                                             handleApproveBooking(booking);
@@ -6066,6 +7628,7 @@ const DashboardAdmin = () => {
                                                                     </button>
                                                                 )}
                                                                 <button
+                                                                    type="button"
                                                                     onClick={(e) => {
                                                                         e.stopPropagation();
                                                                         setDiscountForm({ discount_type: booking.discount_type || 'fixed', discount_value: booking.discount_value || 0 });
@@ -6083,7 +7646,7 @@ const DashboardAdmin = () => {
                                             </tbody>
                                         </table>
                                     )}
-                                </AdminResponsiveTable>
+                                </StaffWorkTable>
                                 {!bookingsLoading && visibleBookings.length > 0 && (
                                     <PaginationControls pageInfo={paginatedBookings} onPageChange={setBookingPage} />
                                 )}
@@ -6170,7 +7733,7 @@ const DashboardAdmin = () => {
                                             <tr>
                                                 <th>Date</th>
                                                 <th>Event</th>
-                                                <th>Client</th>
+                                                <th>Booking contact</th>
                                                 <th>Guests</th>
                                                 <th className="text-right">Action</th>
                                             </tr>
@@ -6183,7 +7746,12 @@ const DashboardAdmin = () => {
                                                         <div className="font-black text-slate-950">{eventDisplayName(booking)}</div>
                                                         <div className="text-xs font-semibold text-slate-500">{formatBookingRef(booking.id)} / {booking.event_type || 'Event'}</div>
                                                     </td>
-                                                    <td>{booking.client_full_name || booking.client_name || booking.username || 'Unnamed client'}</td>
+                                                    <td>
+                                                        <div className="font-bold text-slate-800">{bookingContactName(booking)}</div>
+                                                        {hasDifferentBookingContact(booking) && (
+                                                            <div className="text-xs font-semibold text-slate-500">Account: {customerAccountName(booking)}</div>
+                                                        )}
+                                                    </td>
                                                     <td>{booking.pax || 0}</td>
                                                     <td className="text-right"><button type="button" className="admin-button-secondary px-3 py-1.5 text-xs font-black">Open</button></td>
                                                 </tr>
@@ -6223,121 +7791,149 @@ const DashboardAdmin = () => {
                         activeTab === 'finance' && (
                             <AdminPageSurface>
                                 <AdminCommandStrip className="admin-finance-strip">
-                                    <div className="grid w-full gap-0 2xl:grid-cols-[18rem_minmax(0,1fr)] 2xl:items-stretch">
-                                        <div className="inline-flex h-full min-h-14 w-full border-r border-[#720101]/10 bg-slate-50 p-1">
-                                            {[
-                                                { id: 'payments', label: 'Payments', count: financePaymentRows.length },
-                                                { id: 'refunds', label: 'Refunds', count: refundStats.count },
-                                            ].map((segment) => (
-                                                <button
-                                                    key={segment.id}
-                                                    type="button"
-                                                    onClick={() => setActiveFinanceSegment(segment.id)}
-                                                    className={`flex-1 rounded-lg px-3 text-xs font-black uppercase tracking-wider transition-colors ${activeFinanceSegment === segment.id ? 'bg-white text-[#720101] shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}
-                                                >
-                                                    {segment.label} <span className="ml-1 text-[11px]">{segment.count}</span>
-                                                </button>
-                                            ))}
-                                        </div>
-                                        <div className="grid min-w-0 grid-cols-2 md:grid-cols-3 xl:grid-cols-5">
-                                            {[
-                                                { label: 'Expected', value: formatCurrency(financeStats.totalExposure), emphasis: true },
-                                                { label: 'Collected', value: formatCurrency(financeStats.paid), emphasis: true },
-                                                { label: 'Remaining', value: formatCurrency(financeStats.remaining), emphasis: true },
-                                                { label: 'Review', value: financeStats.pendingPayments },
-                                                { label: 'Overdue', value: financeStats.overdue },
-                                            ].map((stat) => (
-                                                <span key={stat.label} className="flex h-14 min-w-0 flex-col justify-center overflow-hidden border-r border-[#720101]/10 bg-[#fbf8f2] px-3 last:border-r-0">
-                                                    <em className="text-[10px] font-black uppercase not-italic tracking-widest text-slate-400">{stat.label}</em>
-                                                    <strong className="mt-1 truncate text-lg font-black leading-none text-gray-950">{stat.value}</strong>
-                                                </span>
-                                            ))}
-                                        </div>
+                                    <div className="grid min-w-0 grid-cols-2 md:grid-cols-3 xl:grid-cols-5">
+                                        {[
+                                            { label: 'Expected', value: formatCurrency(financeStats.totalExposure), emphasis: true },
+                                            { label: 'Collected', value: formatCurrency(financeStats.paid), emphasis: true },
+                                            { label: 'Remaining', value: formatCurrency(financeStats.remaining), emphasis: true },
+                                            { label: 'Review', value: financeStats.pendingPayments },
+                                            { label: 'Overdue', value: financeStats.overdue },
+                                        ].map((stat) => (
+                                            <span key={stat.label} className="flex h-14 min-w-0 flex-col justify-center overflow-hidden border-r border-[#720101]/10 bg-[#fbf8f2] px-3 last:border-r-0">
+                                                <em className="text-[10px] font-black uppercase not-italic tracking-widest text-slate-400">{stat.label}</em>
+                                                <strong className="mt-1 truncate text-lg font-black leading-none text-gray-950">{stat.value}</strong>
+                                            </span>
+                                        ))}
                                     </div>
                                 </AdminCommandStrip>
 
                                 {activeFinanceSegment === 'payments' && <div className="admin-surface-grid overflow-hidden">
-                                    <div className="flex flex-col gap-3 border-b border-gray-100 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-                                        <div className="min-w-0">
-                                            <h3 className="text-base font-black text-gray-950">Payment work queue</h3>
-                                            <p className="mt-1 text-sm font-medium text-gray-500">Review pending proofs, overdue terms, and payment exceptions before refund work.</p>
-                                        </div>
-                                        <div className="flex flex-wrap items-center gap-2 text-xs font-black uppercase tracking-wider text-slate-400">
-                                            <span className="rounded-full bg-[#fff7e1] px-3 py-1 text-[#720101]">{financePaymentRows.length} open</span>
-                                            {financePaymentRows.length > 8 && <span>Showing first 8</span>}
+                                    <div className="flex flex-wrap items-center justify-end gap-2 border-b border-gray-100 px-4 py-3">
+                                        <div className="flex flex-wrap items-center justify-end gap-2">
+                                            {[
+                                                { label: 'Open', value: visibleFinancePaymentRows.length },
+                                                { label: 'Review', value: financePaymentQueueStats.review },
+                                                { label: 'Overdue', value: financePaymentQueueStats.overdue },
+                                                { label: 'Amount', value: formatCurrency(financePaymentQueueStats.amount) },
+                                            ].map((stat) => (
+                                                <span key={stat.label} className="inline-flex h-10 items-center gap-2 rounded-xl border border-[#720101]/10 bg-[#fbf8f2] px-3 text-xs font-black text-slate-500">
+                                                    <strong className="text-sm text-gray-950">{stat.value}</strong>
+                                                    <em className="not-italic uppercase tracking-wider">{stat.label}</em>
+                                                </span>
+                                            ))}
+                                            <button
+                                                type="button"
+                                                onClick={() => { bustAdminCache(ADMIN_BOOKINGS_URL); fetchBookings(); }}
+                                                className="admin-icon-action admin-refresh-action"
+                                                aria-label="Refresh payments"
+                                                title="Refresh payments"
+                                            >
+                                                <RefreshCw className="h-5 w-5" aria-hidden="true" />
+                                            </button>
                                         </div>
                                     </div>
 
+                                    <StaffCommandBar>
+                                        <div className="relative min-w-0 flex-1">
+                                            <Search className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-400" aria-hidden="true" />
+                                            <input
+                                                value={financePaymentSearch}
+                                                onChange={(event) => setFinancePaymentSearch(event.target.value)}
+                                                placeholder="Search booking, client, event, payment type, or status"
+                                                className="staff-control w-full pl-12"
+                                            />
+                                        </div>
+                                        <select
+                                            value={financePaymentFilter}
+                                            onChange={(event) => setFinancePaymentFilter(event.target.value)}
+                                            className="staff-control"
+                                        >
+                                            <option value="all">All payment work</option>
+                                            <option value="needs-review">Needs review</option>
+                                            <option value="overdue">Overdue</option>
+                                            <option value="exception">Exceptions</option>
+                                        </select>
+                                        <select
+                                            value={financePaymentSort}
+                                            onChange={(event) => setFinancePaymentSort(event.target.value)}
+                                            className="staff-control"
+                                        >
+                                            <option value="priority">Priority first</option>
+                                            <option value="due">Due date</option>
+                                            <option value="amount">Highest amount</option>
+                                            <option value="newest">Newest booking</option>
+                                        </select>
+                                    </StaffCommandBar>
+
                                     {bookingsLoading ? (
                                         <StaffSkeleton rows={5} label="Loading payment work" />
-                                    ) : financePaymentRows.length === 0 ? (
+                                    ) : visibleFinancePaymentRows.length === 0 ? (
                                         <div className="flex items-center justify-center gap-3 px-5 py-6 text-center">
                                             <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-emerald-50">
                                                 <svg className="h-5 w-5 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
                                             </div>
                                             <div className="text-left">
-                                                <h3 className="text-base font-black text-gray-900">No payment items waiting</h3>
-                                                <p className="mt-1 text-sm text-gray-500">Pending proofs and overdue terms will appear here.</p>
+                                                <h3 className="text-base font-black text-gray-900">{financePaymentRows.length === 0 ? 'No payment items waiting' : 'No payment items match these filters'}</h3>
+                                                <p className="mt-1 text-sm text-gray-500">{financePaymentRows.length === 0 ? 'Pending proofs and overdue terms will appear here.' : 'Try a broader search, status filter, or sort order.'}</p>
                                             </div>
                                         </div>
                                     ) : (
-                                        <AdminResponsiveTable>
-                                            <table className="staff-table">
-                                                <thead>
-                                                    <tr>
-                                                        <th>Booking</th>
-                                                        <th>Client</th>
-                                                        <th>Payment</th>
-                                                        <th className="text-right">Amount</th>
-                                                        <th>Status</th>
-                                                        <th className="text-right">Action</th>
-                                                    </tr>
-                                                </thead>
-                                                <tbody>
-                                                    {financePaymentRows.slice(0, 8).map(({ booking, payment, statusLabel, queueLabel }) => (
-                                                        <tr key={`${booking.id}-${payment.id}`} className="transition-colors hover:bg-[#fffaf3]">
-                                                            <td>
-                                                                <div className="font-black text-gray-950">{formatBookingRef(booking.id)}</div>
-                                                                <div className="text-xs font-semibold text-slate-500">{eventDisplayName(booking)}</div>
-                                                            </td>
-                                                            <td>
-                                                                <div className="font-bold text-gray-900">{booking.client_full_name || booking.client_name || booking.username || 'Unnamed client'}</div>
-                                                                <div className="text-xs text-gray-500">{booking.client_email || booking.client_phone || 'No contact recorded'}</div>
-                                                            </td>
-                                                            <td>
-                                                                <div className="font-bold text-gray-900">{paymentLabel(payment.payment_type)}</div>
-                                                                <div className="text-xs font-semibold text-slate-500">Due {formatDate(payment.due_date)}</div>
-                                                            </td>
-                                                            <td className="text-right font-black text-gray-950">{formatCurrency(payment.amount)}</td>
-                                                            <td>
-                                                                <span className={`inline-flex rounded-full px-3 py-1 text-xs font-black ${queueLabel === 'Overdue' ? 'bg-red-50 text-red-700' : queueLabel === 'Exception' ? 'bg-amber-50 text-amber-700' : 'bg-[#fff7e8] text-[#720101]'}`}>
-                                                                    {statusLabel}
-                                                                </span>
-                                                            </td>
-                                                            <td className="text-right">
-                                                                <button
-                                                                    type="button"
-                                                                    onClick={() => setEventDetailsModal({ open: true, data: booking })}
-                                                                    className="admin-button-secondary px-3 py-1.5 text-xs font-black"
-                                                                >
-                                                                    Open
-                                                                </button>
-                                                            </td>
+                                        <>
+                                            <AdminResponsiveTable>
+                                                <table className="staff-table">
+                                                    <thead>
+                                                        <tr>
+                                                            <th>Booking</th>
+                                                            <th>Client</th>
+                                                            <th>Payment</th>
+                                                            <th className="text-left">Amount</th>
+                                                            <th>Status</th>
+                                                            <th className="text-right">Action</th>
                                                         </tr>
-                                                    ))}
-                                                </tbody>
-                                            </table>
-                                        </AdminResponsiveTable>
+                                                    </thead>
+                                                    <tbody>
+                                                        {paginatedFinancePaymentRows.items.map(({ booking, payment, statusLabel, queueLabel }) => (
+                                                            <tr key={`${booking.id}-${payment.id}`} className="transition-colors hover:bg-[#fffaf3]">
+                                                                <td>
+                                                                    <div className="font-black text-gray-950">{formatBookingRef(booking.id)}</div>
+                                                                    <div className="text-xs font-semibold text-slate-500">{eventDisplayName(booking)}</div>
+                                                                </td>
+                                                                <td>
+                                                                    <div className="font-bold text-gray-900">{booking.client_full_name || booking.client_name || booking.username || 'Unnamed client'}</div>
+                                                                    <div className="text-xs text-gray-500">{displayEmail(booking.client_email, booking.client_phone || 'No contact recorded')}</div>
+                                                                </td>
+                                                                <td>
+                                                                    <div className="font-bold text-gray-900">{paymentLabel(payment.payment_type)}</div>
+                                                                    <div className="text-xs font-semibold text-slate-500">Due {formatDate(payment.due_date)}</div>
+                                                                </td>
+                                                                <td className="text-left font-black text-gray-950">{formatCurrency(payment.amount)}</td>
+                                                                <td>
+                                                                    <span className={`inline-flex rounded-full px-3 py-1 text-xs font-black ${queueLabel === 'Overdue' ? 'bg-red-50 text-red-700' : queueLabel === 'Exception' ? 'bg-amber-50 text-amber-700' : 'bg-[#fff7e8] text-[#720101]'}`}>
+                                                                        {statusLabel}
+                                                                    </span>
+                                                                </td>
+                                                                <td className="text-right">
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={() => setEventDetailsModal({ open: true, data: booking })}
+                                                                        className="admin-button-secondary px-3 py-1.5 text-xs font-black"
+                                                                    >
+                                                                        Open
+                                                                    </button>
+                                                                </td>
+                                                            </tr>
+                                                        ))}
+                                                    </tbody>
+                                                </table>
+                                            </AdminResponsiveTable>
+                                            <PaginationControls pageInfo={paginatedFinancePaymentRows} onPageChange={setFinancePaymentPage} />
+                                        </>
                                     )}
                                 </div>}
 
                                 {activeFinanceSegment === 'refunds' && <div className="admin-surface-grid overflow-hidden">
-                                    <div className="flex flex-col gap-3 border-b border-gray-100 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-                                        <div className="min-w-0">
-                                            <h3 className="text-base font-black text-gray-950">Cancelled bookings with refundable payments</h3>
-                                            <p className="mt-1 text-sm font-medium text-gray-500">Refunds retain the 10% reservation fee and update payment records.</p>
-                                        </div>
-                                        <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+                                    <div className="flex flex-wrap items-center justify-end gap-2 border-b border-gray-100 px-4 py-3">
+                                        <div className="flex flex-wrap items-center justify-end gap-2">
                                             {[
                                                 { label: 'Cases', value: refundStats.count },
                                                 { label: 'Paid', value: formatCurrency(refundStats.paid) },
@@ -6352,77 +7948,114 @@ const DashboardAdmin = () => {
                                             <button
                                                 type="button"
                                                 onClick={() => { bustAdminCache('/api/admin/refunds/queue'); fetchRefundQueue(); }}
-                                                className="admin-button-secondary h-10 px-3 text-xs font-black"
+                                                className="admin-icon-action admin-refresh-action"
+                                                aria-label="Refresh refunds"
+                                                title="Refresh refunds"
                                             >
-                                                Refresh
+                                                <RefreshCw className="h-5 w-5" aria-hidden="true" />
                                             </button>
                                         </div>
                                     </div>
 
+                                    <StaffCommandBar>
+                                        <div className="relative min-w-0 flex-1">
+                                            <Search className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-400" aria-hidden="true" />
+                                            <input
+                                                value={refundSearch}
+                                                onChange={(event) => setRefundSearch(event.target.value)}
+                                                placeholder="Search booking, client, email, event date, or provider reference"
+                                                className="staff-control w-full pl-12"
+                                            />
+                                        </div>
+                                        <select
+                                            value={refundStatusFilter}
+                                            onChange={(event) => setRefundStatusFilter(event.target.value)}
+                                            className="staff-control"
+                                        >
+                                            <option value="all">All refund cases</option>
+                                            <option value="needs_review">Needs review</option>
+                                            <option value="retry">Provider retry</option>
+                                            <option value="processed">Processed</option>
+                                            <option value="refunded">Refunded</option>
+                                        </select>
+                                        <select
+                                            value={refundSort}
+                                            onChange={(event) => setRefundSort(event.target.value)}
+                                            className="staff-control"
+                                        >
+                                            <option value="newest">Newest booking</option>
+                                            <option value="event_date">Event date</option>
+                                            <option value="amount">Highest paid</option>
+                                        </select>
+                                    </StaffCommandBar>
+
                                     {refundLoading ? (
                                         <StaffSkeleton rows={6} label="Loading refund queue" />
-                                    ) : refundQueue.length === 0 ? (
+                                    ) : visibleRefundRows.length === 0 ? (
                                         <div className="flex items-center justify-center gap-3 px-5 py-6 text-center">
                                             <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-emerald-50">
                                                 <svg className="h-5 w-5 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
                                             </div>
                                             <div className="text-left">
-                                                <h3 className="text-base font-black text-gray-900">No refunds waiting</h3>
-                                                <p className="mt-1 text-sm text-gray-500">Cancelled bookings with verified payments will appear here.</p>
+                                                <h3 className="text-base font-black text-gray-900">{refundQueue.length === 0 ? 'No refunds waiting' : 'No refund cases match these filters'}</h3>
+                                                <p className="mt-1 text-sm text-gray-500">{refundQueue.length === 0 ? 'Cancelled bookings with verified payments will appear here.' : 'Try a broader search or refund status filter.'}</p>
                                             </div>
                                         </div>
                                     ) : (
-                                        <AdminResponsiveTable>
-                                            <table className="staff-table">
-                                                <thead>
-                                                    <tr>
-                                                        <th className="px-6 py-3 text-left text-xs font-bold uppercase tracking-wider text-gray-500">Booking</th>
-                                                        <th className="px-6 py-3 text-left text-xs font-bold uppercase tracking-wider text-gray-500">Client</th>
-                                                        <th className="px-6 py-3 text-left text-xs font-bold uppercase tracking-wider text-gray-500">Event Date</th>
-                                                        <th className="px-6 py-3 text-right text-xs font-bold uppercase tracking-wider text-gray-500">Paid</th>
-                                                        <th className="px-6 py-3 text-right text-xs font-bold uppercase tracking-wider text-gray-500">Refund</th>
-                                                        <th className="px-6 py-3 text-right text-xs font-bold uppercase tracking-wider text-gray-500">Action</th>
-                                                    </tr>
-                                                </thead>
-                                                <tbody>
-                                                    {refundQueue.map((item) => {
-                                                        const totalPaid = Number(item.total_paid || 0);
-                                                        const penalty = totalPaid * 0.1;
-                                                        const refundAmount = Math.max(totalPaid - penalty, 0);
+                                        <>
+                                            <AdminResponsiveTable>
+                                                <table className="staff-table">
+                                                    <thead>
+                                                        <tr>
+                                                            <th className="px-6 py-3 text-left text-xs font-bold uppercase tracking-wider text-gray-500">Booking</th>
+                                                            <th className="px-6 py-3 text-left text-xs font-bold uppercase tracking-wider text-gray-500">Client</th>
+                                                            <th className="px-6 py-3 text-left text-xs font-bold uppercase tracking-wider text-gray-500">Event Date</th>
+                                                            <th className="px-6 py-3 text-left text-xs font-bold uppercase tracking-wider text-gray-500">Paid</th>
+                                                            <th className="px-6 py-3 text-left text-xs font-bold uppercase tracking-wider text-gray-500">Refund</th>
+                                                            <th className="px-6 py-3 text-right text-xs font-bold uppercase tracking-wider text-gray-500">Action</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody>
+                                                        {paginatedRefundRows.items.map((item) => {
+                                                            const totalPaid = Number(item.total_paid || 0);
+                                                            const penalty = totalPaid * 0.1;
+                                                            const refundAmount = Math.max(totalPaid - penalty, 0);
 
-                                                        return (
-                                                            <tr key={item.booking_id} className="transition-colors hover:bg-gray-50">
-                                                                <td className="px-6 py-4">
-                                                                    <div className="text-sm font-black text-gray-900">{formatBookingRef(item.booking_id)}</div>
-                                                                    <div className="text-xs font-medium text-gray-500">Cancelled booking</div>
-                                                                </td>
-                                                                <td className="px-6 py-4">
-                                                                    <div className="text-sm font-bold text-gray-900">{item.client_full_name || 'Unnamed client'}</div>
-                                                                    <div className="text-xs text-gray-500">{item.client_email || 'No email'}</div>
-                                                                </td>
-                                                                <td className="px-6 py-4 text-sm font-bold text-gray-700">{formatDate(item.event_date)}</td>
-                                                                <td className="px-6 py-4 text-right text-sm font-black text-gray-900">{formatCurrency(totalPaid)}</td>
-                                                                <td className="px-6 py-4 text-right">
-                                                                    <div className="text-sm font-black text-[#720101]">{formatCurrency(refundAmount)}</div>
-                                                                    <div className="text-xs font-semibold text-gray-400">{formatCurrency(penalty)} retained</div>
-                                                                    <div className="mt-1 text-[10px] font-black uppercase tracking-wide text-gray-500">{item.refund_status || 'Needs Review'}</div>
-                                                                </td>
-                                                                <td className="px-6 py-4 text-right">
-                                                                    <button
-                                                                        type="button"
-                                                                        onClick={() => handleProcessRefund(item)}
-                                                                        disabled={processingRefundId === item.booking_id}
-                                                                        className="rounded-lg bg-[#720101] px-4 py-2 text-xs font-black text-white transition-colors hover:bg-[#5f0101] disabled:opacity-60"
-                                                                    >
-                                                                        {processingRefundId === item.booking_id ? 'Processing...' : item.refund_cases?.[0]?.next_actions?.includes('retry_provider_refund') ? 'Retry Provider' : 'Process Refund'}
-                                                                    </button>
-                                                                </td>
-                                                            </tr>
-                                                        );
-                                                    })}
-                                                </tbody>
-                                            </table>
-                                        </AdminResponsiveTable>
+                                                            return (
+                                                                <tr key={item.booking_id} className="transition-colors hover:bg-gray-50">
+                                                                    <td className="px-6 py-4">
+                                                                        <div className="text-sm font-black text-gray-900">{formatBookingRef(item.booking_id)}</div>
+                                                                        <div className="text-xs font-medium text-gray-500">Cancelled booking</div>
+                                                                    </td>
+                                                                    <td className="px-6 py-4">
+                                                                        <div className="text-sm font-bold text-gray-900">{item.client_full_name || 'Unnamed client'}</div>
+                                                                        <div className="text-xs text-gray-500">{displayEmail(item.client_email)}</div>
+                                                                    </td>
+                                                                    <td className="px-6 py-4 text-sm font-bold text-gray-700">{formatDate(item.event_date)}</td>
+                                                                    <td className="px-6 py-4 text-left text-sm font-black text-gray-900">{formatCurrency(totalPaid)}</td>
+                                                                    <td className="px-6 py-4 text-left">
+                                                                        <div className="text-sm font-black text-[#720101]">{formatCurrency(refundAmount)}</div>
+                                                                        <div className="text-xs font-semibold text-gray-400">{formatCurrency(penalty)} retained</div>
+                                                                        <div className="mt-1 text-[10px] font-black uppercase tracking-wide text-gray-500">{item.refund_status || 'Needs Review'}</div>
+                                                                    </td>
+                                                                    <td className="px-6 py-4 text-right">
+                                                                        <button
+                                                                            type="button"
+                                                                            onClick={() => handleProcessRefund(item)}
+                                                                            disabled={processingRefundId === item.booking_id}
+                                                                            className="rounded-lg bg-[#720101] px-4 py-2 text-xs font-black text-white transition-colors hover:bg-[#5f0101] disabled:opacity-60"
+                                                                        >
+                                                                            {processingRefundId === item.booking_id ? 'Processing...' : item.refund_cases?.[0]?.next_actions?.includes('retry_provider_refund') ? 'Retry Provider' : 'Process Refund'}
+                                                                        </button>
+                                                                    </td>
+                                                                </tr>
+                                                            );
+                                                        })}
+                                                    </tbody>
+                                                </table>
+                                            </AdminResponsiveTable>
+                                            <PaginationControls pageInfo={paginatedRefundRows} onPageChange={setRefundPage} />
+                                        </>
                                     )}
                                 </div>}
                             </AdminPageSurface>
@@ -6431,19 +8064,13 @@ const DashboardAdmin = () => {
                     {
                         activeTab === 'system-audit' && (
                             <AdminPageSurface>
-                                <AdminCommandStrip className="justify-end">
-                                    <button onClick={() => { bustAdminCache('/api/admin/audits?per_page=25'); fetchAudits(); }} className="admin-button-secondary px-4 py-2 text-sm font-bold">
-                                        Refresh Logs
-                                    </button>
-                                </AdminCommandStrip>
-
                                 <AdminCommandStrip>
-                                    <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
+                                    <div className="admin-audit-toolbar">
                                         <div className="relative flex-1">
                                             <svg className="pointer-events-none absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-4.35-4.35m1.85-5.15a7 7 0 11-14 0 7 7 0 0114 0z" />
                                             </svg>
-                                            <input value={auditSearch} onChange={(e) => setAuditSearch(e.target.value)} placeholder="Search staff member, activity, or workspace..." className="w-full border border-gray-200 bg-white py-3 pl-10 pr-4 text-sm font-medium outline-none focus:border-[#720101] focus:ring-2 focus:ring-[#720101]/10" />
+                                            <input value={auditSearch} onChange={(e) => setAuditSearch(e.target.value)} placeholder="Search actor, target, booking, customer, field, or workspace..." className="w-full border border-gray-200 bg-white py-3 pl-10 pr-4 text-sm font-medium outline-none focus:border-[#720101] focus:ring-2 focus:ring-[#720101]/10" />
                                         </div>
                                         <select value={auditRoleFilter} onChange={(e) => setAuditRoleFilter(e.target.value)} className="admin-select px-4 py-3 text-sm font-bold outline-none">
                                             <option value="All">All Roles</option>
@@ -6464,6 +8091,15 @@ const DashboardAdmin = () => {
                                             <option value="All">All results</option>
                                             {auditResultOptions.map((result) => <option key={result} value={result}>{result}</option>)}
                                         </select>
+                                        <button
+                                            type="button"
+                                            onClick={() => { bustAdminCache('/api/admin/audits?per_page=25'); fetchAudits(); }}
+                                            className="admin-icon-action admin-refresh-action"
+                                            aria-label="Refresh logs"
+                                            title="Refresh logs"
+                                        >
+                                            <RefreshCw className="h-5 w-5" aria-hidden="true" />
+                                        </button>
                                     </div>
                                 </AdminCommandStrip>
 
@@ -6473,47 +8109,111 @@ const DashboardAdmin = () => {
                                     ) : visibleAudits.length === 0 ? (
                                         <StaffEmptyState title="No activity matches these filters" message="Adjust the role, workspace, result, or activity type to review more staff activity." />
                                     ) : (
-                                        <table className="staff-table">
-                                            <thead>
-                                                <tr>
-                                                    <th className="px-6 py-3 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Time</th>
-                                                    <th className="px-6 py-3 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Staff</th>
-                                                    <th className="px-6 py-3 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Activity</th>
-                                                    <th className="px-6 py-3 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Workspace</th>
-                                                    <th className="px-6 py-3 text-right text-xs font-bold text-gray-500 uppercase tracking-wider">Result</th>
-                                                </tr>
-                                            </thead>
-                                            <tbody>
-                                                {paginatedAudits.items.map((audit) => {
-                                                    const result = getAuditResult(audit);
+                                        <AdminResponsiveTable className="admin-audit-table-wrap">
+                                            <table className="staff-table admin-audit-table">
+                                                <colgroup>
+                                                    <col className="admin-audit-col-time" />
+                                                    <col className="admin-audit-col-actor" />
+                                                    <col className="admin-audit-col-action" />
+                                                    <col className="admin-audit-col-target" />
+                                                    <col className="admin-audit-col-where" />
+                                                    <col className="admin-audit-col-fields" />
+                                                    <col className="admin-audit-col-result" />
+                                                </colgroup>
+                                                <thead>
+                                                    <tr>
+                                                        <th>Time</th>
+                                                        <th>Actor</th>
+                                                        <th>Action</th>
+                                                        <th>Target</th>
+                                                        <th>Where</th>
+                                                        <th>Changed fields</th>
+                                                        <th>Result</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    {paginatedAudits.items.map((audit) => {
+                                                        const result = getAuditResult(audit);
+                                                        const metadata = getAuditMetadata(audit);
+                                                        const changedFields = getAuditChangedFields(audit);
+                                                        const target = getAuditTargetDisplay(audit);
+                                                        const expanded = expandedAuditId === audit.id;
 
-                                                    return (
-                                                        <tr key={audit.id}>
-                                                            <td className="px-6 py-4 whitespace-nowrap font-semibold text-gray-700">{formatDateTime(audit.created_at)}</td>
-                                                            <td className="px-6 py-4">
-                                                                <div className="font-black text-gray-900">{audit.username || 'Unknown'}</div>
-                                                                <div className="text-xs font-bold text-[#720101]">{audit.role || 'Staff'}</div>
-                                                            </td>
-                                                            <td className="px-6 py-4">
-                                                                <div className="font-bold text-gray-900">{audit.action || 'Reviewed workspace activity'}</div>
-                                                            </td>
-                                                            <td className="px-6 py-4 max-w-sm">
-                                                                <span className="inline-flex rounded-full bg-slate-100 px-3 py-1 text-xs font-black text-slate-700">{getAuditWorkspace(audit)}</span>
-                                                            </td>
-                                                            <td className="px-6 py-4 text-right">
-                                                                <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-black ${result.className}`}>
-                                                                    {result.label}
-                                                                </span>
-                                                            </td>
-                                                        </tr>
-                                                    );
-                                                })}
-                                            </tbody>
-                                        </table>
+                                                        return (
+                                                            <React.Fragment key={audit.id}>
+                                                                <tr
+                                                                    className={`admin-audit-row ${expanded ? 'is-expanded' : ''}`}
+                                                                    tabIndex={0}
+                                                                    role="button"
+                                                                    aria-expanded={expanded}
+                                                                    onClick={() => setExpandedAuditId(expanded ? null : audit.id)}
+                                                                    onKeyDown={(event) => {
+                                                                        if (event.key === 'Enter' || event.key === ' ') {
+                                                                            event.preventDefault();
+                                                                            setExpandedAuditId(expanded ? null : audit.id);
+                                                                        }
+                                                                    }}
+                                                                >
+                                                                    <td className="admin-audit-time">{formatDateTime(audit.created_at)}</td>
+                                                                    <td className="admin-audit-actor">
+                                                                        <div className="admin-audit-primary">{audit.username || 'Unknown'}</div>
+                                                                        <div className="admin-audit-secondary">{audit.role || 'Staff'}</div>
+                                                                    </td>
+                                                                    <td className="admin-audit-action">
+                                                                        <div className="admin-audit-action-inner">
+                                                                            <div className="admin-audit-primary">{audit.action || 'Reviewed workspace activity'}</div>
+                                                                        </div>
+                                                                    </td>
+                                                                    <td className="admin-audit-target">
+                                                                        <div className="admin-audit-primary">{target.primary}</div>
+                                                                        <div className="admin-audit-secondary admin-audit-uppercase">{target.secondary}</div>
+                                                                        {metadata.booking_contact_name && (
+                                                                            <div className="admin-audit-muted">Booking contact: {metadata.booking_contact_name}</div>
+                                                                        )}
+                                                                        {metadata.customer_account_name && metadata.customer_account_name !== metadata.booking_contact_name && (
+                                                                            <div className="admin-audit-muted">Customer account: {metadata.customer_account_name}</div>
+                                                                        )}
+                                                                    </td>
+                                                                    <td className="admin-audit-where">
+                                                                        <span className="admin-audit-pill">{getAuditWorkspace(audit)}</span>
+                                                                    </td>
+                                                                    <td className="admin-audit-fields">
+                                                                        <span className={changedFields.length > 0 ? 'admin-audit-change-summary' : 'admin-audit-context-only'}>
+                                                                            {getAuditChangeSummary(audit)}
+                                                                        </span>
+                                                                    </td>
+                                                                    <td className="admin-audit-result">
+                                                                        <span className={`admin-audit-result-pill ${result.className}`}>
+                                                                            {result.label}
+                                                                        </span>
+                                                                    </td>
+                                                                </tr>
+                                                                {expanded && (
+                                                                    <tr className="admin-audit-expanded-row">
+                                                                        <td colSpan="7">
+                                                                            <div className="admin-audit-detail-panel">
+                                                                                <div className="admin-audit-detail-list">
+                                                                                    {getAuditExtraDetailRows(audit).map(([label, value]) => (
+                                                                                        <div key={label} className="admin-audit-detail-item">
+                                                                                            <span>{label}</span>
+                                                                                            <strong>{String(value)}</strong>
+                                                                                        </div>
+                                                                                    ))}
+                                                                                </div>
+                                                                            </div>
+                                                                        </td>
+                                                                    </tr>
+                                                                )}
+                                                            </React.Fragment>
+                                                        );
+                                                    })}
+                                                </tbody>
+                                            </table>
+                                        </AdminResponsiveTable>
                                     )}
                                 </div>
                                 {!auditLoading && visibleAudits.length > 0 && (
-                                    <PaginationControls pageInfo={paginatedAudits} onPageChange={setAuditPage} />
+                                    <PaginationControls pageInfo={paginatedAudits} onPageChange={setAuditPage} perPage={12} />
                                 )}
                             </AdminPageSurface>
                         )
@@ -6523,7 +8223,7 @@ const DashboardAdmin = () => {
             {/* Employee Add/Edit Modal */}
             {
                 empModal.open && (
-                    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+                    <div className="fixed inset-0 z-[130] flex items-center justify-center p-4">
                         <div className="absolute inset-0 bg-gray-900/60 backdrop-blur-sm" onClick={() => setEmpModal({ open: false, mode: 'add', data: null })}></div>
                         <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-2xl animate-fadeIn overflow-hidden">
                             <div className="px-6 py-5 border-b border-gray-100 bg-gray-50/50">
@@ -6576,11 +8276,19 @@ const DashboardAdmin = () => {
                                         </div>
                                     )}
                                     {empModal.mode === 'edit' && (
-                                        <div>
-                                            <label className="block text-xs font-bold text-gray-700 mb-1 uppercase tracking-wide">New Password</label>
-                                            <input type="text" minLength="6" value={empForm.password} onChange={e => setEmpForm({ ...empForm, password: e.target.value })} placeholder="Leave blank to keep current" className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:bg-white focus:ring-2 focus:ring-[#720101] outline-none transition-all text-sm" />
-                                            {empFormErrors.password && <p className="mt-1 text-xs font-bold text-red-600">{empFormErrors.password[0]}</p>}
-                                        </div>
+                                        <PasswordStrengthField
+                                            id="account-modal-password"
+                                            name="password"
+                                            label="New password"
+                                            value={empForm.password}
+                                            username={empForm.username}
+                                            email={empForm.email}
+                                            placeholder="Leave blank to keep current"
+                                            labelClassName="block text-xs font-bold text-gray-700 mb-1 uppercase tracking-wide"
+                                            fieldClassName="auth-field auth-field-compact"
+                                            error={empFormErrors.password}
+                                            onChange={(value) => setEmpForm({ ...empForm, password: value })}
+                                        />
                                     )}
                                     <div>
                                         <label className="block text-xs font-bold text-gray-700 mb-1 uppercase tracking-wide">Privilege Level</label>
@@ -6631,7 +8339,7 @@ const DashboardAdmin = () => {
             {/* Discount Modal */}
             {
                 discountModal.open && (
-                    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+                    <div className="fixed inset-0 z-[130] flex items-center justify-center p-4">
                         <div className="absolute inset-0 bg-gray-900/60 backdrop-blur-sm" onClick={() => setDiscountModal({ open: false, data: null })}></div>
                         <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-md animate-fadeIn overflow-hidden">
                             <div className="px-6 py-4 border-b border-gray-100 bg-gray-50/50">
@@ -6684,7 +8392,7 @@ const DashboardAdmin = () => {
             {/* Event Details Modal */}
             {
                 eventDetailsModal.open && (
-                    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+                    <div className="fixed inset-0 z-[130] flex items-center justify-center p-4">
                         <div className="absolute inset-0 bg-gray-900/60 backdrop-blur-sm" onClick={() => setEventDetailsModal({ open: false, data: null })}></div>
                         <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-5xl animate-fadeIn overflow-hidden flex flex-col max-h-[90vh]">
                             <div className="px-5 py-4 border-b border-[#720101]/10 bg-white flex justify-between items-start sticky top-0 z-10">
@@ -6742,7 +8450,7 @@ const DashboardAdmin = () => {
                                             <thead>
                                                 <tr>
                                                     <th className="px-4 py-3 text-left text-xs font-bold uppercase text-gray-500">Term</th>
-                                                    <th className="px-4 py-3 text-right text-xs font-bold uppercase text-gray-500">Amount</th>
+                                                    <th className="px-4 py-3 text-left text-xs font-bold uppercase text-gray-500">Amount</th>
                                                     <th className="px-4 py-3 text-center text-xs font-bold uppercase text-gray-500">Due Date</th>
                                                     <th className="px-4 py-3 text-center text-xs font-bold uppercase text-gray-500">Status</th>
                                                     <th className="px-4 py-3 text-right text-xs font-bold uppercase text-gray-500">Action</th>
@@ -6752,7 +8460,7 @@ const DashboardAdmin = () => {
                                                 {(eventDetailsModal.data?.payments || []).map(payment => (
                                                     <tr key={payment.id}>
                                                         <td className="px-4 py-3 font-semibold text-gray-900">{paymentLabel(payment.payment_type)}</td>
-                                                        <td className="px-4 py-3 text-right font-bold text-gray-900">{formatCurrency(payment.amount)}</td>
+                                                        <td className="px-4 py-3 text-left font-bold text-gray-900">{formatCurrency(payment.amount)}</td>
                                                         <td className="px-4 py-3 text-center text-gray-600">{formatDate(payment.due_date)}</td>
                                                         <td className="px-4 py-3 text-center text-gray-600">{staffPaymentStatus(payment.status, payment.due_date).label}</td>
                                                         <td className="px-4 py-3 text-right">
@@ -6825,7 +8533,7 @@ const DashboardAdmin = () => {
 
             {/* Add New Menu Item Modal */}
             {menuItemModal.open && (
-                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[130] p-4">
                     <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto animate-fadeIn">
                         <div className="flex items-center justify-between p-6 border-b border-gray-100">
                             <h3 className="text-lg font-bold text-gray-900 flex items-center gap-2">
@@ -6984,7 +8692,7 @@ const DashboardAdmin = () => {
             </ConfirmModal>
 
             {temporaryPasswordModal.open && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+                <div className="fixed inset-0 z-[130] flex items-center justify-center p-4">
                     <div className="absolute inset-0 bg-gray-900/60 backdrop-blur-sm" onClick={closeTemporaryPasswordModal}></div>
                     <div className="relative w-full max-w-lg overflow-hidden rounded-2xl bg-white shadow-2xl">
                         <div className="border-b border-amber-100 bg-[#fffaf3] px-6 py-5">
@@ -7032,8 +8740,58 @@ const DashboardAdmin = () => {
                 </div>
             )}
 
+            {bookingAnalysisOpen && (
+                <div className="fixed inset-0 z-[130] flex items-center justify-center bg-slate-950/55 p-3 backdrop-blur-sm">
+                    <div className="admin-booking-analysis-modal">
+                        <header className="admin-booking-analysis-head">
+                            <div>
+                                <p className="admin-kicker">Booking decision support</p>
+                                <h3>Current booking queue analysis</h3>
+                                <p>Quick context for approvals, discounts, and operational capacity.</p>
+                            </div>
+                            <button type="button" onClick={() => setBookingAnalysisOpen(false)} className="admin-mini-button inline-flex items-center gap-2">
+                                <X className="h-4 w-4" />
+                                Close
+                            </button>
+                        </header>
+                        <div className="admin-booking-analysis-body">
+                            <aside className="admin-booking-analysis-numbers">
+                                <p className="admin-kicker">Supporting numbers</p>
+                                <dl>
+                                    {bookingDecisionSupportNumbers.map(([label, value]) => (
+                                        <div key={label}>
+                                            <dt>{label}</dt>
+                                            <dd>{value}</dd>
+                                        </div>
+                                    ))}
+                                </dl>
+                            </aside>
+                            <div className="admin-booking-analysis-insights">
+                                {[
+                                    ['Signal', bookingSalesInsight],
+                                    ['Revenue context', bookingRevenueInsight],
+                                    ['Capacity context', bookingGuestInsight],
+                                ].map(([label, insight]) => (
+                                    <section key={label} className="admin-booking-analysis-section">
+                                        <p className="admin-kicker">{label}</p>
+                                        <h4>{insight.headline}</h4>
+                                        <p>{readableInsightText(insight.meaning)}</p>
+                                        {insight.recommended_action && (
+                                            <div>
+                                                <span>Recommended action</span>
+                                                <strong>{readableInsightText(insight.recommended_action)}</strong>
+                                            </div>
+                                        )}
+                                    </section>
+                                ))}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
             {expandedAnalyticsPanel && (
-                <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/60 p-3 backdrop-blur-sm">
+                <div className="fixed inset-0 z-[130] flex items-center justify-center bg-slate-950/60 p-3 backdrop-blur-sm">
                     <div className="admin-chart-modal">
                         <header className="admin-chart-modal-head">
                             <div>

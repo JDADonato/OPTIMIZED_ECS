@@ -41,7 +41,7 @@ class ConversationClaimed implements ShouldBroadcastNow
     {
         return [
             new PrivateChannel('staff.queue'),
-            new PrivateChannel('conversation.' . $this->conversationData['id']),
+            new PrivateChannel('conversation.'.$this->conversationData['id']),
         ];
     }
 

@@ -15,7 +15,7 @@ class PaymentScheduleVoidService
     ): bool {
         $payment->loadMissing(['events', 'refundCases']);
 
-        if (!$payment->isVoidableScheduleTerm()) {
+        if (! $payment->isVoidableScheduleTerm()) {
             return false;
         }
 

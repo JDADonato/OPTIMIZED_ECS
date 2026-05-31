@@ -11,6 +11,7 @@ class ClientMenuUpdatedNotification extends Notification
     use Queueable;
 
     public $booking;
+
     public $newTotal;
 
     public function __construct(Booking $booking, $newTotal)
@@ -30,7 +31,7 @@ class ClientMenuUpdatedNotification extends Notification
             'type' => 'menu_updated',
             'booking_id' => $this->booking->id,
             'title' => 'Menu Selection Updated',
-            'message' => 'Your menu was updated. Your new total is ₱' . number_format($this->newTotal, 2) . ' and your remaining balance has been adjusted.',
+            'message' => 'Your menu was updated. Your new total is ₱'.number_format($this->newTotal, 2).' and your remaining balance has been adjusted.',
         ];
     }
 }

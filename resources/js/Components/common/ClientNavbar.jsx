@@ -3,6 +3,7 @@ import { Link } from '@inertiajs/react';
 import UserDropdown from './UserDropdown';
 import NotificationBell from './NotificationBell';
 import logoImg from '../../../images/ECS_LOGO.png';
+import { dashboardHrefForUser } from '../../utils/dashboardLinks';
 
 const ClientNavbar = ({ user, logout, activePath }) => {
     const [mob, setMob] = useState(false);
@@ -15,7 +16,7 @@ const ClientNavbar = ({ user, logout, activePath }) => {
         { n: 'Book Now', p: '/book' },
         { n: 'Contact', p: '/contact' },
     ];
-    const dash = () => !user ? '/' : ({ Client: '/dashboard/client', Marketing: '/dashboard/marketing', Accounting: '/dashboard/accounting', Admin: '/dashboard/admin' }[user.role] || '/');
+    const dash = () => dashboardHrefForUser(user, '/');
 
     return (
         <nav className="fixed top-0 z-50 w-full border-b border-white/10 bg-[#720101]/95 shadow-lg shadow-black/10 backdrop-blur">
@@ -54,6 +55,7 @@ const ClientNavbar = ({ user, logout, activePath }) => {
                     {user ? (
                         <>
                             <Link href={dash()} prefetch="hover" className="block rounded-lg px-3 py-2.5 text-sm font-semibold text-white hover:bg-white/10">Dashboard</Link>
+                            <Link href="/profile?tab=preferences" prefetch="hover" className="block rounded-lg px-3 py-2.5 text-sm font-semibold text-white hover:bg-white/10">Settings</Link>
                             {logout && <button onClick={logout} className="block w-full rounded-lg px-3 py-2.5 text-left text-sm font-semibold text-white hover:bg-white/10">Logout</button>}
                         </>
                     ) : (

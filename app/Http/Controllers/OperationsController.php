@@ -8,9 +8,11 @@ use App\Models\EventPreparationTask;
 use App\Models\FoodTasting;
 use App\Services\EventPreparationService;
 use App\Support\ApiResponse;
+use App\Support\CustomerIdentity;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
 
 class OperationsController extends Controller
 {
@@ -25,8 +27,11 @@ class OperationsController extends Controller
         if ($request->boolean('paginated')) {
             $perPage = min(max((int) $request->query('per_page', 10), 1), 50);
             $bookings = $query->paginate($perPage);
+            $rowFormatter = $request->boolean('lightweight')
+                ? fn (Booking $booking) => $this->preparationListRow($booking)
+                : fn (Booking $booking) => $this->preparationRow($booking);
             $rows = $bookings->getCollection()
-                ->map(fn (Booking $booking) => $this->preparationRow($booking))
+                ->map($rowFormatter)
                 ->values();
 
             return response()->json([
@@ -39,6 +44,7 @@ class OperationsController extends Controller
                     'from' => $bookings->firstItem(),
                     'to' => $bookings->lastItem(),
                     'summary' => $this->preparationSummary($request),
+                    'departments' => $this->preparationDepartmentOptions($request),
                 ],
                 'links' => [
                     'first' => $bookings->url(1),
@@ -50,7 +56,9 @@ class OperationsController extends Controller
         }
 
         $rows = $query->get()
-            ->map(fn (Booking $booking) => $this->preparationRow($booking))
+            ->map($request->boolean('lightweight')
+                ? fn (Booking $booking) => $this->preparationListRow($booking)
+                : fn (Booking $booking) => $this->preparationRow($booking))
             ->values();
 
         return response()->json($rows);
@@ -59,6 +67,20 @@ class OperationsController extends Controller
     public function preparationBoardSummary(Request $request)
     {
         return ApiResponse::ok($this->preparationSummary($request));
+    }
+
+    public function preparationBoardDetail(Booking $booking)
+    {
+        abort_unless($booking->status === 'Confirmed', 404);
+
+        $booking->load([
+            'payments:id,booking_id,status,voided_at',
+            'preparationTasks' => fn ($query) => $query->orderBy('department')->orderBy('id'),
+            'assignee:id,full_name,username',
+            'user:id,full_name,username,email,phone,account_status',
+        ]);
+
+        return response()->json($this->preparationRow($booking));
     }
 
     private function preparationBoardQuery(Request $request)
@@ -75,7 +97,7 @@ class OperationsController extends Controller
                 'payments:id,booking_id,status,voided_at',
                 'preparationTasks' => fn ($query) => $query->orderBy('department')->orderBy('id'),
                 'assignee:id,full_name,username',
-                'user:id,full_name,username,email',
+                'user:id,full_name,username,email,phone,account_status',
             ])
             ->whereBetween('event_date', [$start->toDateString(), $end->toDateString()])
             ->where('status', 'Confirmed')
@@ -83,13 +105,19 @@ class OperationsController extends Controller
             ->orderBy('event_time');
 
         if ($request->filled('search')) {
-            $search = '%' . mb_strtolower(trim((string) $request->query('search'))) . '%';
+            $search = '%'.mb_strtolower(trim((string) $request->query('search'))).'%';
             $query->where(function ($inner) use ($search) {
                 $inner->whereRaw('LOWER(client_full_name) LIKE ?', [$search])
                     ->orWhereRaw('LOWER(client_email) LIKE ?', [$search])
+                    ->orWhereRaw('LOWER(client_phone) LIKE ?', [$search])
                     ->orWhereRaw('LOWER(event_name) LIKE ?', [$search])
                     ->orWhereRaw('LOWER(event_type) LIKE ?', [$search])
-                    ->orWhereRaw('LOWER(status) LIKE ?', [$search]);
+                    ->orWhereRaw('LOWER(status) LIKE ?', [$search])
+                    ->orWhereHas('user', fn ($userQuery) => $userQuery
+                        ->whereRaw('LOWER(full_name) LIKE ?', [$search])
+                        ->orWhereRaw('LOWER(username) LIKE ?', [$search])
+                        ->orWhereRaw('LOWER(email) LIKE ?', [$search])
+                        ->orWhereRaw('LOWER(phone) LIKE ?', [$search]));
             });
         }
 
@@ -103,6 +131,7 @@ class OperationsController extends Controller
             $query->whereHas('preparationTasks', function ($taskQuery) use ($department) {
                 if ($department === 'Service prep') {
                     $taskQuery->whereIn('department', ['Service prep', 'Admin', 'Operations']);
+
                     return;
                 }
 
@@ -159,6 +188,7 @@ class OperationsController extends Controller
                 'event_type' => $booking->event_type,
                 'client_full_name' => $booking->client_full_name ?: $booking->user?->full_name ?: $booking->user?->username,
                 'client_email' => $booking->client_email ?: $booking->user?->email,
+                ...CustomerIdentity::forBooking($booking),
                 'event_date' => $booking->event_date,
                 'event_time' => $booking->event_time,
                 'pax' => $booking->pax,
@@ -187,6 +217,45 @@ class OperationsController extends Controller
         ];
     }
 
+    private function preparationListRow(Booking $booking): array
+    {
+        EventPreparationService::ensureDefaultTasks($booking);
+        $booking->load(['payments', 'preparationTasks', 'user', 'assignee']);
+
+        $tasks = $booking->preparationTasks;
+        $completedTasks = $tasks->where('status', 'Done')->count();
+        $taskTotal = $tasks->count();
+        $readiness = $this->readinessFor($booking);
+
+        return [
+            'booking' => [
+                'id' => $booking->id,
+                'event_name' => $booking->event_name,
+                'event_type' => $booking->event_type,
+                'client_full_name' => $booking->client_full_name ?: $booking->user?->full_name ?: $booking->user?->username,
+                'client_email' => $booking->client_email ?: $booking->user?->email,
+                ...CustomerIdentity::forBooking($booking),
+                'event_date' => $booking->event_date,
+                'event_time' => $booking->event_time,
+                'pax' => $booking->pax,
+                'venue_city' => $booking->venue_city,
+                'venue_address_line' => $booking->venue_address_line,
+                'status' => $booking->status,
+                'review_status' => $booking->review_status,
+                'total_cost' => $booking->total_cost,
+                'owner_name' => $booking->assignee?->full_name ?: $booking->assignee?->username ?: 'Unassigned',
+            ],
+            'readiness' => $readiness,
+            'task_progress' => [
+                'completed' => $completedTasks,
+                'total' => $taskTotal,
+                'percent' => $taskTotal > 0 ? (int) round(($completedTasks / $taskTotal) * 100) : 0,
+            ],
+            'readiness_progress' => $this->readinessProgress($readiness),
+            'attention_flags' => $this->attentionFlags($readiness),
+        ];
+    }
+
     private function applyAttentionFilter($query, string $attention): void
     {
         if ($attention === 'payment') {
@@ -194,11 +263,13 @@ class OperationsController extends Controller
                 $inner->whereDoesntHave('payments')
                     ->orWhereHas('payments', fn ($paymentQuery) => $paymentQuery->whereNotIn('status', ['Paid', 'Verified', 'Refunded']));
             });
+
             return;
         }
 
         if ($attention === 'menu') {
             $query->where(fn ($inner) => $this->whereMissingSelectedMenu($inner));
+
             return;
         }
 
@@ -207,16 +278,19 @@ class OperationsController extends Controller
                 $inner->where(fn ($address) => $address->whereNull('venue_address_line')->orWhere('venue_address_line', ''))
                     ->orWhere(fn ($city) => $city->whereNull('venue_city')->orWhere('venue_city', ''));
             });
+
             return;
         }
 
         if ($attention === 'headcount') {
             $query->where(fn ($inner) => $inner->whereNull('pax')->orWhere('pax', '<=', 0));
+
             return;
         }
 
         if ($attention === 'customer_messages') {
             $query->whereHas('user', fn ($userQuery) => $userQuery->whereHas('clientConversations', fn ($conversationQuery) => $conversationQuery->where('status', 'active')));
+
             return;
         }
 
@@ -246,9 +320,29 @@ class OperationsController extends Controller
         ];
     }
 
+    private function preparationDepartmentOptions(Request $request): array
+    {
+        $base = $this->preparationBoardQuery($request->duplicate(query: array_diff_key($request->query(), array_flip(['department', 'page', 'per_page', 'paginated']))));
+        $bookingIds = (clone $base)->pluck('id');
+        $departments = $bookingIds->isEmpty()
+            ? collect()
+            : EventPreparationTask::query()
+                ->whereIn('booking_id', $bookingIds)
+                ->distinct()
+                ->pluck('department')
+                ->map(fn ($department) => $this->responsibleArea($department));
+
+        return collect([...self::TASK_GROUP_ORDER, 'Customer'])
+            ->merge($departments)
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+    }
+
     public function updatePreparationTask(Request $request, EventPreparationTask $task)
     {
-        if (!$this->canUpdateTask(Auth::user()?->role, $task)) {
+        if (! $this->canUpdateTask(Auth::user()?->role, $task)) {
             abort(403, $this->taskActionHint($task, Auth::user()?->role));
         }
 
@@ -277,7 +371,7 @@ class OperationsController extends Controller
         $payments = $booking->payments->whereNull('voided_at');
         $hasPayments = $payments->isNotEmpty();
         $paymentReady = $hasPayments && $payments->every(fn ($payment) => in_array($payment->status, ['Paid', 'Verified', 'Refunded'], true));
-        $menuReady = !empty($booking->selected_menu);
+        $menuReady = ! empty($booking->selected_menu);
         $venueReady = filled($booking->venue_address_line) || filled($booking->venue_city);
         $headcountReady = (int) $booking->pax > 0;
         $tastingReady = true;
@@ -288,7 +382,7 @@ class OperationsController extends Controller
                 ->exists();
         }
 
-        $customerMessagesReady = !Conversation::query()
+        $customerMessagesReady = ! Conversation::query()
             ->where('client_id', $booking->user_id)
             ->where('status', 'active')
             ->exists();
@@ -315,7 +409,7 @@ class OperationsController extends Controller
         ];
 
         return collect($readiness)
-            ->filter(fn ($ready) => !$ready)
+            ->filter(fn ($ready) => ! $ready)
             ->keys()
             ->map(fn ($key) => ['key' => $key, 'label' => $labels[$key] ?? $key])
             ->values()
@@ -328,7 +422,7 @@ class OperationsController extends Controller
             'booking_ref' => str_pad((string) $booking->id, 5, '0', STR_PAD_LEFT),
             'client' => $booking->client_full_name ?: $booking->user?->full_name ?: $booking->user?->username,
             'event' => $booking->event_name ?: $booking->event_type,
-            'schedule' => trim(($booking->event_date?->toDateString() ?? 'Date TBD') . ' ' . ($booking->event_time ?: 'Time TBD')),
+            'schedule' => trim(($booking->event_date?->toDateString() ?? 'Date TBD').' '.($booking->event_time ?: 'Time TBD')),
             'headcount' => (int) $booking->pax,
             'venue' => trim(collect([$booking->venue_address_line, $booking->venue_city])->filter()->join(', ')) ?: 'Venue TBD',
             'menu_ready' => $readiness['menu'] ?? false,
@@ -339,8 +433,14 @@ class OperationsController extends Controller
 
     private function whereMissingSelectedMenu($query): void
     {
-        $query->whereNull('selected_menu')
-            ->orWhereRaw("\"selected_menu\"::text in ('[]', '{}', 'null', '\"\"')");
+        $query->whereNull('selected_menu');
+
+        if (DB::connection()->getDriverName() === 'pgsql') {
+            $query->orWhereRaw("\"selected_menu\"::text in ('[]', '{}', 'null', '\"\"')");
+            return;
+        }
+
+        $query->orWhereIn('selected_menu', ['[]', '{}', 'null', '""', '']);
     }
 
     private function readinessOwner(string $key): string
@@ -417,7 +517,7 @@ class OperationsController extends Controller
     private function blockingItems($readinessDetails)
     {
         return collect($readinessDetails)
-            ->filter(fn ($item) => !($item['ready'] ?? false))
+            ->filter(fn ($item) => ! ($item['ready'] ?? false))
             ->sortBy(fn ($item) => $this->readinessRank($item['key'] ?? ''))
             ->values()
             ->all();
@@ -485,7 +585,7 @@ class OperationsController extends Controller
 
     private function nextAction(Booking $booking, array $blockingItems, array $taskGroups, ?string $role): array
     {
-        if (!empty($blockingItems)) {
+        if (! empty($blockingItems)) {
             return $this->nextActionForBlocker($booking, $blockingItems[0], $role);
         }
 
@@ -500,11 +600,11 @@ class OperationsController extends Controller
                 'kind' => 'task',
                 'tone' => ($pendingTask['can_update'] ?? false) ? 'warn' : 'muted',
                 'label' => ($pendingTask['can_update'] ?? false)
-                    ? 'Complete ' . $pendingTask['label']
-                    : 'Follow up with ' . $owner,
+                    ? 'Complete '.$pendingTask['label']
+                    : 'Follow up with '.$owner,
                 'description' => ($pendingTask['can_update'] ?? false)
                     ? 'Mark this task done once the handoff work is complete.'
-                    : (($pendingTask['action_hint'] ?? null) ?: $owner . ' owns this handoff task.'),
+                    : (($pendingTask['action_hint'] ?? null) ?: $owner.' owns this handoff task.'),
                 'owner_department' => $owner,
                 'primary_action_label' => $owner === 'Service prep' ? 'Download prep list' : 'Open booking',
                 'primary_action_url' => $owner === 'Service prep'
@@ -668,7 +768,7 @@ class OperationsController extends Controller
             return 'Ready';
         }
 
-        if (!$task->due_at) {
+        if (! $task->due_at) {
             return 'Pending';
         }
 

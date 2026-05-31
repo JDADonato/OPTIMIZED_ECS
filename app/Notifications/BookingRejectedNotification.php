@@ -3,6 +3,7 @@
 namespace App\Notifications;
 
 use App\Models\Booking;
+use Carbon\Carbon;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Notifications\Messages\MailMessage;
@@ -21,7 +22,7 @@ class BookingRejectedNotification extends Notification implements ShouldQueue
 
     public function toMail(object $notifiable): MailMessage
     {
-        $eventDate = \Carbon\Carbon::parse($this->booking->event_date)->format('F j, Y');
+        $eventDate = Carbon::parse($this->booking->event_date)->format('F j, Y');
         $reference = str_pad($this->booking->id, 5, '0', STR_PAD_LEFT);
 
         return (new MailMessage)
@@ -50,7 +51,7 @@ class BookingRejectedNotification extends Notification implements ShouldQueue
         return [
             'booking_id' => $this->booking->id,
             'type' => 'booking_rejected',
-            'message' => "Your booking for " . \Carbon\Carbon::parse($this->booking->event_date)->format('F j, Y') . " has been rejected. " . ($this->reason ? "Reason: {$this->reason}" : ''),
+            'message' => 'Your booking for '.Carbon::parse($this->booking->event_date)->format('F j, Y').' has been rejected. '.($this->reason ? "Reason: {$this->reason}" : ''),
         ];
     }
 }

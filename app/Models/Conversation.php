@@ -126,7 +126,7 @@ class Conversation extends Model
      */
     public function isClaimed(): bool
     {
-        return !is_null($this->staff_id);
+        return ! is_null($this->staff_id);
     }
 
     /**

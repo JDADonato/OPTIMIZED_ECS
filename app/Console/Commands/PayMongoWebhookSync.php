@@ -32,8 +32,9 @@ class PayMongoWebhookSync extends Command
 
     public function handle(): int
     {
-        if (app()->environment('production') && !$this->option('force-production')) {
+        if (app()->environment('production') && ! $this->option('force-production')) {
             $this->error('paymongo:webhook-sync is a dev/staging helper. Refusing to run in production without --force-production.');
+
             return self::FAILURE;
         }
 
@@ -43,14 +44,15 @@ class PayMongoWebhookSync extends Command
         // ── Step 1: Ensure ngrok is running ──
         $ngrokUrl = $this->ensureNgrokRunning();
 
-        if (!$ngrokUrl) {
+        if (! $ngrokUrl) {
             $this->error('❌ Could not obtain ngrok public URL. Aborting.');
+
             return self::FAILURE;
         }
 
         $this->info("✅ Ngrok public URL: {$ngrokUrl}");
 
-        $webhookUrl = rtrim($ngrokUrl, '/') . self::WEBHOOK_PATH;
+        $webhookUrl = rtrim($ngrokUrl, '/').self::WEBHOOK_PATH;
         $this->info("📍 Webhook endpoint: {$webhookUrl}");
         $this->newLine();
 
@@ -58,8 +60,9 @@ class PayMongoWebhookSync extends Command
         $secretKey = config('services.paymongo.secret_key');
         $caBundle = $this->resolveCaBundle();
 
-        if (!$secretKey) {
+        if (! $secretKey) {
             $this->error('❌ PAYMONGO_SECRET_KEY is not set in .env. Cannot manage webhooks.');
+
             return self::FAILURE;
         }
 
@@ -69,6 +72,7 @@ class PayMongoWebhookSync extends Command
 
         if ($existingWebhooks === null) {
             $this->error('❌ Failed to fetch existing webhooks from PayMongo.');
+
             return self::FAILURE;
         }
 
@@ -121,8 +125,9 @@ class PayMongoWebhookSync extends Command
                 $this->info("🔄 Re-enabling existing webhook: {$webhookId}");
                 $reEnabled = $this->enableWebhook($secretKey, $webhookId, $caBundle);
 
-                if (!$reEnabled) {
+                if (! $reEnabled) {
                     $this->error('❌ Failed to re-enable the existing webhook.');
+
                     return self::FAILURE;
                 }
 
@@ -139,8 +144,9 @@ class PayMongoWebhookSync extends Command
             $this->info('🆕 Creating new PayMongo webhook...');
             $result = $this->createWebhook($secretKey, $webhookUrl, $caBundle);
 
-            if (!$result) {
+            if (! $result) {
                 $this->error('❌ Failed to create PayMongo webhook.');
+
                 return self::FAILURE;
             }
 
@@ -193,19 +199,22 @@ class PayMongoWebhookSync extends Command
 
         if ($existingUrl) {
             $this->info('📡 Ngrok is already running.');
+
             return $existingUrl;
         }
 
         if ($this->option('skip-ngrok')) {
             $this->error('Ngrok is not running and --skip-ngrok was specified.');
+
             return null;
         }
 
         // Find ngrok executable
         $ngrokPath = $this->resolveNgrokPath();
 
-        if (!$ngrokPath) {
+        if (! $ngrokPath) {
             $this->error('Could not find ngrok executable. Specify --ngrok-path or set NGROK_PATH in .env.');
+
             return null;
         }
 
@@ -245,7 +254,7 @@ class PayMongoWebhookSync extends Command
                 ->withOptions(['verify' => false])
                 ->get('http://127.0.0.1:4040/api/tunnels');
 
-            if (!$response->successful()) {
+            if (! $response->successful()) {
                 return null;
             }
 
@@ -277,7 +286,7 @@ class PayMongoWebhookSync extends Command
      */
     public function shouldDisableOldWebhooks(): bool
     {
-        return !$this->option('no-disable-old');
+        return ! $this->option('no-disable-old');
     }
 
     /**
@@ -292,9 +301,10 @@ class PayMongoWebhookSync extends Command
         }
 
         // 2. .env setting (normalize forward slashes to native separators)
-        $envPath = env('NGROK_PATH');
+        $envPath = config('services.ngrok.path');
         if ($envPath) {
             $envPath = str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $envPath);
+
             // Bypass is_file() because it returns false for WindowsApp execution aliases
             return $envPath;
         }
@@ -334,14 +344,16 @@ class PayMongoWebhookSync extends Command
                 ->timeout(15)
                 ->get('/v1/webhooks');
 
-            if (!$response->successful()) {
-                $this->warn('   PayMongo API returned: ' . $response->status());
+            if (! $response->successful()) {
+                $this->warn('   PayMongo API returned: '.$response->status());
+
                 return null;
             }
 
             return $response->json('data', []);
         } catch (\Throwable $e) {
-            $this->warn('   Error listing webhooks: ' . $e->getMessage());
+            $this->warn('   Error listing webhooks: '.$e->getMessage());
+
             return null;
         }
     }
@@ -362,7 +374,8 @@ class PayMongoWebhookSync extends Command
 
             return $response->successful();
         } catch (\Throwable $e) {
-            $this->warn("   Failed to disable webhook {$webhookId}: " . $e->getMessage());
+            $this->warn("   Failed to disable webhook {$webhookId}: ".$e->getMessage());
+
             return false;
         }
     }
@@ -381,14 +394,16 @@ class PayMongoWebhookSync extends Command
                 ->timeout(15)
                 ->post("/v1/webhooks/{$webhookId}/enable");
 
-            if (!$response->successful()) {
-                $this->warn('   PayMongo enable webhook returned: ' . $response->status());
+            if (! $response->successful()) {
+                $this->warn('   PayMongo enable webhook returned: '.$response->status());
+
                 return null;
             }
 
             return $response->json('data');
         } catch (\Throwable $e) {
-            $this->warn("   Failed to enable webhook {$webhookId}: " . $e->getMessage());
+            $this->warn("   Failed to enable webhook {$webhookId}: ".$e->getMessage());
+
             return null;
         }
     }
@@ -414,17 +429,19 @@ class PayMongoWebhookSync extends Command
                     ],
                 ]);
 
-            if (!$response->successful()) {
+            if (! $response->successful()) {
                 $errors = $response->json('errors', []);
                 foreach ($errors as $error) {
-                    $this->warn('   PayMongo error: ' . ($error['detail'] ?? $error['code'] ?? json_encode($error)));
+                    $this->warn('   PayMongo error: '.($error['detail'] ?? $error['code'] ?? json_encode($error)));
                 }
+
                 return null;
             }
 
             return $response->json('data');
         } catch (\Throwable $e) {
-            $this->warn('   Error creating webhook: ' . $e->getMessage());
+            $this->warn('   Error creating webhook: '.$e->getMessage());
+
             return null;
         }
     }
@@ -436,15 +453,16 @@ class PayMongoWebhookSync extends Command
     {
         $envPath = base_path('.env');
 
-        if (!file_exists($envPath)) {
+        if (! file_exists($envPath)) {
             $this->warn('.env file not found.');
+
             return;
         }
 
         $envContent = file_get_contents($envPath);
 
         // Check if key already exists
-        $pattern = "/^" . preg_quote($key, '/') . "=.*/m";
+        $pattern = '/^'.preg_quote($key, '/').'=.*/m';
 
         if (preg_match($pattern, $envContent)) {
             // Replace existing value
@@ -467,11 +485,11 @@ class PayMongoWebhookSync extends Command
     {
         $path = config('services.paymongo.ca_bundle');
 
-        if (!$path) {
+        if (! $path) {
             return true;
         }
 
-        if (!preg_match('/^[A-Za-z]:[\\\\\/]/', $path) && !str_starts_with($path, DIRECTORY_SEPARATOR)) {
+        if (! preg_match('/^[A-Za-z]:[\\\\\/]/', $path) && ! str_starts_with($path, DIRECTORY_SEPARATOR)) {
             $path = base_path($path);
         }
 

@@ -9,7 +9,7 @@ return new class extends Migration
     public function up(): void
     {
         // Event Types table
-        if (!Schema::hasTable('event_types')) {
+        if (! Schema::hasTable('event_types')) {
             Schema::create('event_types', function (Blueprint $table) {
                 $table->id();
                 $table->string('slug')->unique();
@@ -22,7 +22,7 @@ return new class extends Migration
         }
 
         // Packages table
-        if (!Schema::hasTable('packages')) {
+        if (! Schema::hasTable('packages')) {
             Schema::create('packages', function (Blueprint $table) {
                 $table->id();
                 $table->string('name');
@@ -38,7 +38,7 @@ return new class extends Migration
         }
 
         // Booking Business Rules table (for lead time & capacity management)
-        if (!Schema::hasTable('business_rules')) {
+        if (! Schema::hasTable('business_rules')) {
             Schema::create('business_rules', function (Blueprint $table) {
                 $table->id();
                 $table->integer('minimum_lead_days')->default(7); // Must book 7 days ahead
@@ -51,7 +51,7 @@ return new class extends Migration
         }
 
         // Inventory table (Basic inventory tracking)
-        if (!Schema::hasTable('inventory_items')) {
+        if (! Schema::hasTable('inventory_items')) {
             Schema::create('inventory_items', function (Blueprint $table) {
                 $table->id();
                 $table->string('name');
@@ -64,7 +64,7 @@ return new class extends Migration
         }
 
         // Dish-Inventory link table (tracks which dishes use which ingredients)
-        if (!Schema::hasTable('dish_ingredients')) {
+        if (! Schema::hasTable('dish_ingredients')) {
             Schema::create('dish_ingredients', function (Blueprint $table) {
                 $table->id();
                 $table->foreignId('menu_item_id')->constrained('menu_items')->onDelete('cascade');

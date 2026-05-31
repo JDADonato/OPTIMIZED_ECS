@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Models\Concerns\StoresPostgresBooleans;
+use App\Support\PasswordPolicy;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
@@ -36,6 +37,7 @@ class User extends Authenticatable
         'deactivation_reason',
         'must_change_password',
         'password_changed_at',
+        'password_policy_version',
         'temporary_password_expires_at',
         'temporary_password_secret',
         'last_login_at',
@@ -65,6 +67,7 @@ class User extends Authenticatable
             'deactivated_at' => 'datetime',
             'must_change_password' => 'boolean',
             'password_changed_at' => 'datetime',
+            'password_policy_version' => 'integer',
             'temporary_password_expires_at' => 'datetime',
             'temporary_password_secret' => 'encrypted',
             'last_login_at' => 'datetime',
@@ -90,6 +93,11 @@ class User extends Authenticatable
         return $this->readBooleanAttribute(
             $this->getAttributes()['must_change_password'] ?? $this->getRawOriginal('must_change_password')
         );
+    }
+
+    public function usesCurrentPasswordPolicy(): bool
+    {
+        return PasswordPolicy::isCurrent($this->password_policy_version);
     }
 
     public function bookings()
@@ -184,6 +192,6 @@ class User extends Authenticatable
     {
         return $this->isActive()
             && filled($this->email)
-            && !$this->hasPlaceholderEmail();
+            && ! $this->hasPlaceholderEmail();
     }
 }

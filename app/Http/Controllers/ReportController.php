@@ -13,13 +13,10 @@ use App\Support\ApiResponse;
 use App\Support\ResourceVersion;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
-use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class ReportController extends Controller
 {
-    public function __construct(private readonly AdminReportService $reports)
-    {
-    }
+    public function __construct(private readonly AdminReportService $reports) {}
 
     public function widgets()
     {
@@ -45,7 +42,7 @@ class ReportController extends Controller
     public function templates()
     {
         $query = ReportTemplate::query()
-            ->when(!request()->boolean('include_archived'), fn ($query) => $query->whereNull('archived_at'))
+            ->when(! request()->boolean('include_archived'), fn ($query) => $query->whereNull('archived_at'))
             ->orderByDesc('updated_at');
 
         $versionMeta = ResourceVersion::fromQuery($query);
@@ -149,17 +146,17 @@ class ReportController extends Controller
     {
         $format = strtolower((string) $request->query('format', 'csv'));
         if ($format === 'pdf') {
-            $filename = 'eloquente-report-' . $run->id . '.pdf';
+            $filename = 'eloquente-report-'.$run->id.'.pdf';
             $sections = $this->reportSections($run);
             $truncated = count($sections) > $pdf->maxReportLines();
 
             return response($pdf->report($run->loadMissing('creator'), $sections, $truncated), 200, [
                 'Content-Type' => 'application/pdf',
-                'Content-Disposition' => 'attachment; filename="' . $filename . '"',
+                'Content-Disposition' => 'attachment; filename="'.$filename.'"',
             ]);
         }
 
-        $filename = 'eloquente-report-' . $run->id . '.csv';
+        $filename = 'eloquente-report-'.$run->id.'.csv';
         $snapshot = $this->normalizedSnapshot($run);
         $widgetNames = collect($this->reports->widgetDefinitions())->pluck('name', 'id');
 
@@ -168,14 +165,14 @@ class ReportController extends Controller
             fputcsv($handle, ['Report Section', 'Item', 'Detail', 'Value']);
 
             foreach ($snapshot['executive_summary']['takeaways'] ?? [] as $index => $takeaway) {
-                fputcsv($handle, ['Executive Summary', 'Takeaway ' . ($index + 1), $takeaway['headline'] ?? '', $takeaway['recommended_action'] ?? '']);
+                fputcsv($handle, ['Executive Summary', 'Takeaway '.($index + 1), $takeaway['headline'] ?? '', $takeaway['recommended_action'] ?? '']);
             }
 
             foreach ($snapshot['widgets'] as $widget) {
                 $title = $widgetNames[$widget['id'] ?? ''] ?? $this->humanLabel($widget['id'] ?? 'Report Section');
                 $data = $widget['data'] ?? [];
 
-                if (!empty($data['insight'])) {
+                if (! empty($data['insight'])) {
                     fputcsv($handle, [$title, 'Interpretation', $data['insight']['headline'] ?? '', $data['insight']['recommended_action'] ?? '']);
                 }
 
@@ -194,13 +191,13 @@ class ReportController extends Controller
         $lines = [];
         $snapshot = $this->normalizedSnapshot($run);
 
-        if (!empty($snapshot['executive_summary'])) {
+        if (! empty($snapshot['executive_summary'])) {
             $lines[] = 'EXECUTIVE SUMMARY';
             $lines[] = $snapshot['executive_summary']['headline'] ?? 'Report ready for review.';
             foreach ($snapshot['executive_summary']['takeaways'] ?? [] as $takeaway) {
-                $lines[] = '- ' . ($takeaway['headline'] ?? 'Review this takeaway.');
-                if (!empty($takeaway['recommended_action'])) {
-                    $lines[] = '  Action: ' . $takeaway['recommended_action'];
+                $lines[] = '- '.($takeaway['headline'] ?? 'Review this takeaway.');
+                if (! empty($takeaway['recommended_action'])) {
+                    $lines[] = '  Action: '.$takeaway['recommended_action'];
                 }
             }
             $lines[] = '';
@@ -209,13 +206,13 @@ class ReportController extends Controller
         foreach ($snapshot['widgets'] as $widget) {
             $title = $widgetNames[$widget['id'] ?? ''] ?? $this->humanLabel($widget['id'] ?? 'Report Section');
             $lines[] = strtoupper($title);
-            if (!empty($widget['data']['insight'])) {
-                $lines[] = 'Interpretation: ' . ($widget['data']['insight']['headline'] ?? '');
-                $lines[] = 'Recommended action: ' . ($widget['data']['insight']['recommended_action'] ?? '');
+            if (! empty($widget['data']['insight'])) {
+                $lines[] = 'Interpretation: '.($widget['data']['insight']['headline'] ?? '');
+                $lines[] = 'Recommended action: '.($widget['data']['insight']['recommended_action'] ?? '');
             }
             foreach ($this->flattenWidgetRows($widget['data'] ?? []) as $row) {
-                $detail = $row['detail'] ? ' - ' . $row['detail'] : '';
-                $lines[] = $row['item'] . $detail . ': ' . $row['value'];
+                $detail = $row['detail'] ? ' - '.$row['detail'] : '';
+                $lines[] = $row['item'].$detail.': '.$row['value'];
             }
         }
 
@@ -256,11 +253,12 @@ class ReportController extends Controller
     {
         if (isset($data['rows']) && is_array($data['rows'])) {
             return collect($data['rows'])->flatMap(function ($row) {
-                if (!is_array($row)) {
+                if (! is_array($row)) {
                     return [['item' => 'Result', 'detail' => '', 'value' => $this->formatExportValue($row)]];
                 }
 
                 $label = $row['label'] ?? $row['name'] ?? $row['client'] ?? $row['date'] ?? 'row';
+
                 return collect($row)
                     ->reject(fn ($value, $key) => in_array($key, ['id', 'label', 'name', 'client'], true) || is_array($value))
                     ->map(fn ($value, $key) => [
@@ -291,6 +289,7 @@ class ReportController extends Controller
     private function humanLabel(string $key): string
     {
         $label = preg_replace('/(?<!^)[A-Z]/', ' $0', str_replace(['_', '-'], ' ', $key));
+
         return ucwords(trim((string) $label));
     }
 
@@ -303,11 +302,12 @@ class ReportController extends Controller
         if (is_numeric($value)) {
             $lower = strtolower($key);
             if (str_contains($lower, 'revenue') || str_contains($lower, 'amount') || str_contains($lower, 'total') || str_contains($lower, 'value') || str_contains($lower, 'balance')) {
-                return 'PHP ' . number_format((float) $value, 2);
+                return 'PHP '.number_format((float) $value, 2);
             }
             if (str_contains($lower, 'rate') || str_contains($lower, 'percent')) {
-                return number_format((float) $value, 1) . '%';
+                return number_format((float) $value, 1).'%';
             }
+
             return number_format((float) $value, is_float($value + 0) && fmod((float) $value, 1.0) !== 0.0 ? 2 : 0);
         }
 

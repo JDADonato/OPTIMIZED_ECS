@@ -10,7 +10,7 @@ return new class extends Migration
     {
         // Add event_type_id foreign key to bookings
         Schema::table('bookings', function (Blueprint $table) {
-            if (!Schema::hasColumn('bookings', 'event_type_id')) {
+            if (! Schema::hasColumn('bookings', 'event_type_id')) {
                 $table->foreignId('event_type_id')->nullable()->constrained('event_types')->onDelete('set null');
             }
         });

@@ -19,7 +19,7 @@ class UploadRegistryService
             'user_id' => $user?->id,
             'disk' => 'public',
             'path' => $path,
-            'url' => '/storage/' . $path,
+            'url' => '/storage/'.$path,
             'mime_type' => $file->getMimeType(),
             'size' => $file->getSize(),
             'original_name' => $file->getClientOriginalName(),
@@ -34,7 +34,7 @@ class UploadRegistryService
         $records = $this->recordsForUrls($this->extractUrls($uploads));
 
         foreach ($records as $record) {
-            if (!$this->canAttach($record, $actor)) {
+            if (! $this->canAttach($record, $actor)) {
                 abort(403, 'This upload belongs to another account.');
             }
 
@@ -90,8 +90,9 @@ class UploadRegistryService
                     foreach ($urls as $url) {
                         $path = $this->publicStoragePathFromUrl($url);
 
-                        if (!$path) {
+                        if (! $path) {
                             $summary['external_or_legacy']++;
+
                             continue;
                         }
 
@@ -104,7 +105,7 @@ class UploadRegistryService
 
                         if ($existing) {
                             $summary['existing']++;
-                            if (!$dryRun && $existing->status !== 'attached') {
+                            if (! $dryRun && $existing->status !== 'attached') {
                                 $existing->forceFill([
                                     'status' => 'attached',
                                     'attachable_type' => Booking::class,
@@ -113,11 +114,13 @@ class UploadRegistryService
                                     'expires_at' => null,
                                 ])->save();
                             }
+
                             continue;
                         }
 
-                        if (!Storage::disk('public')->exists($path)) {
+                        if (! Storage::disk('public')->exists($path)) {
                             $summary['missing_files']++;
+
                             continue;
                         }
 
@@ -171,7 +174,7 @@ class UploadRegistryService
             return trim($uploads) !== '' ? [trim($uploads)] : [];
         }
 
-        if (!is_array($uploads)) {
+        if (! is_array($uploads)) {
             return [];
         }
 
@@ -190,7 +193,7 @@ class UploadRegistryService
         $url = trim($url);
         $path = parse_url($url, PHP_URL_PATH) ?: $url;
 
-        if (!str_starts_with($path, '/storage/uploads/')) {
+        if (! str_starts_with($path, '/storage/uploads/')) {
             return null;
         }
 
@@ -199,7 +202,7 @@ class UploadRegistryService
 
     private function canAttach(UploadedFile $file, ?User $actor): bool
     {
-        if (!$actor || !$file->user_id) {
+        if (! $actor || ! $file->user_id) {
             return true;
         }
 

@@ -3,6 +3,7 @@
 namespace App\Notifications;
 
 use App\Models\Booking;
+use Carbon\Carbon;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Notifications\Messages\MailMessage;
@@ -22,7 +23,7 @@ class NewBookingNotification extends Notification implements ShouldQueue
     public function toMail(object $notifiable): MailMessage
     {
         $booking = $this->booking;
-        $eventDate = \Carbon\Carbon::parse($booking->event_date)->format('F j, Y');
+        $eventDate = Carbon::parse($booking->event_date)->format('F j, Y');
 
         return (new MailMessage)
             ->subject('New Booking Received - Eloquente Catering')
@@ -37,7 +38,7 @@ class NewBookingNotification extends Notification implements ShouldQueue
                     'Event date' => $eventDate,
                     'Guests' => $booking->pax,
                     'Venue' => trim("{$booking->venue_address_line}, {$booking->venue_city}", ', '),
-                    'Total cost' => 'PHP ' . number_format((float) $booking->total_cost, 2),
+                    'Total cost' => 'PHP '.number_format((float) $booking->total_cost, 2),
                     'Status' => $booking->status,
                 ],
                 'ctaLabel' => 'Review booking',
@@ -51,7 +52,7 @@ class NewBookingNotification extends Notification implements ShouldQueue
         return [
             'booking_id' => $this->booking->id,
             'type' => 'new_booking',
-            'message' => "New booking from {$this->booking->client_full_name} for {$this->booking->pax} guests on " . \Carbon\Carbon::parse($this->booking->event_date)->format('F j, Y'),
+            'message' => "New booking from {$this->booking->client_full_name} for {$this->booking->pax} guests on ".Carbon::parse($this->booking->event_date)->format('F j, Y'),
         ];
     }
 }

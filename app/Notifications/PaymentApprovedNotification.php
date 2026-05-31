@@ -37,7 +37,7 @@ class PaymentApprovedNotification extends Notification
         return [
             'booking_id' => $this->booking->id,
             'type' => 'payment_approved',
-            'message' => "Your {$label} of ₱" . number_format($this->amount, 2) . " for Booking #{$this->booking->id} has been verified.",
+            'message' => "Your {$label} of ₱".number_format($this->amount, 2)." for Booking #{$this->booking->id} has been verified.",
         ];
     }
 }

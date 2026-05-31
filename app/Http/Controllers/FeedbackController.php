@@ -50,7 +50,7 @@ class FeedbackController extends Controller
             ->where('user_id', Auth::id())
             ->first();
 
-        if (!$feedbackRequest) {
+        if (! $feedbackRequest) {
             return response()->json(['error' => 'Feedback request not found.'], 404);
         }
 
@@ -213,7 +213,7 @@ class FeedbackController extends Controller
             'follow_up_due_at' => ['nullable', 'date'],
         ]);
 
-        if (($data['testimonial_status'] ?? null) === 'Approved' && (!$response->testimonial_permission || (int) $response->rating < 4)) {
+        if (($data['testimonial_status'] ?? null) === 'Approved' && (! $response->testimonial_permission || (int) $response->rating < 4)) {
             return response()->json([
                 'error' => 'Only high-rating feedback with testimonial permission can be approved.',
             ], 422);

@@ -4,8 +4,6 @@ namespace App\Console\Commands;
 
 use App\Models\User;
 use Illuminate\Console\Command;
-use Illuminate\Support\Facades\Hash;
-use Illuminate\Validation\ValidationException;
 
 class CreateUserCredential extends Command
 {
@@ -41,14 +39,16 @@ class CreateUserCredential extends Command
 
         // Validate role
         $validRoles = ['Admin', 'Marketing', 'Accounting', 'Client'];
-        if (!in_array($role, $validRoles)) {
-            $this->error("Invalid role. Must be one of: " . implode(', ', $validRoles));
+        if (! in_array($role, $validRoles)) {
+            $this->error('Invalid role. Must be one of: '.implode(', ', $validRoles));
+
             return 1;
         }
 
         // Check if username already exists
         if (User::where('username', $username)->exists()) {
             $this->error("Username '{$username}' already exists!");
+
             return 1;
         }
 
@@ -79,7 +79,8 @@ class CreateUserCredential extends Command
 
             return 0;
         } catch (\Exception $e) {
-            $this->error("Error creating user: " . $e->getMessage());
+            $this->error('Error creating user: '.$e->getMessage());
+
             return 1;
         }
     }

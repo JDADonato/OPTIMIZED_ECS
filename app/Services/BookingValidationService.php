@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\Booking;
 use App\Models\BusinessRule;
+use App\Models\MenuItem;
 use Carbon\Carbon;
 use Illuminate\Validation\ValidationException;
 
@@ -12,15 +13,15 @@ class BookingValidationService
     /**
      * Validate booking constraints (lead time, capacity, pax limits)
      *
-     * @param array $data Booking data
-     * @param Booking|null $booking Existing booking for updates
+     * @param  array  $data  Booking data
+     * @param  Booking|null  $booking  Existing booking for updates
      * @return array Validated data or throws ValidationException
      */
     public static function validateBookingConstraints(array $data, ?Booking $booking = null): array
     {
         $rules = BusinessRule::getActive();
-        
-        if (!$rules) {
+
+        if (! $rules) {
             throw new \Exception('Business rules not configured');
         }
 
@@ -67,7 +68,7 @@ class BookingValidationService
             }
         }
 
-        if (!empty($errors)) {
+        if (! empty($errors)) {
             throw ValidationException::withMessages($errors);
         }
 
@@ -78,8 +79,8 @@ class BookingValidationService
      * Calculate total cost based on menu items and pax count
      * Prevents client-side price manipulation
      *
-     * @param array $menuItemIds Menu item IDs with quantities
-     * @param int $pax Number of guests
+     * @param  array  $menuItemIds  Menu item IDs with quantities
+     * @param  int  $pax  Number of guests
      * @return float Total cost
      */
     public static function calculateTotalCost(array $menuItemIds, int $pax): float
@@ -89,10 +90,10 @@ class BookingValidationService
         }
 
         $itemCounts = array_count_values(array_map('intval', $menuItemIds));
-        $items = \App\Models\MenuItem::whereIn('id', array_keys($itemCounts))->get()->keyBy('id');
+        $items = MenuItem::whereIn('id', array_keys($itemCounts))->get()->keyBy('id');
 
         if ($items->count() !== count($itemCounts)) {
-            $missingId = collect(array_keys($itemCounts))->first(fn ($id) => !isset($items[$id]));
+            $missingId = collect(array_keys($itemCounts))->first(fn ($id) => ! isset($items[$id]));
             throw new \Exception("Menu item {$missingId} not found");
         }
 
@@ -107,19 +108,17 @@ class BookingValidationService
     /**
      * Verify submitted total cost matches server calculation
      *
-     * @param float $submittedTotal Client submitted total
-     * @param array $menuItemIds Menu item IDs
-     * @param int $pax Number of guests
-     * @param float $allowedVariance Allowed price variance (default 1%)
-     * @return bool
+     * @param  float  $submittedTotal  Client submitted total
+     * @param  array  $menuItemIds  Menu item IDs
+     * @param  int  $pax  Number of guests
+     * @param  float  $allowedVariance  Allowed price variance (default 1%)
      */
     public static function verifyCostAccuracy(
         float $submittedTotal,
         array $menuItemIds,
         int $pax,
         float $allowedVariance = 0.01
-    ): bool
-    {
+    ): bool {
         $calculatedTotal = self::calculateTotalCost($menuItemIds, $pax);
         if ($calculatedTotal <= 0) {
             return $submittedTotal <= 0;

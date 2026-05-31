@@ -9,16 +9,16 @@ return new class extends Migration
     public function up(): void
     {
         Schema::table('payments', function (Blueprint $table) {
-            if (!Schema::hasColumn('payments', 'voided_at')) {
+            if (! Schema::hasColumn('payments', 'voided_at')) {
                 $table->timestamp('voided_at')->nullable()->index()->after('verified_at');
             }
-            if (!Schema::hasColumn('payments', 'voided_by')) {
+            if (! Schema::hasColumn('payments', 'voided_by')) {
                 $table->foreignId('voided_by')->nullable()->after('voided_at')->constrained('users')->nullOnDelete();
             }
-            if (!Schema::hasColumn('payments', 'void_reason')) {
+            if (! Schema::hasColumn('payments', 'void_reason')) {
                 $table->string('void_reason')->nullable()->index()->after('voided_by');
             }
-            if (!Schema::hasColumn('payments', 'superseded_by_payment_id')) {
+            if (! Schema::hasColumn('payments', 'superseded_by_payment_id')) {
                 $table->foreignId('superseded_by_payment_id')->nullable()->after('void_reason')->constrained('payments')->nullOnDelete();
             }
         });

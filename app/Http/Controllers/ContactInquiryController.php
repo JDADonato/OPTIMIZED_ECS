@@ -62,7 +62,7 @@ class ContactInquiryController extends Controller
         $query = ContactInquiry::query()
             ->with(['assignee:id,full_name,username', 'duplicateUser:id,full_name,username,email,phone,account_status'])
             ->when($search !== '', function ($query) use ($search) {
-                $term = '%' . mb_strtolower($search) . '%';
+                $term = '%'.mb_strtolower($search).'%';
                 $query->where(function ($inner) use ($term) {
                     $inner->whereRaw('LOWER(full_name) LIKE ?', [$term])
                         ->orWhereRaw('LOWER(email) LIKE ?', [$term])
@@ -139,7 +139,7 @@ class ContactInquiryController extends Controller
         $email = filled($email) ? strtolower(trim($email)) : null;
         $phone = filled($phone) ? trim($phone) : null;
 
-        if (!$email && !$phone) {
+        if (! $email && ! $phone) {
             return null;
         }
 
@@ -169,7 +169,7 @@ class ContactInquiryController extends Controller
             'email' => $duplicate->hasPlaceholderEmail() ? null : $duplicate->email,
             'phone' => $duplicate->phone,
             'account_status' => $duplicate->account_status ?? 'active',
-            'is_deactivated' => !$duplicate->isActive(),
+            'is_deactivated' => ! $duplicate->isActive(),
         ] : null;
 
         return $data;

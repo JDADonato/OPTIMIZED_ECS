@@ -30,13 +30,13 @@ class Package extends Model
     {
         return [
             'base_price_per_head' => 'integer',
-            'minimum_pax'         => 'integer',
-            'event_type_slugs'    => 'array',
-            'inclusions'          => 'array',
-            'amenities'           => 'array',
-            'applicable_setups'   => 'array',
-            'menu_structure'      => 'array',
-            'is_active'           => 'boolean',
+            'minimum_pax' => 'integer',
+            'event_type_slugs' => 'array',
+            'inclusions' => 'array',
+            'amenities' => 'array',
+            'applicable_setups' => 'array',
+            'menu_structure' => 'array',
+            'is_active' => 'boolean',
         ];
     }
 

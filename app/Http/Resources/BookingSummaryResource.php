@@ -2,6 +2,7 @@
 
 namespace App\Http\Resources;
 
+use App\Support\CustomerIdentity;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
@@ -9,6 +10,8 @@ class BookingSummaryResource extends JsonResource
 {
     public function toArray(Request $request): array
     {
+        $identity = CustomerIdentity::forBooking($this->resource);
+
         return [
             'id' => $this->id,
             'user_id' => $this->user_id,
@@ -27,6 +30,9 @@ class BookingSummaryResource extends JsonResource
             'client_full_name' => $this->client_full_name,
             'client_email' => $this->client_email,
             'client_phone' => $this->client_phone,
+            'customer_account' => $identity['customer_account'],
+            'booking_contact' => $identity['booking_contact'],
+            'has_different_booking_contact' => $identity['has_different_booking_contact'],
             'venue_address_line' => $this->venue_address_line,
             'venue_street' => $this->venue_street,
             'venue_city' => $this->venue_city,
@@ -73,6 +79,7 @@ class BookingSummaryResource extends JsonResource
             'closed_by' => $this->closed_by,
             'created_at' => $this->created_at,
             'username' => $this->user->username ?? null,
+            'user_full_name' => $this->user->full_name ?? null,
             'user_email' => $this->user->email ?? null,
             'user_phone' => $this->user->phone ?? null,
             'role' => $this->user->role ?? null,
@@ -125,7 +132,7 @@ class BookingSummaryResource extends JsonResource
     {
         $user = $request->user();
 
-        if (!$user || !in_array($user->role, ['Marketing', 'Admin'], true)) {
+        if (! $user || ! in_array($user->role, ['Marketing', 'Admin'], true)) {
             return false;
         }
 
@@ -138,7 +145,7 @@ class BookingSummaryResource extends JsonResource
 
         return $user
             && $user->role === 'Marketing'
-            && !is_null($this->transfer_requested_to)
+            && ! is_null($this->transfer_requested_to)
             && (int) $this->transfer_requested_to === (int) $user->id;
     }
 

@@ -4,7 +4,7 @@ const StaffDrawer = ({ isOpen, title, eyebrow, children, footer, onClose }) => {
     if (!isOpen) return null;
 
     return (
-        <div className="fixed inset-0 z-50 flex justify-end bg-slate-950/35 backdrop-blur-sm">
+        <div className="fixed inset-0 z-[130] flex justify-end bg-slate-950/35 backdrop-blur-sm">
             <button type="button" className="flex-1 cursor-default" aria-label="Close drawer" onClick={onClose} />
             <aside className="staff-drawer">
                 <header className="staff-drawer-header">

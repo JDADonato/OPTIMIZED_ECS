@@ -3,6 +3,7 @@
 namespace App\Notifications;
 
 use App\Models\Payment;
+use Carbon\Carbon;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Notifications\Messages\MailMessage;
@@ -22,8 +23,8 @@ class PaymentReminderNotification extends Notification implements ShouldQueue
     public function toMail(object $notifiable): MailMessage
     {
         $booking = $this->payment->booking;
-        $dueDate = \Carbon\Carbon::parse($this->payment->due_date);
-        $daysUntilDue = $dueDate->diffInDays(\Carbon\Carbon::now());
+        $dueDate = Carbon::parse($this->payment->due_date);
+        $daysUntilDue = $dueDate->diffInDays(Carbon::now());
 
         return (new MailMessage)
             ->subject('Payment Reminder - Eloquente Catering')
@@ -35,10 +36,10 @@ class PaymentReminderNotification extends Notification implements ShouldQueue
                 'lines' => ['This is a friendly reminder about an upcoming payment for your booking.'],
                 'details' => array_filter([
                     'Payment type' => $this->payment->payment_type,
-                    'Amount due' => 'PHP ' . number_format((float) $this->payment->amount, 2),
+                    'Amount due' => 'PHP '.number_format((float) $this->payment->amount, 2),
                     'Due date' => $dueDate->format('F j, Y'),
                     'Days remaining' => $daysUntilDue > 0 ? $daysUntilDue : null,
-                    'Booking reference' => '#' . str_pad($booking->id, 5, '0', STR_PAD_LEFT),
+                    'Booking reference' => '#'.str_pad($booking->id, 5, '0', STR_PAD_LEFT),
                 ]),
                 'ctaLabel' => 'View payment',
                 'ctaUrl' => route('payment.page'),
@@ -52,7 +53,7 @@ class PaymentReminderNotification extends Notification implements ShouldQueue
             'payment_id' => $this->payment->id,
             'booking_id' => $this->payment->booking_id,
             'type' => 'payment_reminder',
-            'message' => 'Payment reminder: PHP ' . number_format((float) $this->payment->amount, 2) . " ({$this->payment->payment_type}) due on " . \Carbon\Carbon::parse($this->payment->due_date)->format('F j, Y'),
+            'message' => 'Payment reminder: PHP '.number_format((float) $this->payment->amount, 2)." ({$this->payment->payment_type}) due on ".Carbon::parse($this->payment->due_date)->format('F j, Y'),
         ];
     }
 }

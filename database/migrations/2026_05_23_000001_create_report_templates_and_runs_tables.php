@@ -8,7 +8,7 @@ return new class extends Migration
 {
     public function up(): void
     {
-        if (!Schema::hasTable('report_templates')) {
+        if (! Schema::hasTable('report_templates')) {
             Schema::create('report_templates', function (Blueprint $table) {
                 $table->id();
                 $table->string('name');
@@ -21,7 +21,7 @@ return new class extends Migration
             });
         }
 
-        if (!Schema::hasTable('report_runs')) {
+        if (! Schema::hasTable('report_runs')) {
             Schema::create('report_runs', function (Blueprint $table) {
                 $table->id();
                 $table->foreignId('report_template_id')->nullable()->constrained('report_templates')->nullOnDelete();

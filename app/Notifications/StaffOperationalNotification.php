@@ -16,8 +16,7 @@ class StaffOperationalNotification extends Notification implements ShouldQueue
         private readonly string $headline,
         private readonly string $body,
         private readonly ?string $url = null,
-    ) {
-    }
+    ) {}
 
     public function via(object $notifiable): array
     {

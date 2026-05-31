@@ -6,20 +6,12 @@ import { LiveSyncIndicator, SoftRefreshBoundary } from './LiveFeedback';
 import { customerBookingStatus } from '../../utils/statusLabels';
 import csrfFetch from '../../utils/csrf';
 import { operationalChannelsForUser } from '../../utils/liveChannels';
+import { getChatModerationFeedback, getChatModerationIssue } from '../../utils/chatModeration';
 
-/**
- * Phase 2: Client Chat Bubble — WebSocket-powered.
- *
- * Key changes from Phase 1:
- *  - No staff picker: clients just type and it goes to the general queue
- *  - Listens for Reverb events for instant message updates via Echo
- *  - Typing indicator: "Staff is typing..." shown briefly
- *  - Conversation-based: all messages flow through /api/chat/* endpoints
- *
- * Preserves existing floating bubble UI design and Tailwind classes.
- */
 const CHAT_CACHE_TTL_MS = 60000;
 const BOOKING_CACHE_TTL_MS = 180000;
+const createClientTempId = () => `tmp-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+const localTimeLabel = (date = new Date()) => date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
 const sortMessagesOldestFirst = (items = []) => [...items].sort((a, b) => {
     const left = Number(a.id) || new Date(a.created_at || 0).getTime();
     const right = Number(b.id) || new Date(b.created_at || 0).getTime();
@@ -39,6 +31,7 @@ const ChatBubble = ({ user, openOnMount = false }) => {
     const [bookings, setBookings] = useState([]);
     const [chatTopic, setChatTopic] = useState(null);
     const [topicWarning, setTopicWarning] = useState('');
+    const [moderationNotice, setModerationNotice] = useState(null);
     const [showBookingPicker, setShowBookingPicker] = useState(false);
     const [staffTyping, setStaffTyping] = useState(false);
     const [loadingConv, setLoadingConv] = useState(false);
@@ -51,7 +44,6 @@ const ChatBubble = ({ user, openOnMount = false }) => {
     const [deleteConfirmModal, setDeleteConfirmModal] = useState({ isOpen: false, message: null, busy: false });
     const messagesEndRef = useRef(null);
     const shouldScrollToBottomRef = useRef(false);
-    const typingTimeoutRef = useRef(null);
     const echoChannelRef = useRef(null);
     const conversationRef = useRef(null);
     const messagesRef = useRef([]);
@@ -60,6 +52,7 @@ const ChatBubble = ({ user, openOnMount = false }) => {
     const messagesLoadedForRef = useRef(null);
     const lastBookingsLoadedAtRef = useRef(0);
     const openedOnMountRef = useRef(false);
+    const moderationAttemptsRef = useRef(0);
 
     // Keep ref in sync
     useEffect(() => { conversationRef.current = conversation; }, [conversation]);
@@ -107,6 +100,46 @@ const ChatBubble = ({ user, openOnMount = false }) => {
             pagination: payload?.pagination || { has_more: false },
         };
     };
+
+    const mergeMessageIntoList = useCallback((items, incoming) => {
+        const list = Array.isArray(items) ? items : [];
+        const clientTempId = incoming?.client_temp_id;
+        const existingIndex = list.findIndex((item) => (
+            (clientTempId && item.client_temp_id === clientTempId)
+            || (incoming?.id && item.id === incoming.id)
+        ));
+
+        if (existingIndex >= 0) {
+            const next = [...list];
+            next[existingIndex] = {
+                ...next[existingIndex],
+                ...incoming,
+                optimistic_status: incoming.optimistic_status || 'sent',
+            };
+            return sortMessagesOldestFirst(next);
+        }
+
+        return sortMessagesOldestFirst([...list, incoming]);
+    }, []);
+
+    const optimisticMessageFor = useCallback((conversationId, message, clientTempId) => {
+        const createdAt = new Date();
+
+        return {
+            id: clientTempId,
+            client_temp_id: clientTempId,
+            conversation_id: conversationId,
+            sender_id: user?.id,
+            sender_name: user?.username || user?.full_name || 'You',
+            sender_role: user?.role || 'Client',
+            message,
+            is_mine: true,
+            read_at: null,
+            created_at: createdAt.toISOString(),
+            time: localTimeLabel(createdAt),
+            optimistic_status: 'sending',
+        };
+    }, [user?.full_name, user?.id, user?.role, user?.username]);
 
     const fetchMessages = useCallback(async (convId, { force = false } = {}) => {
         const isSameConversation = messagesLoadedForRef.current === convId;
@@ -296,10 +329,38 @@ const ChatBubble = ({ user, openOnMount = false }) => {
         handleOpen();
     }, [openOnMount]);
 
+    const showModerationFeedback = useCallback((serverPayload = null) => {
+        const attempts = Number(serverPayload?.moderation?.attempts || moderationAttemptsRef.current + 1);
+        moderationAttemptsRef.current = attempts;
+        setModerationNotice(getChatModerationFeedback(attempts, serverPayload));
+    }, []);
+
+    const handleMessageInputChange = (event) => {
+        const value = event.target.value;
+        setNewMessage(value);
+        if (moderationNotice && !getChatModerationIssue(value)) {
+            setModerationNotice(null);
+        }
+    };
+
+    const blockIfModerated = (message) => {
+        if (!getChatModerationIssue(message)) return false;
+        showModerationFeedback();
+        return true;
+    };
+
     const handleSend = async (e) => {
         e.preventDefault();
         if (!newMessage.trim() || sending) return;
+        const outgoingMessage = newMessage.trim();
+        if (blockIfModerated(outgoingMessage)) return;
+
+        const clientTempId = createClientTempId();
+        const optimistic = optimisticMessageFor(conversation?.id || clientTempId, outgoingMessage, clientTempId);
         setSending(true);
+        setNewMessage('');
+        shouldScrollToBottomRef.current = true;
+        setMessages(prev => mergeMessageIntoList(prev, optimistic));
 
         try {
             if (conversation) {
@@ -307,17 +368,26 @@ const ChatBubble = ({ user, openOnMount = false }) => {
                 const res = await csrfFetch(`/api/chat/conversations/${conversation.id}/messages`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-                    body: JSON.stringify({ message: newMessage.trim() }),
+                    body: JSON.stringify({ message: outgoingMessage, client_temp_id: clientTempId }),
                 });
-                if (res.ok) {
-                    const msg = await res.json();
-                    shouldScrollToBottomRef.current = true;
-                    setMessages(prev => sortMessagesOldestFirst([...prev, msg]));
-                    setNewMessage('');
+                const payload = await res.json().catch(() => ({}));
+                if (!res.ok) {
+                    if (payload?.moderation?.blocked) {
+                        setMessages(prev => prev.filter(item => item.client_temp_id !== clientTempId));
+                        setNewMessage(outgoingMessage);
+                        showModerationFeedback(payload);
+                        return;
+                    }
+                    throw new Error(payload.error || 'Message could not be sent.');
                 }
+                shouldScrollToBottomRef.current = true;
+                setMessages(prev => mergeMessageIntoList(prev, { ...payload, optimistic_status: 'sent' }));
+                setModerationNotice(null);
             } else {
                 const latestBookings = bookings.length ? bookings : await fetchBookings({ force: true });
                 if (latestBookings.length > 1 && chatTopic === null) {
+                    setMessages(prev => prev.filter(item => item.client_temp_id !== clientTempId));
+                    setNewMessage(outgoingMessage);
                     setTopicWarning('Choose a booking or General inquiry before sending.');
                     setSending(false);
                     return;
@@ -327,21 +397,100 @@ const ChatBubble = ({ user, openOnMount = false }) => {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
                     body: JSON.stringify({
-                        message: newMessage.trim(),
+                        message: outgoingMessage,
+                        client_temp_id: clientTempId,
                         ...(chatTopic && chatTopic !== 'general' ? { booking_id: Number(chatTopic) } : {}),
                     }),
                 });
-                if (res.ok) {
-                    const d = await res.json();
-                    setConversation(d.conversation);
-                    shouldScrollToBottomRef.current = true;
-                    setMessages([d.message]);
-                    setNewMessage('');
-                    setTopicWarning('');
+                const payload = await res.json().catch(() => ({}));
+                if (!res.ok) {
+                    if (payload?.moderation?.blocked) {
+                        setMessages(prev => prev.filter(item => item.client_temp_id !== clientTempId));
+                        setNewMessage(outgoingMessage);
+                        showModerationFeedback(payload);
+                        return;
+                    }
+                    throw new Error(payload.error || 'Message could not be sent.');
                 }
+                setConversation(payload.conversation);
+                shouldScrollToBottomRef.current = true;
+                setMessages(prev => mergeMessageIntoList(prev, { ...payload.message, optimistic_status: 'sent' }));
+                setTopicWarning('');
+                setModerationNotice(null);
             }
-        } catch (e) { console.error('Send failed'); }
+        } catch (e) {
+            setMessages(prev => prev.map(item => item.client_temp_id === clientTempId
+                ? { ...item, optimistic_status: 'failed', error: e.message || 'Message could not be sent.' }
+                : item));
+            setTopicWarning(e.message || 'Message could not be sent.');
+        }
         finally { setSending(false); }
+    };
+
+    const removeFailedMessage = (msg) => {
+        if (!msg?.client_temp_id) return;
+        setMessages(prev => prev.filter(item => item.client_temp_id !== msg.client_temp_id));
+    };
+
+    const retryFailedMessage = async (msg) => {
+        if (!msg?.message || sending) return;
+        const clientTempId = msg.client_temp_id || createClientTempId();
+        setSending(true);
+        setMessages(prev => mergeMessageIntoList(prev, { ...msg, client_temp_id: clientTempId, optimistic_status: 'sending', error: null }));
+
+        try {
+            if (conversation) {
+                const res = await csrfFetch(`/api/chat/conversations/${conversation.id}/messages`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+                    body: JSON.stringify({ message: msg.message, client_temp_id: clientTempId }),
+                });
+                const payload = await res.json().catch(() => ({}));
+                if (!res.ok) {
+                    if (payload?.moderation?.blocked) {
+                        removeFailedMessage({ client_temp_id: clientTempId });
+                        setNewMessage(msg.message);
+                        showModerationFeedback(payload);
+                        return;
+                    }
+                    throw new Error(payload.error || 'Message could not be sent.');
+                }
+                shouldScrollToBottomRef.current = true;
+                setMessages(prev => mergeMessageIntoList(prev, { ...payload, optimistic_status: 'sent' }));
+            } else {
+                const res = await csrfFetch('/api/chat/conversations', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+                    body: JSON.stringify({
+                        message: msg.message,
+                        client_temp_id: clientTempId,
+                        ...(chatTopic && chatTopic !== 'general' ? { booking_id: Number(chatTopic) } : {}),
+                    }),
+                });
+                const payload = await res.json().catch(() => ({}));
+                if (!res.ok) {
+                    if (payload?.moderation?.blocked) {
+                        removeFailedMessage({ client_temp_id: clientTempId });
+                        setNewMessage(msg.message);
+                        showModerationFeedback(payload);
+                        return;
+                    }
+                    throw new Error(payload.error || 'Message could not be sent.');
+                }
+                setConversation(payload.conversation);
+                shouldScrollToBottomRef.current = true;
+                setMessages(prev => mergeMessageIntoList(prev, { ...payload.message, optimistic_status: 'sent' }));
+            }
+            setTopicWarning('');
+            setModerationNotice(null);
+        } catch (e) {
+            setMessages(prev => prev.map(item => item.client_temp_id === clientTempId
+                ? { ...item, optimistic_status: 'failed', error: e.message || 'Message could not be sent.' }
+                : item));
+            setTopicWarning(e.message || 'Message could not be sent.');
+        } finally {
+            setSending(false);
+        }
     };
 
     const shareBooking = async (booking) => {
@@ -361,35 +510,46 @@ const ChatBubble = ({ user, openOnMount = false }) => {
                 status: customerBookingStatus(booking.status).label,
             },
         });
+        const clientTempId = createClientTempId();
+        const optimistic = optimisticMessageFor(conversation?.id || clientTempId, text, clientTempId);
+        shouldScrollToBottomRef.current = true;
+        setMessages(prev => mergeMessageIntoList(prev, optimistic));
+        setShowBookingPicker(false);
 
         try {
             if (conversation) {
                 const res = await csrfFetch(`/api/chat/conversations/${conversation.id}/messages`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-                    body: JSON.stringify({ message: text }),
+                    body: JSON.stringify({ message: text, client_temp_id: clientTempId }),
                 });
                 if (res.ok) {
                     const msg = await res.json();
                     shouldScrollToBottomRef.current = true;
-                    setMessages(prev => sortMessagesOldestFirst([...prev, msg]));
-                    setShowBookingPicker(false);
+                    setMessages(prev => mergeMessageIntoList(prev, { ...msg, optimistic_status: 'sent' }));
+                } else {
+                    throw new Error('Booking details could not be sent.');
                 }
             } else {
                 const res = await csrfFetch('/api/chat/conversations', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-                    body: JSON.stringify({ message: text }),
+                    body: JSON.stringify({ message: text, client_temp_id: clientTempId }),
                 });
                 if (res.ok) {
                     const d = await res.json();
                     setConversation(d.conversation);
                     shouldScrollToBottomRef.current = true;
-                    setMessages([d.message]);
-                    setShowBookingPicker(false);
+                    setMessages(prev => mergeMessageIntoList(prev, { ...d.message, optimistic_status: 'sent' }));
+                } else {
+                    throw new Error('Booking details could not be sent.');
                 }
             }
-        } catch (e) { console.error('Share failed'); }
+        } catch (e) {
+            setMessages(prev => prev.map(item => item.client_temp_id === clientTempId
+                ? { ...item, optimistic_status: 'failed', error: e.message || 'Booking details could not be sent.' }
+                : item));
+        }
         finally { setSending(false); }
     };
 
@@ -439,11 +599,13 @@ const ChatBubble = ({ user, openOnMount = false }) => {
     };
 
     const canEditMessage = (msg) => {
+        if (msg?.optimistic_status) return false;
         if (!msg?.is_mine || msg.deleted_at || isBookingCard(msg.message)) return false;
         return Date.now() - new Date(msg.created_at || 0).getTime() <= 15 * 60 * 1000;
     };
 
     const canDeleteMessage = (msg) => {
+        if (msg?.optimistic_status) return false;
         if (!msg?.is_mine || msg.deleted_at) return false;
         return Date.now() - new Date(msg.created_at || 0).getTime() <= 15 * 60 * 1000;
     };
@@ -461,16 +623,26 @@ const ChatBubble = ({ user, openOnMount = false }) => {
     };
 
     const saveEditedMessage = async (msg) => {
-        if (!editingText.trim()) return;
+        const outgoingMessage = editingText.trim();
+        if (!outgoingMessage) return;
+        if (blockIfModerated(outgoingMessage)) return;
+
         try {
             const res = await csrfFetch(`/api/chat/messages/${msg.id}`, {
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ message: editingText.trim() }),
+                body: JSON.stringify({ message: outgoingMessage }),
             });
             const payload = await res.json().catch(() => ({}));
-            if (!res.ok) throw new Error(payload.error || 'Could not edit message.');
+            if (!res.ok) {
+                if (payload?.moderation?.blocked) {
+                    showModerationFeedback(payload);
+                    return;
+                }
+                throw new Error(payload.error || 'Could not edit message.');
+            }
             setMessages(prev => prev.map(item => item.id === msg.id ? payload : item));
+            setModerationNotice(null);
             cancelEditMessage();
         } catch (e) {
             setTopicWarning(e.message || 'Could not edit message.');
@@ -618,7 +790,7 @@ const ChatBubble = ({ user, openOnMount = false }) => {
                                     )}
 
                                     {messages.map(msg => (
-                                        <div key={msg.id} className={`flex ${msg.is_mine ? 'justify-end' : 'justify-start'}`}>
+                                        <div key={msg.client_temp_id || msg.id} className={`flex ${msg.is_mine ? 'justify-end' : 'justify-start'}`}>
                                             <div className="group flex max-w-[92%] items-start gap-2">
                                                 {(canEditMessage(msg) || canDeleteMessage(msg)) && editingMessageId !== msg.id && (
                                                     <div className={`relative mt-2 flex h-7 w-7 flex-shrink-0 transition-opacity ${openActionMessageId === msg.id ? 'opacity-100' : 'pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100'}`}>
@@ -667,8 +839,20 @@ const ChatBubble = ({ user, openOnMount = false }) => {
                                                 )}
                                                 <div className="mt-1 flex items-center justify-end gap-2">
                                                     {msg.edited_at && !msg.deleted_at && <span className={`text-[10px] font-semibold ${msg.is_mine ? 'text-white/50' : 'text-slate-400'}`}>edited</span>}
-                                                    <p className={`text-[10px] font-semibold ${msg.is_mine ? 'text-white/60' : 'text-slate-400'}`}>{msg.time}</p>
+                                                    <p className={`text-[10px] font-semibold ${msg.is_mine ? 'text-white/60' : 'text-slate-400'}`}>
+                                                        {msg.time}{msg.optimistic_status === 'sending' ? ' / Sending...' : ''}{msg.optimistic_status === 'failed' ? ' / Failed' : ''}
+                                                    </p>
                                                 </div>
+                                                {msg.optimistic_status === 'failed' && (
+                                                    <div className="mt-2 flex justify-end gap-2">
+                                                        <button type="button" onClick={() => retryFailedMessage(msg)} className="rounded-full bg-white px-3 py-1 text-[11px] font-black text-[#720101]">
+                                                            Retry
+                                                        </button>
+                                                        <button type="button" onClick={() => removeFailedMessage(msg)} className="text-[11px] font-black text-white/70">
+                                                            Remove
+                                                        </button>
+                                                    </div>
+                                                )}
                                                 </div>
                                             </div>
                                         </div>
@@ -726,22 +910,30 @@ const ChatBubble = ({ user, openOnMount = false }) => {
                     </div>
 
                     {/* Input bar — always visible (no staff picker needed) */}
-                    <form onSubmit={handleSend} className="flex flex-shrink-0 items-center gap-2 border-t border-[#ead8cc] bg-white px-3 py-3">
-                        {bookings.length > 0 && (
-                            <button type="button" onClick={() => { fetchBookings(); setShowBookingPicker(!showBookingPicker); }}
-                                title="Share booking details"
-                                className={`flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full border transition-colors ${showBookingPicker ? 'border-[#720101] bg-[#720101] text-white' : 'border-[#ead8cc] bg-[#fffaf3] text-slate-500 hover:bg-[#fff4df]'}`}>
-                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
-                            </button>
+                    <form onSubmit={handleSend} className="staff-chat-composer-form flex-shrink-0 border-t border-[#ead8cc] bg-white px-3 py-3">
+                        {moderationNotice && (
+                            <div className="staff-chat-moderation-notice" role="alert">
+                                <strong>{moderationNotice.message}</strong>
+                                {moderationNotice.warning && <span>{moderationNotice.warning}</span>}
+                            </div>
                         )}
-                        <input type="text" value={newMessage} onChange={(e) => setNewMessage(e.target.value)}
-                            placeholder="Type a message..."
-                            className="flex-1 rounded-full border border-[#ead8cc] bg-[#fffaf3] px-3 py-2.5 text-sm font-semibold outline-none transition-all placeholder:text-slate-400 focus:border-[#720101]/40 focus:bg-white focus:ring-2 focus:ring-[#720101]/10"
-                            maxLength={2000} autoFocus />
-                        <button type="submit" disabled={!newMessage.trim() || sending}
-                            className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-[#720101] text-white transition-colors hover:bg-[#5a0101] disabled:bg-slate-300">
-                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" /></svg>
-                        </button>
+                        <div className="staff-chat-composer-row gap-2">
+                            {bookings.length > 0 && (
+                                <button type="button" onClick={() => { fetchBookings(); setShowBookingPicker(!showBookingPicker); }}
+                                    title="Share booking details"
+                                    className={`flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full border transition-colors ${showBookingPicker ? 'border-[#720101] bg-[#720101] text-white' : 'border-[#ead8cc] bg-[#fffaf3] text-slate-500 hover:bg-[#fff4df]'}`}>
+                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+                                </button>
+                            )}
+                            <input type="text" value={newMessage} onChange={handleMessageInputChange}
+                                placeholder="Type a message..."
+                                className="flex-1 rounded-full border border-[#ead8cc] bg-[#fffaf3] px-3 py-2.5 text-sm font-semibold outline-none transition-all placeholder:text-slate-500 focus:border-[#720101]/40 focus:bg-white focus:ring-2 focus:ring-[#720101]/10"
+                                maxLength={2000} autoFocus />
+                            <button type="submit" disabled={!newMessage.trim() || sending}
+                                className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-[#720101] text-white transition-colors hover:bg-[#5a0101] disabled:border disabled:border-slate-400 disabled:bg-slate-200 disabled:text-slate-700">
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" /></svg>
+                            </button>
+                        </div>
                     </form>
                 </div>
             )}

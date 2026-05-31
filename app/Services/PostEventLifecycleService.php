@@ -61,15 +61,15 @@ class PostEventLifecycleService
         $paid = (float) $booking->payments->whereIn('status', ['Paid', 'Verified'])->sum('amount');
         $refunded = (float) $booking->payments->where('status', 'Refunded')->sum('amount');
         $total = (float) ($booking->total_cost ?? $booking->budget ?? 0);
-        $pendingPayment = $booking->payments->contains(fn ($payment) => !in_array($payment->status, ['Paid', 'Verified', 'Refunded'], true));
-        $openRefund = $booking->refundCases->contains(fn ($case) => !in_array($case->status, ['completed', 'rejected', 'cancelled'], true));
+        $pendingPayment = $booking->payments->contains(fn ($payment) => ! in_array($payment->status, ['Paid', 'Verified', 'Refunded'], true));
+        $openRefund = $booking->refundCases->contains(fn ($case) => ! in_array($case->status, ['completed', 'rejected', 'cancelled'], true));
         $feedbackRequest = $booking->feedbackRequest;
         $feedbackResponse = $feedbackRequest?->response;
 
         $status = match (true) {
             $openRefund => 'Refund Pending',
             $pendingPayment || (($paid + $refunded) < $total) => 'Balance Due',
-            !$feedbackRequest => 'Feedback Pending',
+            ! $feedbackRequest => 'Feedback Pending',
             $feedbackRequest->status !== 'Completed' => 'Feedback Pending',
             $feedbackResponse && in_array($feedbackResponse->review_status, ['Open', 'Needs Follow Up', 'In Progress'], true) => 'Feedback Review Needed',
             default => 'Ready to Close',

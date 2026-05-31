@@ -9,7 +9,7 @@ The app is built for four main roles:
 | Customer | Booking details, menu choices, payments, receipts, chat, feedback, and account settings |
 | Marketing | Booking intake, customer coordination, event handoff, calendar, public content, availability, messages, and event history |
 | Accounting | Payment verification, overdue balances, exceptions, refunds, receipts, ledger, and finance history |
-| Admin | Oversight, account management, business setup, reports, diagnostics, audit logs, and cross-role controls |
+| Admin | Role-based access to Admin, Customer, Marketing, and Accounting workspaces, plus accounts, reports, settings, audit, and cross-role controls |
 
 ## Tech Stack
 
@@ -329,14 +329,38 @@ New staff/admin accounts created through Admin use generated temporary passwords
 - Customer booking flow with event details, menu planning, payment schedule, receipts, chat, and feedback.
 - Marketing workspace with Today, Bookings, Guest Inquiries, Calendar, Event Handoff, Messages, Public Content, Availability, and Event History.
 - Accounting workspace with Today, Payments, Refunds, Ledger & Receipts, and Event History.
-- Admin workspace with account lifecycle controls, business settings, diagnostics, audit logs, reports, and system oversight.
+- Admin role-based workspace access for Admin, Customer, Marketing, and Accounting modules without silent impersonation.
+- Admin navbar search for pages, customer accounts, staff accounts, and booking contacts, with assisted navigation into the matching workspace.
+- Customer account versus booking contact labeling so account/support screens lead with the registered account while booking, payment, and handoff workflows lead with the booking contact.
 - Branded server-generated PDFs for receipts, prep lists, calendar reports, and reports.
-- Chat message editing/soft deletion, booking detail cards, conversation claiming, transfer/collaboration, soft-removed participant history, and CSRF-safe requests.
+- Modern staff chat with compact inbox queues, cached thread reopening, optimistic sending, moderation feedback, customer helper shortcuts, remembered conversation/filter selection, message grouping, and CSRF-safe requests.
+- Notification center with New/Read tabs, explicit mark-read/delete-read actions, time grouping, and customer-aware redirects.
 - Account safety features including deactivation, reactivation, temporary password reset, forced password change, forgot password, OTP hashing, and audit entries.
+- Detailed System & Audit trail that records who acted, what changed, where it happened, the affected record, changed fields, device, and network context without storing sensitive values.
 - Operational lifecycle preservation: customer history hiding, catalog archiving, payment schedule voiding, refund case actions, guest lead/tasting lifecycle states, and upload ownership/cleanup.
 - Live operational UI with Reverb hints, cached polling fallback, quiet sync states, compact notification feedback, and notification sound opt-in.
 - Admin full-surface workspace pattern, collapsible staff sidebar, role-local settings, and reusable operational UI components.
 - Security headers, CSP report mode for development, production preflight checks, PostgreSQL guardrails, and environment diagnostics.
+
+## Documentation Map
+
+Old handoff, scratch-plan, and outdated rating files were removed after their still-useful details were folded into the current documentation set.
+
+| File | Purpose |
+| --- | --- |
+| `README.md` | Setup, startup, features, troubleshooting, and production notes |
+| `FRD.md` | Functional requirements baseline |
+| `latestratedFRD.md` | Latest requirement completion rating |
+| `testcase.md` | End-to-end and role-based test cases |
+| `instructions.md` | Manual workflow walkthrough for testing |
+| `QA.md` | Consolidated QA result summary |
+| `docs/completed.md` | Durable summary of completed work |
+| `docs/todo.md` | Remaining production and cleanup work |
+| `docs/rulesforstaffui.md` | Staff/Admin UI design rules |
+| `docs/overhaulstaffui.md` | Staff UI overhaul reference |
+| `docs/document-inventory.md` | Generated document ownership and route inventory |
+| `docs/backend-surface-audit.md` | Backend surface notes |
+| `tablerules.md` | Shared table layout and alignment rules |
 
 ## Staff UI Guidelines
 
@@ -346,7 +370,7 @@ Key points:
 
 - Operational Admin tabs should use the page itself as the work surface, not nested card containers.
 - Page headers should not be repeated inside the tab body.
-- Tables should align header and body columns and respond cleanly to sidebar collapse.
+- Tables should follow `tablerules.md`: centered headers, body alignment by data type, left-aligned money, centered actions, and responsive spacing that avoids unnecessary desktop horizontal scroll.
 - Normal live/saved/syncing states should be quiet; offline, stale, failed, and blocking loading states should be visible.
 - Use consistent action wording such as `Open`, `Save changes`, `Archive`, `Deactivate access`, `Hide from my history`, `Download PDF`, and `Download spreadsheet`.
 

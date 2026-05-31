@@ -27,7 +27,7 @@ class SecurityHeaders
         if ($this->shouldSendHsts($request)) {
             $headers->set(
                 'Strict-Transport-Security',
-                'max-age=' . config('security.headers.hsts_max_age') . '; includeSubDomains'
+                'max-age='.config('security.headers.hsts_max_age').'; includeSubDomains'
             );
         }
 
@@ -83,10 +83,10 @@ class SecurityHeaders
         $connectSrc = "'self' ws: wss: https://api.paymongo.com https://checkout.paymongo.com";
 
         if (! $isProduction) {
-            $scriptSrc .= ' ' . $devServer;
-            $styleSrc .= ' ' . $devServer;
+            $scriptSrc .= ' '.$devServer;
+            $styleSrc .= ' '.$devServer;
             $imgSrc .= ' http:';
-            $connectSrc .= ' ' . $devServer . ' http://localhost:* http://127.0.0.1:* http://[::1]:*';
+            $connectSrc .= ' '.$devServer.' http://localhost:* http://127.0.0.1:* http://[::1]:*';
         }
 
         $directives = [

@@ -27,7 +27,7 @@ class UserModelTest extends TestCase
     {
         config(['database.default' => 'pgsql']);
 
-        $user = new User();
+        $user = new User;
         $user->must_change_password = true;
 
         $this->assertSame('true', $user->getAttributes()['must_change_password']);
@@ -44,7 +44,7 @@ class UserModelTest extends TestCase
             'database.connections.supabase.driver' => 'pgsql',
         ]);
 
-        $user = new User();
+        $user = new User;
         $user->must_change_password = false;
 
         $this->assertSame('false', $user->getAttributes()['must_change_password']);
@@ -52,7 +52,7 @@ class UserModelTest extends TestCase
 
     public function test_must_change_password_reads_postgres_boolean_strings_as_booleans(): void
     {
-        $user = new User();
+        $user = new User;
 
         $user->setRawAttributes(['must_change_password' => 'false']);
         $this->assertFalse($user->must_change_password);

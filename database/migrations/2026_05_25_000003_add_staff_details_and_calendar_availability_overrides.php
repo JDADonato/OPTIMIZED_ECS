@@ -9,18 +9,18 @@ return new class extends Migration
     public function up(): void
     {
         Schema::table('users', function (Blueprint $table) {
-            if (!Schema::hasColumn('users', 'full_name')) {
+            if (! Schema::hasColumn('users', 'full_name')) {
                 $table->string('full_name')->nullable()->after('id');
             }
         });
 
         Schema::table('bookings', function (Blueprint $table) {
-            if (!Schema::hasColumn('bookings', 'event_name')) {
+            if (! Schema::hasColumn('bookings', 'event_name')) {
                 $table->string('event_name')->nullable()->after('event_type');
             }
         });
 
-        if (!Schema::hasTable('calendar_availability_overrides')) {
+        if (! Schema::hasTable('calendar_availability_overrides')) {
             Schema::create('calendar_availability_overrides', function (Blueprint $table) {
                 $table->id();
                 $table->date('date')->unique();

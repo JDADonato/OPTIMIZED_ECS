@@ -2,6 +2,7 @@ import './bootstrap';
 import '../css/app.css';
 import { createInertiaApp } from '@inertiajs/react';
 import { createRoot } from 'react-dom/client';
+import AppErrorBoundary from './Components/common/AppErrorBoundary';
 import DefaultLayout from './Layouts/DefaultLayout';
 
 const pages = import.meta.glob('./Pages/**/*.jsx');
@@ -16,6 +17,10 @@ createInertiaApp({
         return page;
     },
     setup({ el, App, props }) {
-        createRoot(el).render(<App {...props} />);
+        createRoot(el).render(
+            <AppErrorBoundary auth={props.initialPage?.props?.auth}>
+                <App {...props} />
+            </AppErrorBoundary>
+        );
     },
 });

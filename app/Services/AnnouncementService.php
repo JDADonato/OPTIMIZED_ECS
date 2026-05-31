@@ -25,7 +25,7 @@ class AnnouncementService
             'starts_at' => $startsAt ?: now(),
         ]);
 
-        if (!$isScheduled && $announcement->send_email) {
+        if (! $isScheduled && $announcement->send_email) {
             $this->queueEmailDelivery($announcement);
         }
 
@@ -44,7 +44,7 @@ class AnnouncementService
 
     public function deleteDraft(Announcement $announcement): void
     {
-        if (!in_array($announcement->status, ['draft', 'scheduled'], true)) {
+        if (! in_array($announcement->status, ['draft', 'scheduled'], true)) {
             abort(422, 'Only draft or scheduled announcements can be discarded. Published announcements should be archived instead.');
         }
 

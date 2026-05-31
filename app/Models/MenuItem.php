@@ -24,10 +24,10 @@ class MenuItem extends Model
     protected function casts(): array
     {
         return [
-            'cost_per_head'      => 'integer',
-            'price_adj'          => 'integer',
-            'is_best_seller'     => 'boolean',
-            'is_active'          => 'boolean',
+            'cost_per_head' => 'integer',
+            'price_adj' => 'integer',
+            'is_best_seller' => 'boolean',
+            'is_active' => 'boolean',
         ];
     }
 

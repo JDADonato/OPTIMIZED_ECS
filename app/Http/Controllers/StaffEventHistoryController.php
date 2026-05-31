@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\Booking;
 use App\Models\BookingHistoryNote;
 use App\Support\ApiResponse;
+use App\Support\CustomerIdentity;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 
@@ -16,10 +17,10 @@ class StaffEventHistoryController extends Controller
 
         $query = Booking::query()
             ->with([
-                'user:id,full_name,username,email,phone,role',
+                'user:id,full_name,username,email,phone,role,account_status',
                 'assignee:id,full_name,username',
                 'payments' => fn ($paymentQuery) => $paymentQuery
-                    ->when(!$request->boolean('include_voided'), fn ($inner) => $inner->active())
+                    ->when(! $request->boolean('include_voided'), fn ($inner) => $inner->active())
                     ->select('id', 'booking_id', 'amount', 'status', 'payment_type', 'due_date', 'voided_at', 'void_reason'),
                 'refundCases:id,booking_id,payment_id,amount,non_refundable_amount,status,reason,notes',
                 'feedbackResponses:id,booking_id,rating,follow_up_required,review_status,testimonial_status,retention_notes,assigned_to,follow_up_due_at,reviewed_at,created_at',
@@ -36,6 +37,7 @@ class StaffEventHistoryController extends Controller
                 $status = $request->query('feedback_status');
                 if ($status === 'none') {
                     $q->whereDoesntHave('feedbackResponses');
+
                     return;
                 }
 
@@ -46,6 +48,7 @@ class StaffEventHistoryController extends Controller
                 $status = $request->query('refund_status');
                 if ($status === 'none') {
                     $q->whereDoesntHave('refundCases');
+
                     return;
                 }
 
@@ -53,14 +56,26 @@ class StaffEventHistoryController extends Controller
             })
             ->when($request->filled('search'), function ($q) use ($request) {
                 $raw = trim((string) $request->query('search'));
-                $term = '%' . mb_strtolower($raw) . '%';
+                $term = '%'.mb_strtolower($raw).'%';
                 $q->where(function ($inner) use ($term, $raw) {
+                    if (ctype_digit($raw) && strlen($raw) < 4) {
+                        $inner->where('id', (int) $raw);
+
+                        return;
+                    }
+
                     $inner
-                    ->whereRaw('LOWER(client_full_name) LIKE ?', [$term])
-                    ->orWhereRaw('LOWER(client_email) LIKE ?', [$term])
-                    ->orWhereRaw('LOWER(event_name) LIKE ?', [$term])
-                    ->orWhereRaw('LOWER(event_type) LIKE ?', [$term])
-                    ->orWhereRaw('LOWER(venue_city) LIKE ?', [$term]);
+                        ->whereRaw('LOWER(client_full_name) LIKE ?', [$term])
+                        ->orWhereRaw('LOWER(client_email) LIKE ?', [$term])
+                        ->orWhereRaw('LOWER(client_phone) LIKE ?', [$term])
+                        ->orWhereRaw('LOWER(event_name) LIKE ?', [$term])
+                        ->orWhereRaw('LOWER(event_type) LIKE ?', [$term])
+                        ->orWhereRaw('LOWER(venue_city) LIKE ?', [$term])
+                        ->orWhereHas('user', fn ($userQuery) => $userQuery
+                            ->whereRaw('LOWER(full_name) LIKE ?', [$term])
+                            ->orWhereRaw('LOWER(username) LIKE ?', [$term])
+                            ->orWhereRaw('LOWER(email) LIKE ?', [$term])
+                            ->orWhereRaw('LOWER(phone) LIKE ?', [$term]));
 
                     if (ctype_digit($raw)) {
                         $inner->orWhere('id', (int) $raw);
@@ -105,7 +120,7 @@ class StaffEventHistoryController extends Controller
 
     private function authorizeStaff(): void
     {
-        if (!in_array(Auth::user()?->role, ['Admin', 'Marketing', 'Accounting'], true)) {
+        if (! in_array(Auth::user()?->role, ['Admin', 'Marketing', 'Accounting'], true)) {
             abort(403);
         }
     }
@@ -124,6 +139,7 @@ class StaffEventHistoryController extends Controller
             'client_full_name' => $booking->client_full_name ?: $booking->user?->full_name ?: $booking->user?->username,
             'client_email' => $booking->client_email ?: $booking->user?->email,
             'client_phone' => $booking->client_phone ?: $booking->user?->phone,
+            ...CustomerIdentity::forBooking($booking),
             'pax' => $booking->pax,
             'venue' => collect([$booking->venue_address_line, $booking->venue_city, $booking->venue_province])->filter()->join(', '),
             'total_cost' => (float) ($booking->total_cost ?: $booking->budget ?: 0),
@@ -142,7 +158,7 @@ class StaffEventHistoryController extends Controller
             ],
             'refund_summary' => [
                 'total' => $booking->refundCases->count(),
-                'open' => $booking->refundCases->filter(fn ($refund) => !in_array($refund->status, ['completed', 'rejected', 'cancelled'], true))->count(),
+                'open' => $booking->refundCases->filter(fn ($refund) => ! in_array($refund->status, ['completed', 'rejected', 'cancelled'], true))->count(),
                 'statuses' => $booking->refundCases->pluck('status')->unique()->values()->all(),
             ],
             'feedback_summary' => [

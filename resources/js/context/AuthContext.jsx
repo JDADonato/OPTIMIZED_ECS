@@ -1,10 +1,4 @@
-/**
- * Inertia-compatible shim for the original AuthContext.
- * Original components import { useAuth } from '../../context/AuthContext'
- * This provides the same API surface but uses Inertia's shared props + session auth.
- */
 import { usePage, router } from '@inertiajs/react';
-import { useState } from 'react';
 import { clearSensitiveAuthState } from '../utils/smartResource';
 
 export const useAuth = () => {
@@ -16,7 +10,7 @@ export const useAuth = () => {
             router.post('/login', { username, password, remember }, {
                 onSuccess: () => resolve({ success: true }),
                 onError: (errors) => {
-                    const msg = errors.username || errors.password || 'Invalid Credentials';
+                    const msg = errors.username || errors.password || 'The username or password is incorrect.';
                     resolve({ success: false, message: msg });
                 },
                 onFinish: () => {},

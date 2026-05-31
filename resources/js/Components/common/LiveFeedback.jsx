@@ -77,6 +77,7 @@ export const SoftRefreshBoundary = ({
     staleMessage = 'Viewing saved data while the connection catches up.',
     hasData = true,
     skeleton = null,
+    showRefreshBar = true,
     children,
     className = '',
 }) => {
@@ -92,7 +93,7 @@ export const SoftRefreshBoundary = ({
                 </div>
             )}
             {children}
-            {refreshing && <span className="live-refresh-bar" aria-hidden="true" />}
+            {showRefreshBar && refreshing && <span className="live-refresh-bar" aria-hidden="true" />}
         </div>
     );
 };

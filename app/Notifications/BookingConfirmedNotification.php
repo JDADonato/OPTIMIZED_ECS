@@ -3,6 +3,7 @@
 namespace App\Notifications;
 
 use App\Models\Booking;
+use Carbon\Carbon;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Notifications\Messages\MailMessage;
@@ -21,7 +22,7 @@ class BookingConfirmedNotification extends Notification implements ShouldQueue
 
     public function toMail(object $notifiable): MailMessage
     {
-        $eventDate = \Carbon\Carbon::parse($this->booking->event_date)->format('F j, Y');
+        $eventDate = Carbon::parse($this->booking->event_date)->format('F j, Y');
         $reference = str_pad($this->booking->id, 5, '0', STR_PAD_LEFT);
 
         return (new MailMessage)
@@ -36,7 +37,7 @@ class BookingConfirmedNotification extends Notification implements ShouldQueue
                     'Event date' => $eventDate,
                     'Guests' => $this->booking->pax,
                     'Booking reference' => "#{$reference}",
-                    'Total amount' => 'PHP ' . number_format((float) $this->booking->total_cost, 2),
+                    'Total amount' => 'PHP '.number_format((float) $this->booking->total_cost, 2),
                 ],
                 'ctaLabel' => 'View booking',
                 'ctaUrl' => route('dashboard.client'),
@@ -49,7 +50,7 @@ class BookingConfirmedNotification extends Notification implements ShouldQueue
         return [
             'booking_id' => $this->booking->id,
             'type' => 'booking_confirmed',
-            'message' => "Your booking for {$this->booking->pax} guests on " . \Carbon\Carbon::parse($this->booking->event_date)->format('F j, Y') . " has been confirmed.",
+            'message' => "Your booking for {$this->booking->pax} guests on ".Carbon::parse($this->booking->event_date)->format('F j, Y').' has been confirmed.',
         ];
     }
 }

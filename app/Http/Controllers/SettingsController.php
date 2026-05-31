@@ -288,7 +288,7 @@ class SettingsController extends Controller
             Package::where('type', $eventType->slug)->update(['type' => $data['slug']]);
             Package::all()->each(function (Package $package) use ($eventType, $data) {
                 $slugs = $package->event_type_slugs ?: [];
-                if (!in_array($eventType->slug, $slugs, true)) {
+                if (! in_array($eventType->slug, $slugs, true)) {
                     return;
                 }
 
@@ -361,6 +361,7 @@ class SettingsController extends Controller
         }
 
         $decoded = json_decode((string) $value, true);
+
         return is_array($decoded) ? $decoded : [];
     }
 

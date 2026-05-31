@@ -10,10 +10,12 @@ class BusinessRulesService
 {
     // ─── Capacity Limits ───
     const MAX_PAX_PER_DAY = 3500;
+
     const MAX_EVENTS_PER_DAY = 7;
 
     // ─── Fees ───
     const HIGH_RISE_SERVICE_FEE = 0.03;  // 3%
+
     const OUT_OF_TOWN_FEE = 0.20;        // 20%
 
     // ─── Payment Terms ───
@@ -21,7 +23,7 @@ class BusinessRulesService
     const PAYMENT_TRANCHES = [
         'Reservation' => 0.10,
         'DownPayment' => 0.70,
-        'Final'       => 0.20,
+        'Final' => 0.20,
     ];
 
     /**
@@ -30,9 +32,12 @@ class BusinessRulesService
      */
     public static function calcStaff(int $pax): int
     {
-        if ($pax <= 50) return 3;
+        if ($pax <= 50) {
+            return 3;
+        }
         $additionalPax = $pax - 50;
         $additionalStaff = (int) ceil($additionalPax / 25);
+
         return 3 + $additionalStaff;
     }
 }

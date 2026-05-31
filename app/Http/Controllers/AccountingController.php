@@ -2,11 +2,13 @@
 
 namespace App\Http\Controllers;
 
+use App\Exceptions\ExternalServiceException;
 use App\Http\Resources\PaymentResource;
 use App\Models\Booking;
 use App\Models\Payment;
 use App\Models\RefundCase;
 use App\Models\User;
+use App\Notifications\PaymentApprovedNotification;
 use App\Notifications\PaymentReminderNotification;
 use App\Services\BookingManagementService;
 use App\Services\NotificationRecipientService;
@@ -15,7 +17,10 @@ use App\Services\PaymentEventService;
 use App\Services\PaymentScheduleVoidService;
 use App\Services\PayMongoService;
 use App\Support\ApiResponse;
+use App\Support\CustomerIdentity;
 use App\Support\ResourceVersion;
+use App\Support\SensitiveDataRedactor;
+use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
@@ -59,7 +64,7 @@ class AccountingController extends Controller
                 'event_type',
                 'created_at',
             ])
-            ->with(['user:id,username', 'payments' => function ($q) use ($request) {
+            ->with(['user:id,full_name,username,email,phone,account_status', 'payments' => function ($q) use ($request) {
                 $q->select([
                     'id',
                     'booking_id',
@@ -77,25 +82,31 @@ class AccountingController extends Controller
                     'void_reason',
                     'superseded_by_payment_id',
                 ])
-                  ->whereNotNull('payment_type')
-                  ->when(!$request->boolean('include_voided'), fn ($query) => $query->active())
-                  ->orderByRaw("CASE payment_type WHEN 'Reservation' THEN 1 WHEN 'DownPayment' THEN 2 WHEN 'Final' THEN 3 ELSE 4 END")
-                  ->orderBy('due_date')
-                  ->orderBy('id');
+                    ->whereNotNull('payment_type')
+                    ->when(! $request->boolean('include_voided'), fn ($query) => $query->active())
+                    ->orderByRaw("CASE payment_type WHEN 'Reservation' THEN 1 WHEN 'DownPayment' THEN 2 WHEN 'Final' THEN 3 ELSE 4 END")
+                    ->orderBy('due_date')
+                    ->orderBy('id');
             }])
             ->where('status', '!=', 'Cancelled')
             ->where('status', '!=', 'Pending'); // Do not show pending (unapproved) bookings
 
-        if (!$request->boolean('include_completed') && $request->query('payment_status') !== 'complete') {
+        if (! $request->boolean('include_completed') && $request->query('payment_status') !== 'complete') {
             $query->whereNotIn('status', ['Completed', 'completed']);
         }
 
         if ($request->filled('search')) {
             $search = trim((string) $request->query('search'));
-            $term = '%' . mb_strtolower($search) . '%';
+            $term = '%'.mb_strtolower($search).'%';
             $query->where(function ($inner) use ($search, $term) {
                 $inner->whereRaw('LOWER(client_full_name) LIKE ?', [$term])
-                    ->orWhereHas('user', fn ($userQuery) => $userQuery->whereRaw('LOWER(username) LIKE ?', [$term]));
+                    ->orWhereRaw('LOWER(client_email) LIKE ?', [$term])
+                    ->orWhereRaw('LOWER(client_phone) LIKE ?', [$term])
+                    ->orWhereHas('user', fn ($userQuery) => $userQuery
+                        ->whereRaw('LOWER(full_name) LIKE ?', [$term])
+                        ->orWhereRaw('LOWER(username) LIKE ?', [$term])
+                        ->orWhereRaw('LOWER(email) LIKE ?', [$term])
+                        ->orWhereRaw('LOWER(phone) LIKE ?', [$term]));
                 if (ctype_digit($search)) {
                     $inner->orWhere('id', (int) $search);
                 }
@@ -140,22 +151,26 @@ class AccountingController extends Controller
 
         $perPage = min(max((int) $request->query('per_page', 25), 1), 100);
         $bookings = $query->paginate($perPage)->through(function ($b) {
-                $paidAmount = (float) $b->payments
-                    ->whereIn('status', ['Paid', 'Verified'])
-                    ->sum(fn (Payment $payment) => (float) $payment->amount);
-                $totalCost = (float) ($b->total_cost ?? $b->budget ?? 0);
+            $paidAmount = (float) $b->payments
+                ->whereIn('status', ['Paid', 'Verified'])
+                ->sum(fn (Payment $payment) => (float) $payment->amount);
+            $totalCost = (float) ($b->total_cost ?? $b->budget ?? 0);
 
-                return array_merge($b->toArray(), [
+            return array_merge($b->toArray(), [
                 'totalCost' => $totalCost,
                 'event_display_name' => $b->event_display_name,
-                'username'  => $b->user->username ?? null,
+                ...CustomerIdentity::forBooking($b),
+                'username' => $b->user->username ?? null,
+                'user_full_name' => $b->user->full_name ?? null,
+                'user_email' => $b->user->email ?? null,
+                'user_phone' => $b->user->phone ?? null,
                 'paid_amount' => $paidAmount,
                 'remaining_balance' => max($totalCost - $paidAmount, 0),
                 'finance_state' => $b->payments->contains(fn (Payment $payment) => $payment->status === 'Pending' && $payment->due_date && $payment->due_date->isPast())
                     ? 'overdue'
                     : ($b->payments->contains(fn (Payment $payment) => $payment->status === 'Pending') ? 'needs_verification' : 'settled'),
-                ]);
-            });
+            ]);
+        });
 
         $payload = $bookings->toArray();
         $payload['meta'] = [
@@ -219,7 +234,7 @@ class AccountingController extends Controller
      */
     public function getPendingPayments(Request $request)
     {
-        $query = Payment::with(['booking:id,event_date,client_full_name,user_id', 'booking.user:id,username'])
+        $query = Payment::with(['booking:id,event_date,client_full_name,client_email,client_phone,user_id', 'booking.user:id,full_name,username,email,phone,account_status'])
             ->active()
             ->where('status', 'Pending')
             ->whereHas('booking', function ($q) {
@@ -260,12 +275,12 @@ class AccountingController extends Controller
 
         $payment = Payment::active()->find($id);
 
-        if (!$payment) {
+        if (! $payment) {
             return response()->json(['error' => 'Payment not found'], 404);
         }
 
         $payment->update([
-            'status'      => $newStatus,
+            'status' => $newStatus,
             'verified_by' => $verifiedBy,
             'verified_at' => now(),
         ]);
@@ -288,9 +303,9 @@ class AccountingController extends Controller
         try {
             $booking = Booking::find($payment->booking_id);
             if ($booking && $newStatus === 'Verified') {
-                $client = \App\Models\User::find($booking->user_id);
+                $client = User::find($booking->user_id);
                 if ($client) {
-                    app(NotificationRecipientService::class)->sendToUser($client, new \App\Notifications\PaymentApprovedNotification(
+                    app(NotificationRecipientService::class)->sendToUser($client, new PaymentApprovedNotification(
                         $booking,
                         $payment->payment_type,
                         (float) $payment->amount
@@ -311,13 +326,13 @@ class AccountingController extends Controller
     public function updatePayment(Request $request, int $id)
     {
         $request->validate([
-            'amount'   => 'required|numeric',
+            'amount' => 'required|numeric',
             'due_date' => 'required|date',
         ]);
 
         $payment = Payment::active()->find($id);
 
-        if (!$payment) {
+        if (! $payment) {
             return response()->json(['error' => 'Payment not found'], 404);
         }
 
@@ -326,7 +341,7 @@ class AccountingController extends Controller
         }
 
         $payment->update([
-            'amount'   => $request->amount,
+            'amount' => $request->amount,
             'due_date' => $request->due_date,
         ]);
 
@@ -347,7 +362,7 @@ class AccountingController extends Controller
         ]);
 
         $booking = Booking::with(['payments' => fn ($query) => $query->active()])->find($id);
-        if (!$booking) {
+        if (! $booking) {
             return response()->json(['error' => 'Booking not found'], 404);
         }
 
@@ -365,7 +380,7 @@ class AccountingController extends Controller
         $incomingIds = collect($data['terms'])->pluck('id')->filter()->map(fn ($id) => (int) $id)->all();
 
         foreach ($incomingIds as $paymentId) {
-            if (!in_array($paymentId, $existingIds, true)) {
+            if (! in_array($paymentId, $existingIds, true)) {
                 return response()->json(['error' => 'One or more payment terms do not belong to this booking.'], 422);
             }
         }
@@ -376,7 +391,7 @@ class AccountingController extends Controller
             ->all();
 
         foreach ($lockedPaymentIds as $lockedPaymentId) {
-            if (!in_array($lockedPaymentId, $incomingIds, true)) {
+            if (! in_array($lockedPaymentId, $incomingIds, true)) {
                 return response()->json(['error' => 'Verified, paid, or refunded payment terms must remain in the schedule.'], 422);
             }
         }
@@ -384,7 +399,7 @@ class AccountingController extends Controller
         DB::transaction(function () use ($booking, $data, $totalCost, $incomingIds) {
             $voider = app(PaymentScheduleVoidService::class);
             $stalePayments = $booking->payments()->active();
-            if (!empty($incomingIds)) {
+            if (! empty($incomingIds)) {
                 $stalePayments->whereNotIn('id', $incomingIds);
             }
             $stalePayments->whereNotIn('status', ['Verified', 'Paid', 'Refunded'])
@@ -395,12 +410,13 @@ class AccountingController extends Controller
             $lastIndex = count($data['terms']) - 1;
 
             foreach ($data['terms'] as $index => $term) {
-                $existingPayment = !empty($term['id'])
+                $existingPayment = ! empty($term['id'])
                     ? $booking->payments->firstWhere('id', (int) $term['id'])
                     : null;
 
                 if ($existingPayment && in_array($existingPayment->status, ['Verified', 'Paid', 'Refunded'], true)) {
                     $remaining = round($remaining - (float) $existingPayment->amount, 2);
+
                     continue;
                 }
 
@@ -416,7 +432,7 @@ class AccountingController extends Controller
                     'due_date' => $term['due_date'],
                 ];
 
-                if (!empty($term['id'])) {
+                if (! empty($term['id'])) {
                     Payment::active()
                         ->where('id', $term['id'])
                         ->where('booking_id', $booking->id)
@@ -482,8 +498,8 @@ class AccountingController extends Controller
                 'void_reason',
                 'superseded_by_payment_id',
             ])
-            ->with(['booking:id,event_date,client_full_name,package_id,user_id', 'booking.user:id,username'])
-            ->when(!$request->boolean('include_voided'), fn ($query) => $query->active())
+            ->with(['booking:id,event_date,client_full_name,client_email,client_phone,package_id,user_id', 'booking.user:id,full_name,username,email,phone,account_status'])
+            ->when(! $request->boolean('include_voided'), fn ($query) => $query->active())
             ->whereHas('booking', function ($q) {
                 $q->whereNotIn('status', ['Pending', 'Cancelled']); // Hide ledger entries for unapproved/cancelled bookings
             });
@@ -502,11 +518,17 @@ class AccountingController extends Controller
 
         if ($request->filled('clientSearch')) {
             $search = trim((string) $request->query('clientSearch'));
-            $term = '%' . mb_strtolower($search) . '%';
+            $term = '%'.mb_strtolower($search).'%';
             $query->whereHas('booking', function ($bookingQuery) use ($search, $term) {
                 $bookingQuery->whereRaw('LOWER(client_full_name) LIKE ?', [$term])
+                    ->orWhereRaw('LOWER(client_email) LIKE ?', [$term])
+                    ->orWhereRaw('LOWER(client_phone) LIKE ?', [$term])
                     ->orWhereRaw('LOWER(event_name) LIKE ?', [$term])
-                    ->orWhereHas('user', fn ($userQuery) => $userQuery->whereRaw('LOWER(username) LIKE ?', [$term]));
+                    ->orWhereHas('user', fn ($userQuery) => $userQuery
+                        ->whereRaw('LOWER(full_name) LIKE ?', [$term])
+                        ->orWhereRaw('LOWER(username) LIKE ?', [$term])
+                        ->orWhereRaw('LOWER(email) LIKE ?', [$term])
+                        ->orWhereRaw('LOWER(phone) LIKE ?', [$term]));
                 if (ctype_digit($search)) {
                     $bookingQuery->orWhere('id', (int) $search);
                 }
@@ -514,7 +536,7 @@ class AccountingController extends Controller
         }
 
         if ($request->filled('method') && $request->query('method') !== 'All') {
-            $method = '%' . mb_strtolower(trim((string) $request->query('method'))) . '%';
+            $method = '%'.mb_strtolower(trim((string) $request->query('method'))).'%';
             $query->whereRaw('LOWER(payment_method) LIKE ?', [$method]);
         }
 
@@ -543,7 +565,7 @@ class AccountingController extends Controller
     public function getReconciliation(Request $request)
     {
         $payments = Payment::query()
-            ->with(['booking:id,event_date,client_full_name,client_email,status,total_cost', 'events'])
+            ->with(['booking:id,user_id,event_date,client_full_name,client_email,client_phone,status,total_cost', 'booking.user:id,full_name,username,email,phone,account_status', 'events'])
             ->active()
             ->whereHas('booking', fn ($query) => $query->whereNotIn('status', ['Pending']))
             ->latest()
@@ -558,16 +580,16 @@ class AccountingController extends Controller
                 $isOverdue = $payment->due_date && $payment->due_date->isPast() && $payment->status === 'Pending';
 
                 $exceptions = [];
-                if ($hasCheckout && !$isPaidLocally) {
+                if ($hasCheckout && ! $isPaidLocally) {
                     $exceptions[] = 'checkout_started_unpaid';
                 }
-                if ($hasProviderPayment && !$isPaidLocally) {
+                if ($hasProviderPayment && ! $isPaidLocally) {
                     $exceptions[] = 'provider_paid_not_local';
                 }
                 if ($isOverdue) {
                     $exceptions[] = 'pending_past_due';
                 }
-                if (str_contains(strtolower((string) $payment->payment_method), 'paymongo') && $isPaidLocally && !$hasProviderPayment) {
+                if (str_contains(strtolower((string) $payment->payment_method), 'paymongo') && $isPaidLocally && ! $hasProviderPayment) {
                     $exceptions[] = 'missing_paymongo_payment_id_for_refund';
                 }
                 if ($hasMismatch) {
@@ -578,6 +600,7 @@ class AccountingController extends Controller
                     'id' => $payment->id,
                     'booking_id' => $payment->booking_id,
                     'client_full_name' => $payment->booking?->client_full_name,
+                    ...CustomerIdentity::forBooking($payment->booking),
                     'event_date' => $payment->booking?->event_date,
                     'amount' => $payment->amount,
                     'payment_type' => $payment->payment_type,
@@ -607,13 +630,13 @@ class AccountingController extends Controller
             'booking:id,user_id,client_email,client_full_name,client_phone',
         ])->find($paymentId);
 
-        if (!$payment) {
+        if (! $payment) {
             return response()->json(['error' => 'Payment not found'], 404);
         }
 
         $booking = $payment->booking;
 
-        if (!$booking) {
+        if (! $booking) {
             return response()->json(['error' => 'Booking not found for this payment'], 404);
         }
 
@@ -642,8 +665,8 @@ class AccountingController extends Controller
 
                         Log::info('Payment reminder notification sent.', [
                             'payment_id' => $paymentId,
-                            'user_id'    => $client->id,
-                            'email'      => $client->email,
+                            'user_id' => $client->id,
+                            'email' => $client->email,
                         ]);
                     } else {
                         return response()->json([
@@ -653,30 +676,30 @@ class AccountingController extends Controller
                 } catch (\Throwable $e) {
                     Log::error('PaymentReminderNotification failed.', [
                         'payment_id' => $paymentId,
-                        'error'      => $e->getMessage(),
+                        'error' => $e->getMessage(),
                     ]);
 
                     return response()->json([
-                        'error' => 'Could not send reminder: ' . $e->getMessage(),
+                        'error' => 'Could not send reminder: '.$e->getMessage(),
                     ], 500);
                 }
             }
         }
 
         // ── Path B: No linked user — fall back to raw mail using client_email ──
-        if (!$notified) {
+        if (! $notified) {
             $email = $booking->client_email;
 
-            if (!$email || str_ends_with((string) $email, '@eloquente.invalid')) {
+            if (! $email || str_ends_with((string) $email, '@eloquente.invalid')) {
                 return response()->json([
                     'error' => 'No email address found for this client. Please update the booking with a valid email first.',
                 ], 422);
             }
 
             try {
-                $dueDate  = \Carbon\Carbon::parse($payment->due_date)->format('F j, Y');
-                $amount   = number_format((float) $payment->amount, 2);
-                $type     = $payment->payment_type ?? 'Payment';
+                $dueDate = Carbon::parse($payment->due_date)->format('F j, Y');
+                $amount = number_format((float) $payment->amount, 2);
+                $type = $payment->payment_type ?? 'Payment';
                 $bookingRef = str_pad($booking->id, 5, '0', STR_PAD_LEFT);
                 $clientName = $booking->client_full_name ?: 'Valued Client';
 
@@ -688,7 +711,7 @@ class AccountingController extends Controller
                     'lines' => ['This is a friendly reminder about an upcoming payment for your booking.'],
                     'details' => [
                         'Payment type' => $type,
-                        'Amount due' => 'PHP ' . $amount,
+                        'Amount due' => 'PHP '.$amount,
                         'Due date' => $dueDate,
                         'Booking reference' => "#{$bookingRef}",
                     ],
@@ -697,7 +720,7 @@ class AccountingController extends Controller
                     'note' => 'Please settle your payment on or before the due date to keep your booking active.',
                 ], function ($message) use ($email, $clientName, $bookingRef) {
                     $message->to($email, $clientName)
-                            ->subject("Payment Reminder - Booking #{$bookingRef} | Eloquente Catering");
+                        ->subject("Payment Reminder - Booking #{$bookingRef} | Eloquente Catering");
                 });
 
                 PaymentEventService::record(
@@ -729,19 +752,19 @@ class AccountingController extends Controller
 
                 Log::info('Payment reminder raw mail sent (no user account).', [
                     'payment_id' => $paymentId,
-                    'email'      => $email,
+                    'email' => $email,
                 ]);
 
                 $notified = true;
             } catch (\Throwable $e) {
                 Log::error('Payment reminder raw mail failed.', [
                     'payment_id' => $paymentId,
-                    'email'      => $booking->client_email,
-                    'error'      => $e->getMessage(),
+                    'email' => $booking->client_email,
+                    'error' => $e->getMessage(),
                 ]);
 
                 return response()->json([
-                    'error' => 'Could not send reminder email: ' . $e->getMessage(),
+                    'error' => 'Could not send reminder email: '.$e->getMessage(),
                 ], 500);
             }
         }
@@ -760,6 +783,7 @@ class AccountingController extends Controller
     {
         $items = Booking::query()
             ->with([
+                'user:id,full_name,username,email,phone,account_status',
                 'payments' => fn ($query) => $query->active()->whereIn('status', ['Verified', 'Paid']),
                 'refundCases:id,booking_id,payment_id,amount,non_refundable_amount,status,last_action,provider_refund_id,notes,updated_at',
             ])
@@ -773,6 +797,7 @@ class AccountingController extends Controller
                     'booking_id' => $booking->id,
                     'client_full_name' => $booking->client_full_name,
                     'client_email' => $booking->client_email,
+                    ...CustomerIdentity::forBooking($booking),
                     'event_date' => $booking->event_date,
                     'total_cost' => $booking->total_cost,
                     'total_paid' => $booking->payments->sum(fn (Payment $payment) => (float) $payment->amount),
@@ -808,12 +833,12 @@ class AccountingController extends Controller
      * Process refund for a booking.
      * Integrates with PayMongo API to refund actual payments.
      */
-    public function processRefund(int $bookingId, \App\Services\PayMongoService $payMongo)
+    public function processRefund(int $bookingId, PayMongoService $payMongo)
     {
         $verifiedBy = Auth::user()->username ?? 'accounting';
         $booking = Booking::with('payments')->find($bookingId);
 
-        if (!$booking) {
+        if (! $booking) {
             return response()->json(['error' => 'Booking not found.'], 404);
         }
 
@@ -828,7 +853,7 @@ class AccountingController extends Controller
             return response()->json(['error' => 'No verified or paid payments found for this booking to refund.'], 404);
         }
 
-        $impact = (new BookingManagementService())->calculateCancellationImpact($booking);
+        $impact = (new BookingManagementService)->calculateCancellationImpact($booking);
         $remainingRefundable = round((float) ($impact['refundable_amount'] ?? 0), 2);
         $nonRefundableRemaining = round((float) ($impact['non_refundable_amount'] ?? 0), 2);
         $refundCount = 0;
@@ -851,6 +876,7 @@ class AccountingController extends Controller
 
                 if ($refundCase && in_array($refundCase->status, ['Processing', 'Approved', 'Requested'], true)) {
                     $errors[] = 'A refund case is already in progress for one payment.';
+
                     continue;
                 }
 
@@ -889,10 +915,10 @@ class AccountingController extends Controller
 
                 if ($refundAmount <= 0) {
                     $payment->update([
-                        'status'      => 'Refunded',
+                        'status' => 'Refunded',
                         'verified_by' => $verifiedBy,
                         'verified_at' => now(),
-                        'payment_method' => trim(($payment->payment_method ?: 'Payment') . ' (Forfeited)')
+                        'payment_method' => trim(($payment->payment_method ?: 'Payment').' (Forfeited)'),
                     ]);
                     $forfeitedCount++;
                     PaymentEventService::record(
@@ -906,6 +932,7 @@ class AccountingController extends Controller
                         ],
                         $payment->paymongo_payment_id ?: $payment->paymongo_checkout_session_id
                     );
+
                     continue;
                 }
 
@@ -927,15 +954,42 @@ class AccountingController extends Controller
                             'provider_refund_id' => data_get($providerResponse, 'id'),
                             'provider_response' => $providerResponse,
                         ]);
+                    } catch (ExternalServiceException $apiException) {
+                        Log::error('PayMongo refund failed.', [
+                            'payment_id' => $payment->id,
+                            'booking_id' => $bookingId,
+                            'external' => $apiException->safePayload(),
+                            'context' => $apiException->context,
+                        ]);
+                        $refundCase->update([
+                            'status' => 'Failed',
+                            'last_action' => 'provider_refund_failed',
+                            'provider_response' => $apiException->safePayload(),
+                            'notes' => 'Automatic provider refund failed. Review PayMongo logs before retrying.',
+                        ]);
+                        PaymentEventService::record(
+                            'refund_failed',
+                            'paymongo',
+                            $payment,
+                            [
+                                'refund_case_id' => $refundCase->id,
+                                'reason' => $apiException->providerCode ?: 'provider_error',
+                                'reference' => $apiException->referenceCode(),
+                            ],
+                            $payment->paymongo_payment_id
+                        );
+                        $errors[] = 'Automatic refund failed for one payment. Reference: '.$apiException->referenceCode();
+
+                        continue;
                     } catch (\Exception $apiException) {
-                        Log::error("PayMongo API failed for payment #{$payment->id}: " . $apiException->getMessage(), [
+                        Log::error("PayMongo API failed for payment #{$payment->id}: ".$apiException->getMessage(), [
                             'payment_id' => $payment->id,
                             'booking_id' => $bookingId,
                         ]);
                         $refundCase->update([
                             'status' => 'Failed',
                             'last_action' => 'provider_refund_failed',
-                            'provider_response' => ['error' => $apiException->getMessage()],
+                            'provider_response' => ['error' => SensitiveDataRedactor::redact($apiException->getMessage())],
                             'notes' => 'Automatic provider refund failed. Review PayMongo logs before retrying.',
                         ]);
                         PaymentEventService::record(
@@ -949,6 +1003,7 @@ class AccountingController extends Controller
                             $payment->paymongo_payment_id
                         );
                         $errors[] = 'Automatic refund failed for one payment. Please review the refund case before retrying.';
+
                         continue; // Skip local update if the real refund failed
                     }
                 } elseif (str_contains(strtolower((string) $payment->payment_method), 'paymongo')) {
@@ -972,16 +1027,17 @@ class AccountingController extends Controller
                         $payment->paymongo_checkout_session_id
                     );
                     $errors[] = $safeMissingReferenceMessage;
+
                     continue;
                 }
 
                 // Update the payment record
                 $payment->update([
-                    'status'      => 'Refunded',
+                    'status' => 'Refunded',
                     'verified_by' => $verifiedBy,
                     'verified_at' => now(),
                     'payment_method' => $forfeitedForPayment > 0
-                        ? trim(($payment->payment_method ?: 'Payment') . " (Partial refund: PHP " . number_format($refundAmount, 2) . "; forfeited: PHP " . number_format($forfeitedForPayment, 2) . ")")
+                        ? trim(($payment->payment_method ?: 'Payment').' (Partial refund: PHP '.number_format($refundAmount, 2).'; forfeited: PHP '.number_format($forfeitedForPayment, 2).')')
                         : $payment->payment_method,
                 ]);
 
@@ -999,12 +1055,12 @@ class AccountingController extends Controller
                     $payment->paymongo_payment_id ?: $payment->paymongo_checkout_session_id
                 );
             } catch (\Exception $e) {
-                Log::error("Failed to process refund for payment #{$payment->id}: " . $e->getMessage());
+                Log::error("Failed to process refund for payment #{$payment->id}: ".$e->getMessage());
                 $refundCase?->update([
                     'status' => 'Failed',
                     'last_action' => 'refund_case_error',
                     'notes' => 'Refund case could not be completed. Please review server logs.',
-                    'provider_response' => ['error' => $e->getMessage()],
+                    'provider_response' => ['error' => SensitiveDataRedactor::redact($e->getMessage())],
                 ]);
                 $errors[] = 'A refund case could not be completed. Please review it before retrying.';
             }
@@ -1016,15 +1072,15 @@ class AccountingController extends Controller
 
             return response()->json([
                 'error' => 'Failed to process refunds.',
-                'details' => array_values(array_unique($errors))
+                'details' => array_values(array_unique($errors)),
             ], 500);
         }
 
         $message = $refundCount > 0
-            ? "Refund processed successfully through PayMongo where provider payment IDs were available. Non-refundable reservation fees were forfeited."
-            : "No refundable amount was available. Paid amounts were marked as forfeited.";
+            ? 'Refund processed successfully through PayMongo where provider payment IDs were available. Non-refundable reservation fees were forfeited.'
+            : 'No refundable amount was available. Paid amounts were marked as forfeited.';
         if (count($errors) > 0) {
-            $message .= " However, some payments failed to refund.";
+            $message .= ' However, some payments failed to refund.';
         }
 
         Log::info("[REFUND] Processed refund for booking #{$bookingId}. Updated records.", [
@@ -1047,7 +1103,7 @@ class AccountingController extends Controller
             'notes' => ['nullable', 'string', 'max:3000'],
         ]);
 
-        if (!in_array($action, ['retry_provider_refund', 'mark_manually_refunded', 'mark_forfeited', 'close_no_refund_due', 'reopen_manual_review'], true)) {
+        if (! in_array($action, ['retry_provider_refund', 'mark_manually_refunded', 'mark_forfeited', 'close_no_refund_due', 'reopen_manual_review'], true)) {
             return response()->json(['error' => 'Unsupported refund action.'], 422);
         }
 
@@ -1063,7 +1119,7 @@ class AccountingController extends Controller
                 ->latest()
                 ->first();
 
-        if (!$case && !empty($validated['payment_id'])) {
+        if (! $case && ! empty($validated['payment_id'])) {
             $payment = Payment::active()->where('booking_id', $booking->id)->findOrFail($validated['payment_id']);
             $case = RefundCase::create([
                 'booking_id' => $booking->id,
@@ -1079,7 +1135,7 @@ class AccountingController extends Controller
             ]);
         }
 
-        if (!$case) {
+        if (! $case) {
             return response()->json(['error' => 'No refund case was found for this booking.'], 404);
         }
 
@@ -1154,11 +1210,11 @@ class AccountingController extends Controller
     {
         $payment = $case->payment;
 
-        if (!in_array($case->status, ['Failed', 'Manual Review'], true)) {
+        if (! in_array($case->status, ['Failed', 'Manual Review'], true)) {
             return response()->json(['error' => 'Only failed or manual-review refund cases can be retried.'], 422);
         }
 
-        if (!$payment || $payment->voided_at || !in_array($payment->status, ['Paid', 'Verified'], true)) {
+        if (! $payment || $payment->voided_at || ! in_array($payment->status, ['Paid', 'Verified'], true)) {
             return response()->json(['error' => 'This refund case is not linked to an active paid payment.'], 422);
         }
 
@@ -1167,7 +1223,7 @@ class AccountingController extends Controller
             return response()->json(['error' => 'This refund case has no provider-refundable amount.'], 422);
         }
 
-        if (!$payment->paymongo_payment_id) {
+        if (! $payment->paymongo_payment_id) {
             $case->update([
                 'status' => 'Failed',
                 'last_action' => 'missing_provider_payment_id',
@@ -1241,11 +1297,35 @@ class AccountingController extends Controller
                 'message' => 'Provider refund retried successfully.',
                 'refund_case' => $case->fresh(),
             ]);
+        } catch (ExternalServiceException $e) {
+            $case->update([
+                'status' => 'Failed',
+                'last_action' => 'provider_refund_failed',
+                'provider_response' => $e->safePayload(),
+                'notes' => 'Automatic provider refund failed. Review PayMongo logs before retrying.',
+            ]);
+
+            PaymentEventService::record(
+                'refund_failed',
+                'paymongo',
+                $payment,
+                [
+                    'refund_case_id' => $case->id,
+                    'reason' => $e->providerCode ?: 'provider_error',
+                    'reference' => $e->referenceCode(),
+                ],
+                $payment->paymongo_payment_id
+            );
+
+            app(OperationalBroadcastService::class)
+                ->financeChanged($case->booking, 'refund_case', $case->id, 'retry_provider_refund_failed', 'Provider refund failed.');
+
+            return response()->json(['error' => 'Automatic provider refund failed. Please review the refund case before retrying.', 'reference' => $e->referenceCode()], 500);
         } catch (\Throwable $e) {
             $case->update([
                 'status' => 'Failed',
                 'last_action' => 'provider_refund_failed',
-                'provider_response' => ['error' => $e->getMessage()],
+                'provider_response' => ['error' => SensitiveDataRedactor::redact($e->getMessage())],
                 'notes' => 'Automatic provider refund failed. Review PayMongo logs before retrying.',
             ]);
 
@@ -1281,6 +1361,10 @@ class AccountingController extends Controller
         $data['client_full_name'] = $payment->booking->client_full_name ?? null;
         $data['package_id'] = $payment->booking->package_id ?? null;
         $data['username'] = $payment->booking?->user?->username;
+        $data['user_full_name'] = $payment->booking?->user?->full_name;
+        $data['user_email'] = $payment->booking?->user?->email;
+        $data['user_phone'] = $payment->booking?->user?->phone;
+        $data = array_merge($data, CustomerIdentity::forBooking($payment->booking));
         $data['receipt_url'] = route('documents.receipt', $payment);
         $data['finance_state'] = $payment->status === 'Pending' && $payment->due_date && $payment->due_date->isPast()
             ? 'overdue'

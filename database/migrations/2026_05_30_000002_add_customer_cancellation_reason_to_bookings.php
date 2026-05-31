@@ -9,16 +9,16 @@ return new class extends Migration
     public function up(): void
     {
         Schema::table('bookings', function (Blueprint $table) {
-            if (!Schema::hasColumn('bookings', 'cancellation_reason')) {
+            if (! Schema::hasColumn('bookings', 'cancellation_reason')) {
                 $table->string('cancellation_reason')->nullable()->after('hidden_from_customer_history_at');
                 $table->index('cancellation_reason');
             }
 
-            if (!Schema::hasColumn('bookings', 'cancellation_reason_details')) {
+            if (! Schema::hasColumn('bookings', 'cancellation_reason_details')) {
                 $table->text('cancellation_reason_details')->nullable()->after('cancellation_reason');
             }
 
-            if (!Schema::hasColumn('bookings', 'cancelled_at')) {
+            if (! Schema::hasColumn('bookings', 'cancelled_at')) {
                 $table->timestamp('cancelled_at')->nullable()->after('cancellation_reason_details');
                 $table->index('cancelled_at');
             }

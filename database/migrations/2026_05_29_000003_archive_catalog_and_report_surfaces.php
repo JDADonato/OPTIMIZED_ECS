@@ -9,16 +9,16 @@ return new class extends Migration
     public function up(): void
     {
         Schema::table('event_types', function (Blueprint $table) {
-            if (!Schema::hasColumn('event_types', 'is_active')) {
+            if (! Schema::hasColumn('event_types', 'is_active')) {
                 $table->boolean('is_active')->default(true)->index()->after('image');
             }
-            if (!Schema::hasColumn('event_types', 'archived_at')) {
+            if (! Schema::hasColumn('event_types', 'archived_at')) {
                 $table->timestamp('archived_at')->nullable()->index()->after('is_active');
             }
         });
 
         Schema::table('report_templates', function (Blueprint $table) {
-            if (!Schema::hasColumn('report_templates', 'archived_at')) {
+            if (! Schema::hasColumn('report_templates', 'archived_at')) {
                 $table->timestamp('archived_at')->nullable()->index()->after('visibility');
             }
         });

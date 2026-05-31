@@ -2,9 +2,12 @@
 
 namespace App\Http\Controllers;
 
-use App\Models\AuditLog;
 use App\Mail\VerifyEmailOTP;
+use App\Models\AuditLog;
+use App\Rules\BalancedPassword;
 use App\Services\AccountLifecycleService;
+use App\Support\AuditContext;
+use App\Support\PasswordPolicy;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Mail;
@@ -26,11 +29,11 @@ class ProfileController extends Controller
             'reason' => ['nullable', 'string', 'max:1000'],
         ]);
 
-        if (!$user->email_verified_at) {
+        if (! $user->email_verified_at) {
             return back()->withErrors(['confirmation' => 'Please verify your email before deleting your account.']);
         }
 
-        if (!Hash::check($request->password, $user->password)) {
+        if (! Hash::check($request->password, $user->password)) {
             return back()->withErrors(['password' => 'The provided password does not match your current password.']);
         }
 
@@ -75,7 +78,12 @@ class ProfileController extends Controller
             'profile_preferences.default_guest_count' => ['nullable', 'integer', 'min:1', 'max:10000'],
             'profile_preferences.planning_notes' => ['nullable', 'string', 'max:1000'],
             'current_password' => ['nullable', 'required_with:new_password', 'string'],
-            'new_password' => ['nullable', 'string', 'min:8', 'confirmed'],
+            'new_password' => [
+                'nullable',
+                'string',
+                'confirmed',
+                new BalancedPassword($request->input('username', $user->username), $request->input('email', $user->email)),
+            ],
             'password_verification_code' => ['nullable', 'string', 'size:6'],
             'avatar' => ['nullable', 'image', 'mimes:jpg,jpeg,png,webp', 'max:2048'],
             'remove_avatar' => ['nullable', 'boolean'],
@@ -84,7 +92,7 @@ class ProfileController extends Controller
         $changedFields = [];
 
         if ($request->filled('new_password')) {
-            if (!Hash::check($request->current_password, $user->password)) {
+            if (! Hash::check($request->current_password, $user->password)) {
                 return back()->withErrors(['current_password' => 'The provided password does not match your current password.']);
             }
 
@@ -93,17 +101,19 @@ class ProfileController extends Controller
             $sessionCodeExpiresAt = $request->session()->get('password_change_code_expires_at');
 
             if (
-                !$sessionCodeHash ||
-                !$sessionCodeEmail ||
-                !$sessionCodeExpiresAt ||
+                ! $sessionCodeHash ||
+                ! $sessionCodeEmail ||
+                ! $sessionCodeExpiresAt ||
                 $sessionCodeEmail !== $user->email ||
                 now()->greaterThan($sessionCodeExpiresAt) ||
-                !Hash::check($request->input('password_verification_code'), $sessionCodeHash)
+                ! Hash::check($request->input('password_verification_code'), $sessionCodeHash)
             ) {
                 return back()->withErrors(['password_verification_code' => 'Enter the valid verification code sent to your email.']);
             }
 
             $user->password = $request->new_password;
+            $user->password_changed_at = now();
+            $user->password_policy_version = PasswordPolicy::CURRENT_VERSION;
             $changedFields[] = 'password';
             $request->session()->forget([
                 'password_change_code_hash',
@@ -135,16 +145,16 @@ class ProfileController extends Controller
             $changedFields[] = 'username';
         }
         $user->username = $request->username;
-        
+
         if ($user->email !== $request->email) {
-            if (!$user->email_verified_at) {
+            if (! $user->email_verified_at) {
                 return back()->withErrors(['email' => 'Please verify your current email before changing it.']);
             }
 
             $user->email = $request->email;
             $user->email_verified_at = null; // Unverify so they have to get a new OTP
             $changedFields[] = 'email';
-            
+
             $otp = str_pad(random_int(0, 999999), 6, '0', STR_PAD_LEFT);
             $user->otp_code = Hash::make($otp);
             $user->otp_expires_at = now()->addMinutes(15);
@@ -153,7 +163,7 @@ class ProfileController extends Controller
             } catch (\Exception $e) {
                 report($e);
             }
-            
+
             $message = 'Profile updated! Please verify your new email address.';
         } else {
             $message = 'Profile updated successfully!';
@@ -163,12 +173,23 @@ class ProfileController extends Controller
             $changedFields[] = 'phone';
         }
         $user->phone = $request->phone;
-        $user->preferred_contact_method = $request->input('preferred_contact_method') ?: 'email';
-        $user->notification_preferences = $request->input('notification_preferences', []);
-        $user->profile_preferences = $request->input('profile_preferences', []);
+        $user->preferred_contact_method = $request->input('preferred_contact_method') ?: ($user->preferred_contact_method ?: 'email');
+        if ($request->has('notification_preferences')) {
+            $user->notification_preferences = $request->input('notification_preferences', []);
+        }
+        if ($request->has('profile_preferences')) {
+            $user->profile_preferences = $request->input('profile_preferences', []);
+        }
         $user->save();
 
         $this->recordProfileAudit($request, array_values(array_unique($changedFields)));
+
+        if ($request->expectsJson()) {
+            return response()->json([
+                'message' => $message,
+                'user' => $user->fresh(),
+            ]);
+        }
 
         return back()->with('message', $message);
     }
@@ -217,7 +238,7 @@ class ProfileController extends Controller
 
     public function activity(Request $request)
     {
-        if (!Schema::hasTable('audit_logs')) {
+        if (! Schema::hasTable('audit_logs')) {
             return response()->json(['data' => []]);
         }
 
@@ -233,7 +254,7 @@ class ProfileController extends Controller
 
     private function recordProfileAudit(Request $request, array $changedFields): void
     {
-        if (empty($changedFields) || !Schema::hasTable('audit_logs')) {
+        if (empty($changedFields) || ! Schema::hasTable('audit_logs')) {
             return;
         }
 
@@ -248,7 +269,9 @@ class ProfileController extends Controller
             'status_code' => 200,
             'ip_address' => $request->ip(),
             'user_agent' => substr((string) $request->userAgent(), 0, 1000),
-            'metadata' => ['changed_fields' => $changedFields],
+            'metadata' => AuditContext::forAccount($request, $user, 'Completed', [
+                'changed_fields' => $changedFields,
+            ]),
         ]);
     }
 }

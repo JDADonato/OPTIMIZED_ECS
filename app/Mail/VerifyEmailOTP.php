@@ -15,7 +15,9 @@ class VerifyEmailOTP extends Mailable implements ShouldQueue
     use Queueable, SerializesModels;
 
     public $otpCode;
+
     public string $purpose;
+
     public int $expiresInMinutes;
 
     /**

@@ -5,7 +5,6 @@ namespace App\Events;
 use App\Models\Payment;
 use Illuminate\Broadcasting\Channel;
 use Illuminate\Broadcasting\InteractsWithSockets;
-use Illuminate\Broadcasting\PresenceChannel;
 use Illuminate\Broadcasting\PrivateChannel;
 use Illuminate\Contracts\Broadcasting\ShouldBroadcastNow;
 use Illuminate\Foundation\Events\Dispatchable;
@@ -28,14 +27,14 @@ class PaymentProcessed implements ShouldBroadcastNow
     /**
      * Get the channels the event should broadcast on.
      *
-     * @return array<int, \Illuminate\Broadcasting\Channel>
+     * @return array<int, Channel>
      */
     public function broadcastOn(): array
     {
         // Broadcast to Accounting and the related booking channel
         return [
             new PrivateChannel('accounting.dashboard'),
-            new PrivateChannel('booking.' . $this->payment->booking_id)
+            new PrivateChannel('booking.'.$this->payment->booking_id),
         ];
     }
 
@@ -46,7 +45,7 @@ class PaymentProcessed implements ShouldBroadcastNow
             'booking_id' => $this->payment->booking_id,
             'amount' => $this->payment->amount,
             'status' => $this->payment->status,
-            'message' => 'A new payment of ₱' . number_format($this->payment->amount, 2) . ' has been processed.'
+            'message' => 'A new payment of ₱'.number_format($this->payment->amount, 2).' has been processed.',
         ];
     }
 }

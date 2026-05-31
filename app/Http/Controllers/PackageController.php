@@ -2,8 +2,8 @@
 
 namespace App\Http\Controllers;
 
-use App\Models\Package;
 use App\Models\EventType;
+use App\Models\Package;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 
@@ -37,6 +37,7 @@ class PackageController extends Controller
     public function show($id)
     {
         $package = Package::findOrFail($id);
+
         return response()->json($package);
     }
 
@@ -46,9 +47,9 @@ class PackageController extends Controller
     public function byType($type)
     {
         $version = (int) Cache::get('catalog.version', 1);
-        $cacheKey = 'catalog.public.packages.type.' . md5((string) $type) . ".v{$version}";
+        $cacheKey = 'catalog.public.packages.type.'.md5((string) $type).".v{$version}";
         $packages = Cache::remember($cacheKey, now()->addMinutes(10), function () use ($type) {
-            if (!EventType::where('slug', $type)->whereRaw('is_active is true')->exists()) {
+            if (! EventType::where('slug', $type)->whereRaw('is_active is true')->exists()) {
                 return null;
             }
 

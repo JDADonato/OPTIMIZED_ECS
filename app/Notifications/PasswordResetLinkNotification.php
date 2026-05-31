@@ -11,9 +11,7 @@ class PasswordResetLinkNotification extends Notification implements ShouldQueue
 {
     use Queueable;
 
-    public function __construct(private readonly string $url)
-    {
-    }
+    public function __construct(private readonly string $url) {}
 
     public function via(object $notifiable): array
     {

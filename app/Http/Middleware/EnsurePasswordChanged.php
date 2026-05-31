@@ -12,7 +12,7 @@ class EnsurePasswordChanged
     {
         $user = $request->user();
 
-        if (!$user || !$user->requiresPasswordChange()) {
+        if (! $user || ! $user->requiresPasswordChange()) {
             return $next($request);
         }
 

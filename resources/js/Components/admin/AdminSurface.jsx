@@ -6,30 +6,32 @@ export const AdminPageSurface = ({ children, className = '' }) => (
     </div>
 );
 
-export const AdminCommandStrip = ({ children, className = '' }) => (
-    <div className={`admin-command-strip ${className}`.trim()}>
+export const AdminCommandStrip = ({ children, className = '', dense = false }) => (
+    <div className={`admin-command-strip ${dense ? 'is-dense' : ''} ${className}`.trim()}>
         {children}
     </div>
 );
 
-export const AdminSurfaceSection = ({ children, className = '', kicker, title, description, actions }) => (
-    <section className={`admin-surface-section ${className}`.trim()}>
+export const AdminSurfaceSection = ({ children, className = '', kicker, title, description, actions, command, footer, dense = false }) => (
+    <section className={`admin-surface-section ${dense ? 'is-dense' : ''} ${className}`.trim()}>
         {(kicker || title || description || actions) && (
-            <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div className="admin-surface-section-head">
                 <div>
                     {kicker && <p className="admin-kicker">{kicker}</p>}
-                    {title && <h3 className="mt-1 text-lg font-black text-gray-950">{title}</h3>}
-                    {description && <p className="mt-1 max-w-3xl text-sm font-semibold leading-6 text-gray-500">{description}</p>}
+                    {title && <h3>{title}</h3>}
+                    {description && <p>{description}</p>}
                 </div>
-                {actions && <div className="shrink-0">{actions}</div>}
+                {actions && <div className="admin-surface-section-actions">{actions}</div>}
             </div>
         )}
+        {command && <AdminCommandStrip dense>{command}</AdminCommandStrip>}
         {children}
+        {footer && <div className="admin-surface-section-footer">{footer}</div>}
     </section>
 );
 
-export const AdminResponsiveTable = ({ children, className = '' }) => (
-    <div className={`staff-table-wrap admin-surface-grid admin-responsive-table ${className}`.trim()}>
+export const AdminResponsiveTable = ({ children, className = '', dense = false }) => (
+    <div className={`staff-table-wrap admin-surface-grid admin-responsive-table ${dense ? 'is-dense' : ''} ${className}`.trim()}>
         {children}
     </div>
 );

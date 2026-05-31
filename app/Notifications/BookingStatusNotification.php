@@ -3,6 +3,7 @@
 namespace App\Notifications;
 
 use App\Models\Booking;
+use Carbon\Carbon;
 use Illuminate\Bus\Queueable;
 use Illuminate\Notifications\Messages\MailMessage;
 use Illuminate\Notifications\Notification;
@@ -22,7 +23,7 @@ class BookingStatusNotification extends Notification
 
     public function toMail(object $notifiable): MailMessage
     {
-        $eventDate = \Carbon\Carbon::parse($this->booking->event_date)->format('F j, Y');
+        $eventDate = Carbon::parse($this->booking->event_date)->format('F j, Y');
         $reference = str_pad($this->booking->id, 5, '0', STR_PAD_LEFT);
         $total = (float) ($this->booking->total_cost ?? $this->booking->budget ?? 0);
 
@@ -38,7 +39,7 @@ class BookingStatusNotification extends Notification
                     'Event date' => $eventDate,
                     'Guests' => $this->booking->pax,
                     'Booking reference' => "#{$reference}",
-                    'Total amount' => 'PHP ' . number_format($total, 2),
+                    'Total amount' => 'PHP '.number_format($total, 2),
                 ],
                 'ctaLabel' => 'View booking',
                 'ctaUrl' => route('dashboard.client'),
@@ -47,7 +48,7 @@ class BookingStatusNotification extends Notification
 
     public function toDatabase(object $notifiable): array
     {
-        $eventDate = \Carbon\Carbon::parse($this->booking->event_date)->format('F j, Y');
+        $eventDate = Carbon::parse($this->booking->event_date)->format('F j, Y');
 
         $messages = [
             'Confirmed' => "Great news! Your booking #{$this->booking->id} for {$eventDate} has been approved.",
@@ -57,7 +58,7 @@ class BookingStatusNotification extends Notification
 
         return [
             'booking_id' => $this->booking->id,
-            'type' => 'booking_' . strtolower($this->newStatus),
+            'type' => 'booking_'.strtolower($this->newStatus),
             'message' => $messages[$this->newStatus] ?? "Your booking #{$this->booking->id} status changed to {$this->newStatus}.",
         ];
     }
