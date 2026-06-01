@@ -1,12 +1,12 @@
 import React from 'react';
-import { usePage } from '@inertiajs/react';
-import NotificationBell from '../common/NotificationBell';
-import UserDropdown from '../common/UserDropdown';
 
-const StaffPageHeader = ({ title, description, actions, metrics = [], primaryContent = null, notificationVariant = 'dark' }) => {
-    const { auth } = usePage().props;
-    const user = auth?.user;
-
+const StaffPageHeader = ({
+    title,
+    description,
+    actions,
+    metrics = [],
+    primaryContent = null,
+}) => {
     return (
         <section className="staff-page-header">
             <div className="staff-page-header-main">
@@ -29,8 +29,6 @@ const StaffPageHeader = ({ title, description, actions, metrics = [], primaryCon
                     </div>
                 )}
                 {actions && <div className="staff-header-actions">{actions}</div>}
-                <NotificationBell variant={notificationVariant} placement="inline" />
-                {user && <UserDropdown user={user} />}
             </div>
         </section>
     );

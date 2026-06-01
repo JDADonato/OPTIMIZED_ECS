@@ -179,11 +179,12 @@ const filterMemoryKeyFor = (user, variant, surfaceMode, memoryScope = '') => {
     return `ecs:staff-messaging:filter:${user.id}:${variant}:${surfaceMode}${scopedSuffix}`;
 };
 
-const StaffMessaging = ({ variant = 'staff', refreshToken = 0, onMetricsChange = null, surfaceMode = 'default', targetConversationId = null, onAdminContextNavigate = null, memoryScope = '', customerId = null, defaultAdminFilter = null }) => {
+const StaffMessaging = ({ variant = 'staff', refreshToken = 0, onMetricsChange = null, surfaceMode = 'default', targetConversationId = null, onAdminContextNavigate = null, onStaffContextNavigate = null, memoryScope = '', customerId = null, defaultAdminFilter = null }) => {
     const { user } = useAuth();
     const hasRealtime = typeof window !== 'undefined' && Boolean(window.Echo);
     const isAdminOversight = variant === 'admin-oversight' && user?.role === 'Admin';
     const isAdminFullSurface = isAdminOversight && surfaceMode === 'admin-full';
+    const staffContextNavigate = onStaffContextNavigate || onAdminContextNavigate;
     const requestedAdminFilter = String(defaultAdminFilter || '').trim();
     const defaultSidebarTab = isAdminOversight
         ? (['needs-attention', 'all-active', 'unassigned', 'resolved'].includes(requestedAdminFilter) ? requestedAdminFilter : 'needs-attention')
@@ -1239,15 +1240,16 @@ const StaffMessaging = ({ variant = 'staff', refreshToken = 0, onMetricsChange =
     }, [selectedConv]);
 
     const navigateAdminContext = useCallback((workspace, tab, options = {}) => {
-        if (!selectedContextPayload || typeof onAdminContextNavigate !== 'function') return;
-        onAdminContextNavigate({
+        if (!selectedContextPayload || typeof staffContextNavigate !== 'function') return;
+        staffContextNavigate({
             ...selectedContextPayload,
             ...options,
             workspace,
+            role: workspace,
             tab,
         });
         setShowContextDrawer(false);
-    }, [onAdminContextNavigate, selectedContextPayload]);
+    }, [selectedContextPayload, staffContextNavigate]);
 
     const copyContextValue = useCallback(async (key, value) => {
         if (!value) return;
@@ -1427,6 +1429,21 @@ const StaffMessaging = ({ variant = 'staff', refreshToken = 0, onMetricsChange =
         return messages[sidebarTab] || messages['needs-attention'];
     };
     const emptyText = getEmptyText();
+    const canUseStaffContextNavigation = typeof staffContextNavigate === 'function' && Boolean(selectedContextPayload?.customerId || selectedContextPayload?.bookingId || selectedContextPayload?.customerName || selectedContextPayload?.customerEmail);
+    const staffContextSearchText = selectedContextPayload?.bookingRef || selectedContextPayload?.bookingContactName || selectedContextPayload?.customerName || selectedContextPayload?.customerEmail || '';
+    const staffContextRole = String(user?.role || '').toLowerCase() === 'accounting' ? 'accounting' : 'marketing';
+    const staffContextDefaultTab = staffContextRole === 'accounting' ? 'payments' : 'bookings';
+    const openStaffContext = (target = {}) => {
+        if (!canUseStaffContextNavigation) return;
+        staffContextNavigate({
+            ...selectedContextPayload,
+            ...target,
+            searchText: target.searchText || staffContextSearchText,
+        });
+        setShowContextDrawer(false);
+    };
+    const copySelectedEmail = () => copyContextValue('email', selectedContextPayload?.customerEmail || selectedContextPayload?.bookingContactEmail);
+    const copySelectedPhone = () => copyContextValue('phone', selectedContextPayload?.customerPhone || selectedContextPayload?.bookingContactPhone);
 
     // ─── Render ───
 
@@ -1453,7 +1470,7 @@ const StaffMessaging = ({ variant = 'staff', refreshToken = 0, onMetricsChange =
             : hasMoreConversations
                 ? `${visibleConversationList.length} of ${filteredCurrentList.length}`
                 : `${filteredCurrentList.length} shown`;
-        const canUseContextNavigation = typeof onAdminContextNavigate === 'function' && Boolean(selectedContextPayload?.customerId);
+        const canUseContextNavigation = typeof staffContextNavigate === 'function' && Boolean(selectedContextPayload?.customerId);
         const contextSearchText = selectedContextPayload?.bookingRef || selectedContextPayload?.bookingContactName || selectedContextPayload?.customerName || selectedContextPayload?.customerEmail || '';
         const contextHelperActions = [
             {
@@ -2199,6 +2216,42 @@ const StaffMessaging = ({ variant = 'staff', refreshToken = 0, onMetricsChange =
                                 )}
                                 {!isAdminOversight && isClaimedByMe && (
                                     <div className="flex items-center gap-2">
+                                        {canUseStaffContextNavigation && (
+                                            <>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => openStaffContext({ role: staffContextRole, tab: staffContextDefaultTab })}
+                                                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-gray-500 hover:text-primary-600 hover:bg-primary-50 rounded-lg border border-gray-200 hover:border-primary-200 transition-colors"
+                                                >
+                                                    Booking
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => openStaffContext({ role: staffContextRole, tab: staffContextDefaultTab })}
+                                                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-gray-500 hover:text-primary-600 hover:bg-primary-50 rounded-lg border border-gray-200 hover:border-primary-200 transition-colors"
+                                                >
+                                                    Customer
+                                                </button>
+                                                {(selectedContextPayload?.customerEmail || selectedContextPayload?.bookingContactEmail) && (
+                                                    <button
+                                                        type="button"
+                                                        onClick={copySelectedEmail}
+                                                        className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-gray-500 hover:text-amber-700 hover:bg-amber-50 rounded-lg border border-gray-200 hover:border-amber-200 transition-colors"
+                                                    >
+                                                        {copiedHelper === 'email' ? 'Copied' : 'Email'}
+                                                    </button>
+                                                )}
+                                                {(selectedContextPayload?.customerPhone || selectedContextPayload?.bookingContactPhone) && (
+                                                    <button
+                                                        type="button"
+                                                        onClick={copySelectedPhone}
+                                                        className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-gray-500 hover:text-amber-700 hover:bg-amber-50 rounded-lg border border-gray-200 hover:border-amber-200 transition-colors"
+                                                    >
+                                                        {copiedHelper === 'phone' ? 'Copied' : 'Phone'}
+                                                    </button>
+                                                )}
+                                            </>
+                                        )}
                                         {(canTransfer || canInvite) && <div className="relative">
                                             <button onClick={() => { setShowTransfer(!showTransfer); if (!showTransfer) fetchAvailableStaff(); }}
                                                 className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-gray-500 hover:text-primary-600 hover:bg-primary-50 rounded-lg border border-gray-200 hover:border-primary-200 transition-colors">

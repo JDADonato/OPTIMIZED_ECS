@@ -3,6 +3,7 @@ import { usePage } from '@inertiajs/react';
 import { ChevronDown, ChevronLeft, ChevronRight } from 'lucide-react';
 import useRealtimeStatus from '../hooks/useRealtimeStatus';
 import { LiveSyncIndicator } from '../Components/common/LiveFeedback';
+import StaffWorkspaceTopNav from '../Components/staff/StaffWorkspaceTopNav';
 
 const canUseStorage = () => typeof window !== 'undefined' && typeof window.localStorage !== 'undefined';
 
@@ -35,7 +36,7 @@ const StaffWorkspaceLayout = ({
     roleLabel,
     brandLogo = null,
     workspaceBadge = null,
-    topBar = null,
+    topNav = null,
     hideSidebarBrand = false,
     navGroups = [],
     active,
@@ -67,9 +68,12 @@ const StaffWorkspaceLayout = ({
         }
     });
     const [hoverExpanded, setHoverExpanded] = useState(false);
+    const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
     const isCollapsed = sidebarState === 'collapsed';
     const isPreviewOpen = isCollapsed && hoverExpanded;
     const shouldHideNavFocus = isCollapsed && !isPreviewOpen;
+    const hasTopNav = Boolean(topNav);
+    const shouldShowSidebarBrand = !hasTopNav && !hideSidebarBrand;
     const syncVisibility = workspacePreferences.sync_feedback === 'detailed' ? 'always' : 'exceptions';
     const densityClass = workspacePreferences.density === 'compact' ? 'staff-density-compact' : 'staff-density-comfortable';
 
@@ -130,6 +134,19 @@ const StaffWorkspaceLayout = ({
         return () => window.removeEventListener('staff-workspace-preferences-changed', handlePreferenceChange);
     }, [roleKey, storageKey]);
 
+    useEffect(() => {
+        if (!isMobileSidebarOpen || typeof window === 'undefined') return undefined;
+
+        const handleKeyDown = (event) => {
+            if (event.key === 'Escape') {
+                setIsMobileSidebarOpen(false);
+            }
+        };
+
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [isMobileSidebarOpen]);
+
     const ToggleIcon = isCollapsed ? ChevronRight : ChevronLeft;
 
     const toggleNavParent = (itemId) => {
@@ -142,6 +159,11 @@ const StaffWorkspaceLayout = ({
 
             return next;
         });
+    };
+
+    const handleNavigate = (itemId) => {
+        onNavigate?.(itemId);
+        setIsMobileSidebarOpen(false);
     };
 
     useEffect(() => {
@@ -176,11 +198,23 @@ const StaffWorkspaceLayout = ({
     );
 
     return (
-        <div className={`staff-workspace ${workspaceClassName} ${topBar ? 'has-workspace-topbar' : ''} ${densityClass} ${isCollapsed ? 'is-sidebar-collapsed' : 'is-sidebar-expanded'} ${isPreviewOpen ? 'is-sidebar-hover-expanded' : ''}`.trim()}>
-            {topBar && (
-                <div className="staff-workspace-topbar">
-                    {topBar}
+        <div className={`staff-workspace ${workspaceClassName} ${hasTopNav ? 'has-workspace-topnav' : ''} ${isMobileSidebarOpen ? 'is-mobile-sidebar-open' : ''} ${densityClass} ${isCollapsed ? 'is-sidebar-collapsed' : 'is-sidebar-expanded'} ${isPreviewOpen ? 'is-sidebar-hover-expanded' : ''}`.trim()}>
+            {hasTopNav && (
+                <div className="staff-workspace-topnav">
+                    <StaffWorkspaceTopNav
+                        {...topNav}
+                        menuOpen={isMobileSidebarOpen}
+                        onMenuToggle={() => setIsMobileSidebarOpen((open) => !open)}
+                    />
                 </div>
+            )}
+            {hasTopNav && isMobileSidebarOpen && (
+                <button
+                    type="button"
+                    className="staff-sidebar-overlay"
+                    onClick={() => setIsMobileSidebarOpen(false)}
+                    aria-label="Close staff navigation"
+                />
             )}
             <aside
                 ref={sidebarRef}
@@ -189,7 +223,7 @@ const StaffWorkspaceLayout = ({
                 onMouseLeave={() => setHoverExpanded(false)}
                 aria-expanded={!isCollapsed || isPreviewOpen}
             >
-                {!hideSidebarBrand && (
+                {shouldShowSidebarBrand && (
                     <div className="staff-sidebar-brand">
                         <div className="staff-sidebar-brand-copy">
                             <div className="staff-sidebar-brand-row">
@@ -240,7 +274,7 @@ const StaffWorkspaceLayout = ({
                                                     <button
                                                         key={child.id}
                                                         type="button"
-                                                        onClick={() => onNavigate(child.id)}
+                                                        onClick={() => handleNavigate(child.id)}
                                                         className={`staff-sidebar-subitem ${active === child.id ? 'is-active' : ''}`}
                                                         title={sidebarTitleFor(child)}
                                                         tabIndex={shouldHideNavFocus ? -1 : 0}
@@ -259,7 +293,7 @@ const StaffWorkspaceLayout = ({
                                     <button
                                         key={item.id}
                                         type="button"
-                                        onClick={() => onNavigate(item.id)}
+                                        onClick={() => handleNavigate(item.id)}
                                         className={`staff-sidebar-item ${active === item.id ? 'is-active' : ''}`}
                                         title={sidebarTitleFor(item)}
                                         tabIndex={shouldHideNavFocus ? -1 : 0}

@@ -106,6 +106,8 @@ const getNotificationRouteParams = (notification, { includeCustomer = false } = 
     return params;
 };
 
+const STAFF_DASHBOARD_PATHS = new Set(['/dashboard/admin', '/dashboard/marketing', '/dashboard/accounting']);
+
 const buildRoleDashboardHref = (role, tab, extraParams = {}) => {
     const normalizedRole = String(role || '').toLowerCase();
     if (normalizedRole === 'admin') {
@@ -119,18 +121,19 @@ const buildRoleDashboardHref = (role, tab, extraParams = {}) => {
     return appendQueryParams('/dashboard/client', { tab, ...extraParams });
 };
 
-const appendAdminNotificationContext = (href, notification, user) => {
-    if (String(user?.role || '').toLowerCase() !== 'admin' || typeof window === 'undefined') return href;
+const appendStaffNotificationContext = (href, notification, user) => {
+    if (typeof window === 'undefined') return href;
+    if (!['admin', 'marketing', 'accounting'].includes(String(user?.role || '').toLowerCase())) return href;
 
     const url = new URL(href, window.location.origin);
-    if (url.pathname !== '/dashboard/admin') return href;
+    if (!STAFF_DASHBOARD_PATHS.has(url.pathname)) return href;
 
     return appendQueryParams(href, getNotificationRouteParams(notification, { includeCustomer: true }));
 };
 
 const inferNotificationDestination = (notification, user) => {
     if (isSpecificActionUrl(notification.action_url)) {
-        return appendAdminNotificationContext(appendQueryParams(notification.action_url), notification, user);
+        return appendStaffNotificationContext(appendQueryParams(notification.action_url), notification, user);
     }
 
     const role = String(user?.role || '').toLowerCase();
@@ -139,6 +142,9 @@ const inferNotificationDestination = (notification, user) => {
     const conversationId = notification.conversation_id || (notification.target_type === 'conversation' ? notification.target_id : null);
     const commonParams = getNotificationRouteParams(notification);
     const adminContextParams = getNotificationRouteParams(notification, { includeCustomer: true });
+    const staffContextParams = ['admin', 'marketing', 'accounting'].includes(role)
+        ? getNotificationRouteParams(notification, { includeCustomer: true })
+        : commonParams;
     const isRefund = hasAnySignal(text, ['refund', 'cancel']);
     const isPayment = hasAnySignal(text, ['payment', 'finance', 'receipt', 'paid', 'verified', 'balance']);
     const isMessage = hasAnySignal(text, ['chat', 'message', 'inquiry', 'conversation']);
@@ -166,20 +172,20 @@ const inferNotificationDestination = (notification, user) => {
     }
 
     if (role === 'marketing') {
-        if (isMessage) return buildRoleDashboardHref('marketing', 'messages', commonParams);
-        if (isLead) return buildRoleDashboardHref('marketing', 'leads', commonParams);
-        if (isTasting) return buildRoleDashboardHref('marketing', 'tastings', commonParams);
-        if (isAvailability) return buildRoleDashboardHref('marketing', 'availability', commonParams);
-        if (isAnnouncement) return buildRoleDashboardHref('marketing', 'public-content', commonParams);
-        return buildRoleDashboardHref('marketing', bookingId ? 'bookings' : 'today', commonParams);
+        if (isLead) return buildRoleDashboardHref('marketing', 'leads', staffContextParams);
+        if (isMessage) return buildRoleDashboardHref('marketing', 'messages', staffContextParams);
+        if (isTasting) return buildRoleDashboardHref('marketing', 'tastings', staffContextParams);
+        if (isAvailability) return buildRoleDashboardHref('marketing', 'availability', staffContextParams);
+        if (isAnnouncement) return buildRoleDashboardHref('marketing', 'public-content', staffContextParams);
+        return buildRoleDashboardHref('marketing', bookingId ? 'bookings' : 'today', staffContextParams);
     }
 
     if (role === 'accounting') {
-        if (isRefund) return buildRoleDashboardHref('accounting', 'refunds', commonParams);
+        if (isRefund) return buildRoleDashboardHref('accounting', 'refunds', staffContextParams);
         if (hasAnySignal(text, ['reconciliation', 'failed', 'exception', 'overdue'])) {
-            return buildRoleDashboardHref('accounting', 'reconciliation', commonParams);
+            return buildRoleDashboardHref('accounting', 'reconciliation', staffContextParams);
         }
-        return buildRoleDashboardHref('accounting', isPayment || bookingId || isMenu ? 'payments' : 'today', commonParams);
+        return buildRoleDashboardHref('accounting', isPayment || bookingId || isMenu ? 'payments' : 'today', staffContextParams);
     }
 
     if (isMessage) return appendQueryParams('/dashboard/client', { chat: 'open', ...commonParams });

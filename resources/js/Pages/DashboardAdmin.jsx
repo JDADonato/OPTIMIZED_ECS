@@ -11,8 +11,8 @@ import SmartImage from '../Components/common/SmartImage';
 import RevealOnScroll from '../Components/common/RevealOnScroll';
 import StaffSkeleton, { StaffWorkspaceSkeleton } from '../Components/staff/StaffSkeleton';
 import StaffWorkspaceLayout from '../Layouts/StaffWorkspaceLayout';
+import StaffNavbarSearch from '../Components/staff/StaffNavbarSearch';
 import { AdminCommandStrip, AdminPageSurface, AdminResponsiveTable } from '../Components/admin/AdminSurface';
-import StaffPageHeader from '../Components/staff/StaffPageHeader';
 import StaffEmptyState from '../Components/staff/StaffEmptyState';
 import StaffPagination from '../Components/staff/StaffPagination';
 import { StaffCommandBar, StaffInlineInsight, StaffMetricStrip, StaffPrimaryAction, StaffStatusChip, StaffWorkTable } from '../Components/staff/StaffV2';
@@ -50,6 +50,7 @@ import {
 } from '../utils/dashboardUtils';
 import { bookingContactEmail, bookingContactName, bookingContactPhone, customerAccountName, customerAccountEmail, customerAccountPhone, hasDifferentBookingContact } from '../utils/customerIdentity';
 import { paymentTypeLabel, staffPaymentStatus } from '../utils/statusLabels';
+import { createStaffContext, getStaffContextSearchText, hasStaffContext } from '../utils/staffContext';
 
 const AnnouncementManager = lazy(() => import('../Components/content/AnnouncementManager'));
 const PaymentTermEditorModal = lazy(() => import('../Components/finance/PaymentTermEditorModal'));
@@ -515,21 +516,14 @@ const shiftMonthValue = (value, offset) => {
     const date = new Date(year, month - 1 + offset, 1);
     return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
 };
-const createAdminNotificationContext = (params = {}) => ({
-    customerId: String(params.customer || params.customer_id || '').trim(),
-    customerQuery: String(params.customerQuery || params.customerName || params.customerEmail || '').trim(),
-    booking: String(params.booking || params.booking_id || '').trim(),
-    conversation: String(params.conversation || params.conversation_id || '').trim(),
-});
+const createAdminNotificationContext = createStaffContext;
 const readInitialAdminNotificationContext = () => {
     if (typeof window === 'undefined') return createAdminNotificationContext();
     return createAdminNotificationContext(Object.fromEntries(new URLSearchParams(window.location.search).entries()));
 };
-const hasAdminNotificationContext = (context) => Boolean(
-    context.customerId || context.customerQuery || context.booking || context.conversation
-);
+const hasAdminNotificationContext = hasStaffContext;
 const getAdminNotificationSearchText = (context) => (
-    context.customerQuery || (context.booking ? formatBookingRef(context.booking) : '')
+    getStaffContextSearchText(context, { bookingFormatter: formatBookingRef })
 );
 
 const DashboardAdmin = () => {
@@ -598,7 +592,6 @@ const DashboardAdmin = () => {
     const [adminStaffSearchMatches, setAdminStaffSearchMatches] = useState([]);
     const [adminStaffSearchLoading, setAdminStaffSearchLoading] = useState(false);
     const adminSearchInputRef = useRef(null);
-    const adminSearchContainerRef = useRef(null);
     const liveChannels = useMemo(() => operationalChannelsForUser(user), [user?.id, user?.role]);
     const [profileForm, setProfileForm] = useState({
         username: user?.username || '',
@@ -5828,168 +5821,117 @@ const DashboardAdmin = () => {
             navGroups={adminNavGroups}
             roleKey="admin"
             workspaceClassName={`admin-page ${['messages-inquiries', 'customer-messages'].includes(activeTab) ? 'is-messages-workspace' : ''}`}
-            hideSidebarBrand
-            topBar={(
-                <StaffPageHeader
-                    notificationVariant="light"
-                    primaryContent={(
-                        <div className="admin-navbar-primary">
-                            <button type="button" className="admin-navbar-brand" onClick={() => navigateToWorkspaceTab('admin', 'today')} aria-label="Open admin command center">
-                                <img src={logoImg} alt="ECS" />
-                                <span>Admin</span>
-                            </button>
-                            <div className="admin-workspace-switcher" role="tablist" aria-label="Admin workspaces">
-                                {ADMIN_WORKSPACES.map((workspace) => (
-                                    <button
-                                        key={workspace.id}
-                                        type="button"
-                                        className={activeWorkspace === workspace.id ? 'is-active' : ''}
-                                        onClick={() => navigateToWorkspaceTab(workspace.id, workspaceTabs[workspace.id] || DEFAULT_WORKSPACE_TABS[workspace.id])}
-                                        role="tab"
-                                        aria-selected={activeWorkspace === workspace.id}
-                                        title={workspace.description}
-                                    >
-                                        {workspace.label}
-                                    </button>
-                                ))}
-                            </div>
-                            <div
-                                ref={adminSearchContainerRef}
-                                className="admin-header-search"
-                                onBlur={() => window.setTimeout(() => {
-                                    if (!adminSearchContainerRef.current?.contains(document.activeElement)) {
-                                        setAdminSearchOpen(false);
-                                        setAdminSearchFilterOpen(false);
-                                    }
-                                }, 120)}
+            topNav={{
+                logo: logoImg,
+                logoAlt: 'ECS',
+                badge: 'Admin',
+                workspaces: ADMIN_WORKSPACES,
+                activeWorkspace,
+                onWorkspaceChange: (workspace) => navigateToWorkspaceTab(workspace.id, workspaceTabs[workspace.id] || DEFAULT_WORKSPACE_TABS[workspace.id]),
+                notificationVariant: 'light',
+                searchSlot: (
+                    <StaffNavbarSearch
+                        className="admin-header-search"
+                        inputRef={adminSearchInputRef}
+                        value={adminTabSearch}
+                        onChange={setAdminTabSearch}
+                        onClear={() => {
+                            setAdminTabSearch('');
+                            setAdminSearchOpen(true);
+                            adminSearchInputRef.current?.focus();
+                        }}
+                        isOpen={showAdminSearchResults && !adminSearchFilterOpen}
+                        onOpenChange={(open) => {
+                            setAdminSearchOpen(open);
+                            if (!open) setAdminSearchFilterOpen(false);
+                        }}
+                        results={adminSearchResults.map((result) => ({
+                            ...result,
+                            isActive: activeWorkspace === result.workspace && activeWorkspaceTab === result.tab,
+                        }))}
+                        loading={adminBookingSearchLoading || adminStaffSearchLoading}
+                        loadingText="Searching accounts and booking contacts..."
+                        emptyText="No matching pages, customers, staff, or booking contacts found."
+                        onSelect={navigateToAdminSearchResult}
+                        onKeyDown={handleAdminSearchKeyDown}
+                        placeholder="Search pages, customers, staff, or booking contacts..."
+                        label="Search pages, customers, staff, or booking contacts"
+                        iconClassName="admin-header-search-icon"
+                        clearClassName="admin-header-search-clear"
+                        resultsClassName="admin-header-search-results"
+                        resultClassName="admin-header-search-result"
+                        emptyClassName="admin-header-search-empty"
+                        trailingControl={(
+                            <button
+                                type="button"
+                                className={`admin-header-search-filter ${adminSearchFilterOpen || adminSearchFilterCount > 0 ? 'is-active' : ''}`}
+                                onMouseDown={(event) => event.preventDefault()}
+                                onClick={() => {
+                                    setAdminSearchFilterOpen((open) => !open);
+                                    setAdminSearchOpen(true);
+                                    adminSearchInputRef.current?.focus();
+                                }}
+                                aria-label="Open search filters"
+                                aria-expanded={adminSearchFilterOpen}
                             >
-                                <label className="sr-only" htmlFor="admin-tab-search">Search pages, customers, staff, or booking contacts</label>
-                                <Search className="admin-header-search-icon" aria-hidden="true" />
-                                <input
-                                    ref={adminSearchInputRef}
-                                    id="admin-tab-search"
-                                    type="search"
-                                    value={adminTabSearch}
-                                    onFocus={() => setAdminSearchOpen(true)}
-                                    onChange={(event) => {
-                                        setAdminTabSearch(event.target.value);
-                                        setAdminSearchOpen(true);
-                                    }}
-                                    onKeyDown={handleAdminSearchKeyDown}
-                                    placeholder="Search pages, customers, staff, or booking contacts..."
-                                    autoComplete="off"
-                                />
-                                {adminTabSearch && (
+                                <Filter aria-hidden="true" />
+                                {adminSearchFilterCount > 0 && <span>{adminSearchFilterCount}</span>}
+                            </button>
+                        )}
+                        panelSlot={adminSearchFilterOpen ? (
+                            <div className="admin-header-search-filter-popover" role="dialog" aria-label="Search filters">
+                                <div className="admin-header-search-filter-heading">
+                                    <strong>Search filters</strong>
                                     <button
                                         type="button"
-                                        className="admin-header-search-clear"
                                         onMouseDown={(event) => event.preventDefault()}
-                                        onClick={() => {
-                                            setAdminTabSearch('');
-                                            setAdminSearchOpen(true);
-                                            adminSearchInputRef.current?.focus();
-                                        }}
-                                        aria-label="Clear admin search"
+                                        onClick={() => setAdminSearchFilters({ type: 'all', workspace: 'all', scope: 'all' })}
                                     >
-                                        <X aria-hidden="true" />
+                                        Reset
                                     </button>
-                                )}
-                                <button
-                                    type="button"
-                                    className={`admin-header-search-filter ${adminSearchFilterOpen || adminSearchFilterCount > 0 ? 'is-active' : ''}`}
-                                    onMouseDown={(event) => event.preventDefault()}
-                                    onClick={() => {
-                                        setAdminSearchFilterOpen((open) => !open);
-                                        setAdminSearchOpen(true);
-                                        adminSearchInputRef.current?.focus();
-                                    }}
-                                    aria-label="Open search filters"
-                                    aria-expanded={adminSearchFilterOpen}
-                                >
-                                    <Filter aria-hidden="true" />
-                                    {adminSearchFilterCount > 0 && <span>{adminSearchFilterCount}</span>}
-                                </button>
-                                {adminSearchFilterOpen && (
-                                    <div className="admin-header-search-filter-popover" role="dialog" aria-label="Search filters">
-                                        <div className="admin-header-search-filter-heading">
-                                            <strong>Search filters</strong>
-                                            <button
-                                                type="button"
-                                                onMouseDown={(event) => event.preventDefault()}
-                                                onClick={() => setAdminSearchFilters({ type: 'all', workspace: 'all', scope: 'all' })}
-                                            >
-                                                Reset
-                                            </button>
-                                        </div>
-                                        <label>
-                                            <span>Show</span>
-                                            <select
-                                                value={adminSearchFilters.type}
-                                                onChange={(event) => setAdminSearchFilters((filters) => ({ ...filters, type: event.target.value }))}
-                                            >
-                                                <option value="all">Everything</option>
-                                                <option value="page">Pages</option>
-                                                <option value="customer">Customer accounts</option>
-                                                <option value="staff">Staff accounts</option>
-                                                <option value="booking">Booking contacts</option>
-                                            </select>
-                                        </label>
-                                        <label>
-                                            <span>Workspace</span>
-                                            <select
-                                                value={adminSearchFilters.workspace}
-                                                onChange={(event) => setAdminSearchFilters((filters) => ({ ...filters, workspace: event.target.value }))}
-                                            >
-                                                <option value="all">All workspaces</option>
-                                                {ADMIN_WORKSPACES.map((workspace) => (
-                                                    <option key={workspace.id} value={workspace.id}>{workspace.label}</option>
-                                                ))}
-                                            </select>
-                                        </label>
-                                        <label>
-                                            <span>Search in</span>
-                                            <select
-                                                value={adminSearchFilters.scope}
-                                                onChange={(event) => setAdminSearchFilters((filters) => ({ ...filters, scope: event.target.value }))}
-                                            >
-                                                <option value="all">All details</option>
-                                                <option value="name">Names and page labels</option>
-                                                <option value="contact">Email or phone</option>
-                                                <option value="booking">Booking number</option>
-                                            </select>
-                                        </label>
-                                    </div>
-                                )}
-                                {showAdminSearchResults && !adminSearchFilterOpen && (
-                                    <div className="admin-header-search-results" role="listbox" aria-label="Admin search results">
-                                        {adminSearchResults.length > 0 ? adminSearchResults.map((result) => (
-                                            <button
-                                                key={result.id}
-                                                type="button"
-                                                onMouseDown={(event) => event.preventDefault()}
-                                                onClick={() => navigateToAdminSearchResult(result)}
-                                                className={`admin-header-search-result ${activeWorkspace === result.workspace && activeWorkspaceTab === result.tab ? 'is-active' : ''}`}
-                                                role="option"
-                                                aria-selected={activeWorkspace === result.workspace && activeWorkspaceTab === result.tab}
-                                            >
-                                                <span>
-                                                    <strong>{result.label}</strong>
-                                                    <small>{result.path}</small>
-                                                </span>
-                                                {result.description && <em>{result.description}</em>}
-                                            </button>
-                                        )) : adminBookingSearchLoading || adminStaffSearchLoading ? (
-                                            <div className="admin-header-search-empty">Searching accounts and booking contacts...</div>
-                                        ) : (
-                                            <div className="admin-header-search-empty">No matching pages, customers, staff, or booking contacts found.</div>
-                                        )}
-                                    </div>
-                                )}
+                                </div>
+                                <label>
+                                    <span>Show</span>
+                                    <select
+                                        value={adminSearchFilters.type}
+                                        onChange={(event) => setAdminSearchFilters((filters) => ({ ...filters, type: event.target.value }))}
+                                    >
+                                        <option value="all">Everything</option>
+                                        <option value="page">Pages</option>
+                                        <option value="customer">Customer accounts</option>
+                                        <option value="staff">Staff accounts</option>
+                                        <option value="booking">Booking contacts</option>
+                                    </select>
+                                </label>
+                                <label>
+                                    <span>Workspace</span>
+                                    <select
+                                        value={adminSearchFilters.workspace}
+                                        onChange={(event) => setAdminSearchFilters((filters) => ({ ...filters, workspace: event.target.value }))}
+                                    >
+                                        <option value="all">All workspaces</option>
+                                        {ADMIN_WORKSPACES.map((workspace) => (
+                                            <option key={workspace.id} value={workspace.id}>{workspace.label}</option>
+                                        ))}
+                                    </select>
+                                </label>
+                                <label>
+                                    <span>Search in</span>
+                                    <select
+                                        value={adminSearchFilters.scope}
+                                        onChange={(event) => setAdminSearchFilters((filters) => ({ ...filters, scope: event.target.value }))}
+                                    >
+                                        <option value="all">All details</option>
+                                        <option value="name">Names and page labels</option>
+                                        <option value="contact">Email or phone</option>
+                                        <option value="booking">Booking number</option>
+                                    </select>
+                                </label>
                             </div>
-                        </div>
-                    )}
-                />
-            )}
+                        ) : null}
+                    />
+                ),
+            }}
         >
                 <div className={ADMIN_FULL_SURFACE_TABS.includes(activeTab) ? `admin-full-surface-tab-shell ${['messages-inquiries', 'customer-messages'].includes(activeTab) ? 'admin-messages-tab-shell' : ''}` : 'space-y-5'}>
                     {activeWorkspace === 'customer' && renderCustomerWorkspace()}

@@ -1,12 +1,15 @@
-import React, { Suspense, lazy, useState, useEffect, useMemo, useRef } from 'react';
+import React, { Suspense, lazy, useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import logoImg from '../../images/ECS_LOGO.png';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { router } from '@inertiajs/react';
+import { Filter } from 'lucide-react';
 import FlashToast from '../Components/common/FlashToast';
 import ConfirmModal from '../Components/common/ConfirmModal';
 import PromptModal from '../Components/common/PromptModal';
 import StaffPagination from '../Components/staff/StaffPagination';
 import StaffWorkspaceLayout from '../Layouts/StaffWorkspaceLayout';
+import StaffNavbarSearch from '../Components/staff/StaffNavbarSearch';
 import StaffPageHeader from '../Components/staff/StaffPageHeader';
 import StaffEmptyState from '../Components/staff/StaffEmptyState';
 import EventHistoryPanel from '../Components/staff/EventHistoryPanel';
@@ -18,6 +21,7 @@ import StaffSkeleton, { StaffWorkspaceSkeleton } from '../Components/staff/Staff
 import { StaffDecisionBrief, StaffOpsListRow, StaffOpsMetricStrip, StaffOpsPanel, StaffOpsSearchBar } from '../Components/staff/StaffOpsUI';
 import { bookingStatusLabel, reviewStatusLabel } from '../utils/statusLabels';
 import useSmartRefresh from '../hooks/useSmartRefresh';
+import useStaffContextNavigation from '../hooks/useStaffContextNavigation';
 import useStaffWorkspaceState from '../hooks/useStaffWorkspaceState';
 import AssistedBookingWizard from '../Components/marketing/AssistedBookingWizard';
 import { MARKETING_WORKSPACE_NAV_GROUPS, withNavCounts } from '../utils/staffWorkspaceNav';
@@ -31,6 +35,8 @@ import {
     titleCase,
 } from '../utils/dashboardUtils';
 import { bookingContactEmail, bookingContactName, bookingContactPhone, customerAccountEmail, customerAccountName, customerAccountPhone } from '../utils/customerIdentity';
+import { createStaffContext, hasStaffContext } from '../utils/staffContext';
+import { StaffCommandBar } from '../Components/staff/StaffV2';
 
 const StaffMessaging = lazy(() => import('../Components/common/StaffMessaging'));
 const AnnouncementManager = lazy(() => import('../Components/content/AnnouncementManager'));
@@ -54,6 +60,7 @@ const SECURITY_OPTIONS = [
 
 const MARKETING_BOOKINGS_URL = '/api/marketing/bookings';
 const MARKETING_WORKSPACE_TABS = ['today', 'bookings', 'leads', 'tastings', 'calendar', 'handoff', 'messages', 'public-content', 'availability', 'settings', 'history'];
+const MARKETING_CONTEXT_TABS = ['bookings', 'handoff', 'leads', 'messages', 'history'];
 const MARKETING_TAB_ALIASES = {
     intake: 'bookings',
     inquiries: 'bookings',
@@ -145,6 +152,51 @@ const shiftMonthValue = (value, offset) => {
     const date = new Date(year, month - 1 + offset, 1);
     return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
 };
+const compactText = (parts, separator = ' / ') => parts.filter(Boolean).map((part) => String(part).trim()).filter(Boolean).join(separator);
+const normalizeSearch = (value) => String(value ?? '').trim().toLowerCase();
+const matchesNavbarQuery = (entry, query) => {
+    const terms = normalizeSearch(query).split(/\s+/).filter(Boolean);
+    if (terms.length === 0) return true;
+
+    const haystack = normalizeSearch([
+        entry.label,
+        entry.description,
+        entry.path,
+        entry.searchText,
+        ...(entry.aliases || []),
+    ].filter(Boolean).join(' '));
+
+    return terms.every((term) => haystack.includes(term));
+};
+const matchesNavbarAdvancedFilters = (entry, filters, query) => {
+    if (filters.type !== 'all' && entry.kind !== filters.type) return false;
+
+    const terms = normalizeSearch(query).split(/\s+/).filter(Boolean);
+    if (filters.scope === 'all' || terms.length === 0) return true;
+
+    const scopedText = normalizeSearch({
+        name: entry.nameText || compactText([entry.label, entry.path], ' '),
+        contact: entry.contactText || '',
+        booking: entry.bookingText || '',
+    }[filters.scope] || entry.searchText || '');
+
+    return terms.every((term) => scopedText.includes(term));
+};
+const buildMarketingPageSearchEntries = () => MARKETING_WORKSPACE_NAV_GROUPS.flatMap((group) => (
+    group.items.map((item) => ({
+        id: `marketing-page:${item.id}`,
+        kind: 'page',
+        tab: item.id,
+        label: item.label,
+        path: `Marketing / ${group.label}`,
+        description: item.description,
+        searchText: compactText([item.label, item.description, ...(item.aliases || [])], ' '),
+        nameText: compactText([item.label, group.label, item.description], ' '),
+        contactText: '',
+        bookingText: '',
+        aliases: item.aliases || [],
+    }))
+));
 
 const DashboardMarketing = () => {
     const { user } = useAuth();
@@ -228,10 +280,137 @@ const DashboardMarketing = () => {
     ), [selectedMonth]);
     const smartCacheKey = (resourceKey) => getUserScopedCacheKey(user, resourceKey);
     const liveChannels = useMemo(() => operationalChannelsForUser(user), [user?.id, user?.role]);
+    const [marketingNavbarSearch, setMarketingNavbarSearch] = useState('');
+    const [marketingNavbarSearchOpen, setMarketingNavbarSearchOpen] = useState(false);
+    const [marketingNavbarFilterOpen, setMarketingNavbarFilterOpen] = useState(false);
+    const [marketingNavbarFilters, setMarketingNavbarFilters] = useState({ type: 'all', scope: 'all' });
+    const [marketingNavbarBookingMatches, setMarketingNavbarBookingMatches] = useState([]);
+    const [marketingNavbarCustomerMatches, setMarketingNavbarCustomerMatches] = useState([]);
+    const [marketingNavbarSearchLoading, setMarketingNavbarSearchLoading] = useState(false);
+    const [targetConversationId, setTargetConversationId] = useState('');
+    const [marketingContextPanelOpen, setMarketingContextPanelOpen] = useState(false);
+
+    const applyMarketingStaffContext = useCallback(({ targetTab, context, searchText }) => {
+        if (context.conversation) {
+            setTargetConversationId(context.conversation);
+        } else if (targetTab !== 'messages') {
+            setTargetConversationId('');
+        }
+
+        if (hasStaffContext(context)) {
+            setMarketingContextPanelOpen(true);
+        }
+
+        if (!hasStaffContext(context) || !searchText) return;
+
+        if (['bookings', 'handoff'].includes(targetTab)) {
+            setInquirySearch(searchText);
+            setInquiryStatusFilter('all');
+            setInquiryDateFrom('');
+            setInquiryDateTo('');
+            setBookingReviewView('all');
+            setInquiryPage(1);
+        } else if (targetTab === 'leads') {
+            setLeadFilters((current) => ({
+                ...current,
+                search: searchText,
+                status: '',
+                concern_type: '',
+                date_from: '',
+                date_to: '',
+                page: 1,
+            }));
+        }
+    }, []);
+
+    const {
+        staffContext: marketingStaffContext,
+        setStaffContext: setMarketingStaffContext,
+        clearStaffContext: clearMarketingStaffContext,
+        hasContext: hasMarketingStaffContext,
+        contextSearchText: marketingContextSearchText,
+    } = useStaffContextNavigation({
+        activeTab,
+        setActiveTab,
+        allowedTabs: MARKETING_WORKSPACE_TABS,
+        tabAliases: MARKETING_TAB_ALIASES,
+        defaultTab: marketingDefaultTab,
+        contextTabs: MARKETING_CONTEXT_TABS,
+        onApplyContext: applyMarketingStaffContext,
+    });
+
+    useEffect(() => {
+        if (!hasMarketingStaffContext) {
+            setMarketingContextPanelOpen(false);
+        }
+    }, [hasMarketingStaffContext]);
 
     useEffect(() => {
         setInquiryPage(1);
     }, [inquirySearch, inquiryStatusFilter, bookingReviewView, inquirySort, inquiryDateFrom, inquiryDateTo, inquiryPerPage]);
+
+    useEffect(() => {
+        const query = marketingNavbarSearch.trim();
+
+        if (query.length < 2 || marketingNavbarFilters.type === 'page') {
+            setMarketingNavbarBookingMatches([]);
+            setMarketingNavbarCustomerMatches([]);
+            setMarketingNavbarSearchLoading(false);
+            return undefined;
+        }
+
+        const controller = new AbortController();
+        const timer = window.setTimeout(async () => {
+            setMarketingNavbarSearchLoading(true);
+
+            try {
+                const bookingParams = new URLSearchParams({
+                    paginated: '1',
+                    per_page: '8',
+                    include_history: '1',
+                    search: query,
+                });
+                const customerParams = new URLSearchParams({
+                    search: query,
+                    limit: '8',
+                });
+
+                const [bookingsResponse, customersResponse] = await Promise.all([
+                    fetch(`${MARKETING_BOOKINGS_URL}?${bookingParams.toString()}`, {
+                        headers: { Accept: 'application/json' },
+                        signal: controller.signal,
+                    }),
+                    fetch(`/api/marketing/customers?${customerParams.toString()}`, {
+                        headers: { Accept: 'application/json' },
+                        signal: controller.signal,
+                    }),
+                ]);
+
+                const [bookingsPayload, customersPayload] = await Promise.all([
+                    bookingsResponse.ok ? bookingsResponse.json() : Promise.resolve({ data: [] }),
+                    customersResponse.ok ? customersResponse.json() : Promise.resolve({ data: [] }),
+                ]);
+
+                setMarketingNavbarBookingMatches(getListData(bookingsPayload).slice(0, 8));
+                setMarketingNavbarCustomerMatches(getListData(customersPayload).slice(0, 8));
+            } catch (error) {
+                if (error.name !== 'AbortError') {
+                    console.error('Error searching marketing navbar:', error);
+                    setMarketingNavbarBookingMatches([]);
+                    setMarketingNavbarCustomerMatches([]);
+                }
+            } finally {
+                if (!controller.signal.aborted) {
+                    setMarketingNavbarSearchLoading(false);
+                }
+            }
+        }, 240);
+
+        return () => {
+            window.clearTimeout(timer);
+            controller.abort();
+        };
+    }, [marketingNavbarSearch, marketingNavbarFilters.type]);
 
     useEffect(() => {
         if (activeTab === 'today') {
@@ -1033,6 +1212,114 @@ const DashboardMarketing = () => {
         settings: 'Settings',
     };
 
+    const marketingNavbarPageEntries = useMemo(() => buildMarketingPageSearchEntries(), []);
+    const marketingNavbarResults = useMemo(() => {
+        const query = marketingNavbarSearch.trim();
+        const pageEntries = query
+            ? marketingNavbarPageEntries.filter((entry) => matchesNavbarQuery(entry, query))
+            : marketingNavbarPageEntries.slice(0, 6);
+        const bookingEntries = query.length < 2 ? [] : marketingNavbarBookingMatches.map((booking) => {
+            const contact = bookingContactName(booking);
+            const contactEmail = bookingContactEmail(booking);
+            const contactPhone = bookingContactPhone(booking);
+            const account = customerAccountName(booking);
+            const accountEmail = customerAccountEmail(booking);
+            const accountPhone = customerAccountPhone(booking);
+            const searchText = compactText([
+                contact,
+                contactEmail,
+                contactPhone,
+                account,
+                accountEmail,
+                accountPhone,
+                booking.id,
+            ], ' ');
+
+            return {
+                id: `marketing-booking:${booking.id}`,
+                kind: 'booking',
+                label: compactText([contact || account || 'Booking contact', `Booking #${booking.id}`], ' - '),
+                path: 'Marketing / Bookings',
+                description: compactText([eventDisplayName(booking), contactEmail || contactPhone, account && account !== contact ? `Account: ${account}` : null]),
+                searchText: contact || account || String(booking.id),
+                nameText: compactText([contact, account, eventDisplayName(booking)], ' '),
+                contactText: compactText([contactEmail, contactPhone, accountEmail, accountPhone], ' '),
+                bookingText: compactText([booking.id, `Booking #${booking.id}`], ' '),
+                aliases: [searchText],
+                context: createStaffContext({
+                    booking: booking.id,
+                    customer: booking.user_id || booking.customer_account?.id,
+                    customerQuery: contact || account,
+                }),
+                record: booking,
+            };
+        });
+        const customerEntries = query.length < 2 ? [] : marketingNavbarCustomerMatches.map((customer) => {
+            const label = customer.label || customer.full_name || customer.username || `Customer #${customer.id}`;
+            const searchText = compactText([label, customer.email, customer.phone, customer.username], ' ');
+
+            return {
+                id: `marketing-customer:${customer.id}`,
+                kind: 'customer',
+                label,
+                path: 'Marketing / Bookings',
+                description: compactText([customer.email, customer.phone, customer.account_status ? `Account ${customer.account_status}` : null]),
+                searchText: label,
+                nameText: compactText([label, customer.username], ' '),
+                contactText: compactText([customer.email, customer.phone], ' '),
+                bookingText: '',
+                aliases: [searchText],
+                context: createStaffContext({
+                    customer: customer.id,
+                    customerQuery: label,
+                }),
+                record: customer,
+            };
+        });
+
+        return [...pageEntries, ...bookingEntries, ...customerEntries]
+            .filter((entry, index, list) => list.findIndex((candidate) => candidate.id === entry.id) === index)
+            .filter((entry) => !query || matchesNavbarQuery(entry, query))
+            .filter((entry) => matchesNavbarAdvancedFilters(entry, marketingNavbarFilters, query))
+            .slice(0, 10);
+    }, [marketingNavbarBookingMatches, marketingNavbarCustomerMatches, marketingNavbarFilters, marketingNavbarPageEntries, marketingNavbarSearch]);
+    const marketingNavbarFilterCount = Object.values(marketingNavbarFilters).filter((value) => value !== 'all').length;
+
+    const selectMarketingNavbarResult = (result) => {
+        if (!result) return;
+
+        if (result.kind === 'page') {
+            setActiveTab(result.tab);
+        } else {
+            const searchText = result.searchText || marketingNavbarSearch.trim();
+            setMarketingStaffContext(result.context || createStaffContext({ customerQuery: searchText }));
+            setMarketingContextPanelOpen(true);
+            setInquirySearch(searchText);
+            setInquiryStatusFilter('all');
+            setInquiryDateFrom('');
+            setInquiryDateTo('');
+            setBookingReviewView('all');
+            setActiveTab('bookings');
+        }
+
+        setMarketingNavbarSearch('');
+        setMarketingNavbarSearchOpen(false);
+    };
+
+    const clearMarketingContext = useCallback(() => {
+        clearMarketingStaffContext();
+        setMarketingContextPanelOpen(false);
+        setTargetConversationId('');
+    }, [clearMarketingStaffContext]);
+
+    const handleInquirySearchChange = useCallback((event) => {
+        const value = event.target.value;
+        setInquirySearch(value);
+        if (!value.trim()) {
+            clearMarketingContext();
+        }
+    }, [clearMarketingContext]);
+
         const marketingSummary = useMemo(() => {
             const pending = bookings.filter(b => !['Completed', 'completed', 'Cancelled', 'cancelled'].includes(b.status) && (b.status === 'Pending' || ['Submitted', 'Under Review', 'Needs Customer Details', 'Clarification Received'].includes(b.review_status)));
             const needsDetails = pending.filter(b => String(b.review_status || '').toLowerCase() === 'needs customer details' || b.clarification_request);
@@ -1120,6 +1407,144 @@ const DashboardMarketing = () => {
             onOpen: () => setActiveTab('history'),
         },
     ]), [feedbackSummary.followUps, leadData.summary?.open, marketingSummary.needsDetails, marketingSummary.pending, marketingSummary.upcoming]);
+
+    const marketingContextBookings = useMemo(() => {
+        if (!hasMarketingStaffContext) return [];
+        const search = normalizeSearch(marketingContextSearchText);
+
+        return bookings.filter((booking) => {
+            if (marketingStaffContext.booking && String(booking.id) === String(marketingStaffContext.booking)) return true;
+            if (marketingStaffContext.customerId && String(booking.user_id || booking.customer_account?.id || '') === String(marketingStaffContext.customerId)) return true;
+            if (!search) return false;
+
+            return normalizeSearch([
+                `booking #${booking.id}`,
+                booking.id,
+                bookingContactName(booking),
+                bookingContactEmail(booking),
+                bookingContactPhone(booking),
+                customerAccountName(booking),
+                customerAccountEmail(booking),
+                customerAccountPhone(booking),
+                eventDisplayName(booking),
+            ].filter(Boolean).join(' ')).includes(search);
+        }).slice(0, 6);
+    }, [bookings, hasMarketingStaffContext, marketingContextSearchText, marketingStaffContext]);
+
+    const marketingContextIdentity = useMemo(() => {
+        const primary = marketingContextBookings[0] || {};
+        return {
+            accountName: customerAccountName(primary) || marketingStaffContext.customerQuery || 'Customer context',
+            accountEmail: customerAccountEmail(primary),
+            accountPhone: customerAccountPhone(primary),
+            contactName: bookingContactName(primary) || marketingStaffContext.customerQuery,
+            contactEmail: bookingContactEmail(primary),
+            contactPhone: bookingContactPhone(primary),
+            hasDifferentContact: primary.id ? bookingContactName(primary) !== customerAccountName(primary) : false,
+        };
+    }, [marketingContextBookings, marketingStaffContext.customerQuery]);
+
+    const openMarketingContextTab = useCallback((tab, searchText = marketingContextSearchText) => {
+        if (['bookings', 'handoff'].includes(tab)) {
+            setInquirySearch(searchText);
+            setInquiryStatusFilter('all');
+            setInquiryDateFrom('');
+            setInquiryDateTo('');
+            setBookingReviewView('all');
+            setInquiryPage(1);
+        }
+        setActiveTab(tab);
+        setMarketingContextPanelOpen(false);
+    }, [marketingContextSearchText, setActiveTab]);
+
+    const handleMarketingStaffContextNavigate = useCallback((target = {}) => {
+        const searchText = String(target.searchText || target.bookingRef || target.customerName || target.customerEmail || marketingContextSearchText || '').trim();
+        const context = createStaffContext({
+            booking: target.bookingId || target.booking,
+            customer: target.customerId || target.customer,
+            customerQuery: searchText,
+            conversation: target.conversationId || target.conversation,
+        });
+        setMarketingStaffContext(context);
+        setMarketingContextPanelOpen(true);
+
+        if (target.role === 'accounting' || target.workspace === 'accounting') {
+            const query = new URLSearchParams({
+                tab: target.tab || 'payments',
+                customerQuery: searchText,
+            });
+            if (context.booking) query.set('booking', context.booking);
+            if (context.customerId) query.set('customer', context.customerId);
+            if (context.conversation) query.set('conversation', context.conversation);
+            router.visit(`/dashboard/accounting?${query.toString()}`);
+            return;
+        }
+
+        openMarketingContextTab(target.tab || 'bookings', searchText);
+    }, [marketingContextSearchText, openMarketingContextTab, setMarketingStaffContext]);
+
+    const renderMarketingContextPanel = () => {
+        if (!hasMarketingStaffContext || !marketingContextPanelOpen) return null;
+        const primaryBooking = marketingContextBookings[0];
+        const searchLabel = marketingContextSearchText || marketingStaffContext.customerQuery || marketingStaffContext.booking || 'Current context';
+
+        return (
+            <div className="staff-context-drawer-shell" role="dialog" aria-modal="true" aria-label="Marketing customer context">
+                <button type="button" className="staff-context-drawer-backdrop" onClick={() => setMarketingContextPanelOpen(false)} aria-label="Close customer context" />
+                <aside className="staff-context-drawer">
+                    <header className="staff-context-drawer-head">
+                        <div>
+                            <p>Customer context</p>
+                            <h3>{marketingContextIdentity.accountName === 'Customer account' ? searchLabel : marketingContextIdentity.accountName}</h3>
+                            <span>{searchLabel}</span>
+                        </div>
+                        <button type="button" onClick={() => setMarketingContextPanelOpen(false)}>Close</button>
+                    </header>
+                    <div className="staff-context-drawer-body">
+                        <section className="staff-context-card">
+                            <span>Account</span>
+                            <strong>{marketingContextIdentity.accountName === 'Customer account' ? searchLabel : marketingContextIdentity.accountName}</strong>
+                            <p>{marketingContextIdentity.accountEmail || 'No account email in loaded records'}</p>
+                            {marketingContextIdentity.accountPhone && <p>{marketingContextIdentity.accountPhone}</p>}
+                        </section>
+                        {marketingContextIdentity.hasDifferentContact && (
+                            <section className="staff-context-card">
+                                <span>Booking contact</span>
+                                <strong>{marketingContextIdentity.contactName}</strong>
+                                <p>{marketingContextIdentity.contactEmail || 'No booking email'}</p>
+                                {marketingContextIdentity.contactPhone && <p>{marketingContextIdentity.contactPhone}</p>}
+                            </section>
+                        )}
+                        <section className="staff-context-card">
+                            <span>Related bookings</span>
+                            {marketingContextBookings.length ? (
+                                <div className="staff-context-record-list">
+                                    {marketingContextBookings.map((booking) => (
+                                        <button key={booking.id} type="button" onClick={() => { setSelectedBooking(booking); openMarketingContextTab('bookings'); }}>
+                                            <strong>Booking #{booking.id} - {eventDisplayName(booking)}</strong>
+                                            <p>{formatDate(booking.event_date)} / {booking.pax || 0} guests / {booking.review_status || booking.status || 'Active'}</p>
+                                        </button>
+                                    ))}
+                                </div>
+                            ) : (
+                                <p>No loaded booking record matches this context yet. Keep the filter applied or search all bookings.</p>
+                            )}
+                        </section>
+                        <section className="staff-context-actions">
+                            <button type="button" onClick={() => openMarketingContextTab('bookings')}>Open bookings</button>
+                            <button type="button" onClick={() => openMarketingContextTab('handoff')}>Open handoff</button>
+                            <button type="button" onClick={() => { setActiveTab('messages'); setMarketingContextPanelOpen(false); }}>Open messages</button>
+                            <button type="button" onClick={() => openMarketingContextTab('history')}>Open history</button>
+                            {primaryBooking && (
+                                <button type="button" onClick={() => setSelectedBooking(primaryBooking)}>Event details</button>
+                            )}
+                            <button type="button" className="is-muted" onClick={clearMarketingContext}>Clear context</button>
+                        </section>
+                    </div>
+                </aside>
+            </div>
+        );
+    };
 
     const renderToday = () => {
         const transferRows = bookings.filter(booking => booking.can_accept_transfer);
@@ -1916,21 +2341,26 @@ const DashboardMarketing = () => {
                     actionLabel="Create booking"
                     onAction={openAssistedBookingModal}
                 />
-                <div className="marketing-panel flex flex-wrap gap-2 p-2">
-                    {BOOKING_WORK_VIEWS.map(option => (
-                        <button
-                            key={option.id}
-                            type="button"
-                            onClick={() => setBookingReviewView(option.id)}
-                            className={`rounded-lg px-4 py-2 text-sm font-black transition-colors ${bookingReviewView === option.id ? 'bg-[#8b0000] text-white' : 'bg-white text-slate-600 hover:bg-[#fffaf3]'}`}
-                        >
-                            {option.label}
-                            <span className={`ml-2 rounded-full px-2 py-0.5 text-xs ${bookingReviewView === option.id ? 'bg-white/20 text-white' : 'bg-[#fff7e8] text-[#9f6500]'}`}>
-                                {reviewCounts[option.id]}
-                            </span>
+                <StaffCommandBar className="marketing-booking-command-bar">
+                    <div className="staff-v2-segmented marketing-booking-view-tabs" role="tablist" aria-label="Booking review views">
+                        {BOOKING_WORK_VIEWS.map(option => (
+                            <button
+                                key={option.id}
+                                type="button"
+                                onClick={() => setBookingReviewView(option.id)}
+                                className={bookingReviewView === option.id ? 'is-active' : ''}
+                            >
+                                {option.label}
+                                <span>{reviewCounts[option.id]}</span>
+                            </button>
+                        ))}
+                    </div>
+                    {hasMarketingStaffContext && (
+                        <button type="button" className="staff-v2-link-action" onClick={() => setMarketingContextPanelOpen(true)}>
+                            Context applied
                         </button>
-                    ))}
-                </div>
+                    )}
+                </StaffCommandBar>
                 {pendingTransferBookings.length > 0 && (
                     <div className="marketing-panel border border-[#f0aa0b]/30 bg-[#fff7e8] p-4">
                         <p className="text-xs font-black uppercase tracking-widest text-[#9f6500]">Transfer request</p>
@@ -1958,7 +2388,7 @@ const DashboardMarketing = () => {
                 )}
                 <StaffOpsSearchBar
                     value={inquirySearch}
-                    onChange={(event) => setInquirySearch(event.target.value)}
+                    onChange={handleInquirySearchChange}
                     placeholder="Search booking, customer, phone, or city"
                 >
                     <select value={inquiryStatusFilter} onChange={(event) => setInquiryStatusFilter(event.target.value)} className="staff-control">
@@ -2588,6 +3018,89 @@ const DashboardMarketing = () => {
             onNavigate={setActiveTab}
             onLogout={handleLogout}
             roleKey="marketing"
+            workspaceClassName="staff-role-shell marketing-page"
+            topNav={{
+                logo: logoImg,
+                logoAlt: 'ECS',
+                badge: 'Marketing',
+                searchSlot: (
+                    <StaffNavbarSearch
+                        value={marketingNavbarSearch}
+                        onChange={setMarketingNavbarSearch}
+                        onClear={() => {
+                            setMarketingNavbarSearch('');
+                            setMarketingNavbarBookingMatches([]);
+                            setMarketingNavbarCustomerMatches([]);
+                        }}
+                        isOpen={marketingNavbarSearchOpen && !marketingNavbarFilterOpen}
+                        onOpenChange={(open) => {
+                            setMarketingNavbarSearchOpen(open);
+                            if (!open) setMarketingNavbarFilterOpen(false);
+                        }}
+                        results={marketingNavbarResults}
+                        loading={marketingNavbarSearchLoading}
+                        onSelect={selectMarketingNavbarResult}
+                        placeholder="Search bookings, customers, contacts, or pages..."
+                        label="Search marketing workspace"
+                        emptyText="No marketing pages, booking contacts, or customer accounts found."
+                        trailingControl={(
+                            <button
+                                type="button"
+                                className={`staff-navbar-search-filter ${marketingNavbarFilterOpen || marketingNavbarFilterCount > 0 ? 'is-active' : ''}`}
+                                onMouseDown={(event) => event.preventDefault()}
+                                onClick={() => {
+                                    setMarketingNavbarFilterOpen((open) => !open);
+                                    setMarketingNavbarSearchOpen(true);
+                                }}
+                                aria-label="Open search filters"
+                                aria-expanded={marketingNavbarFilterOpen}
+                            >
+                                <Filter aria-hidden="true" />
+                                {marketingNavbarFilterCount > 0 && <span>{marketingNavbarFilterCount}</span>}
+                            </button>
+                        )}
+                        panelSlot={marketingNavbarFilterOpen ? (
+                            <div className="staff-navbar-search-filter-popover" role="dialog" aria-label="Search filters">
+                                <div className="staff-navbar-search-filter-heading">
+                                    <strong>Search filters</strong>
+                                    <button
+                                        type="button"
+                                        onMouseDown={(event) => event.preventDefault()}
+                                        onClick={() => setMarketingNavbarFilters({ type: 'all', scope: 'all' })}
+                                    >
+                                        Reset
+                                    </button>
+                                </div>
+                                <label>
+                                    <span>Show</span>
+                                    <select
+                                        value={marketingNavbarFilters.type}
+                                        onChange={(event) => setMarketingNavbarFilters((filters) => ({ ...filters, type: event.target.value }))}
+                                    >
+                                        <option value="all">Everything</option>
+                                        <option value="page">Pages</option>
+                                        <option value="booking">Booking contacts</option>
+                                        <option value="customer">Customer accounts</option>
+                                    </select>
+                                </label>
+                                <label>
+                                    <span>Search in</span>
+                                    <select
+                                        value={marketingNavbarFilters.scope}
+                                        onChange={(event) => setMarketingNavbarFilters((filters) => ({ ...filters, scope: event.target.value }))}
+                                    >
+                                        <option value="all">All details</option>
+                                        <option value="name">Names and page labels</option>
+                                        <option value="contact">Email or phone</option>
+                                        <option value="booking">Booking number</option>
+                                    </select>
+                                </label>
+                            </div>
+                        ) : null}
+                    />
+                ),
+                notificationVariant: 'light',
+            }}
             navGroups={withNavCounts(MARKETING_WORKSPACE_NAV_GROUPS, {
                 today: marketingSummary.pending + marketingSummary.needsDetails,
                 bookings: dashboardSummary.pending,
@@ -2697,9 +3210,13 @@ const DashboardMarketing = () => {
                 )}
                 {activeTab === 'messages' && (
                     <Suspense fallback={<StaffSkeleton variant="panel" rows={3} label="Loading messages" />}>
-                        <StaffMessaging />
+                        <StaffMessaging
+                            targetConversationId={targetConversationId}
+                            onStaffContextNavigate={handleMarketingStaffContextNavigate}
+                        />
                     </Suspense>
                 )}
+            {renderMarketingContextPanel()}
             {renderBookingModal()}
             <AssistedBookingWizard
                 isOpen={showAssistedBooking}

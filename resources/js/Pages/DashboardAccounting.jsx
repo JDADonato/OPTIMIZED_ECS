@@ -1,16 +1,20 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import logoImg from '../../images/ECS_LOGO.png';
 import { useAuth } from '../context/AuthContext';
 import { router } from '@inertiajs/react';
+import { Filter } from 'lucide-react';
 import ReceiptModal from '../Components/common/ReceiptModal';
 import ConfirmModal from '../Components/common/ConfirmModal';
 import PromptModal from '../Components/common/PromptModal';
 import PaymentTermEditorModal from '../Components/finance/PaymentTermEditorModal';
 import useDebouncedValue from '../hooks/useDebouncedValue';
 import useSmartRefresh from '../hooks/useSmartRefresh';
+import useStaffContextNavigation from '../hooks/useStaffContextNavigation';
 import useStaffWorkspaceState from '../hooks/useStaffWorkspaceState';
 import { getListData, getPaginationMeta } from '../utils/apiResponses';
 import StaffPagination from '../Components/staff/StaffPagination';
 import StaffWorkspaceLayout from '../Layouts/StaffWorkspaceLayout';
+import StaffNavbarSearch from '../Components/staff/StaffNavbarSearch';
 import StaffPageHeader from '../Components/staff/StaffPageHeader';
 import StaffEmptyState from '../Components/staff/StaffEmptyState';
 import EventHistoryPanel from '../Components/staff/EventHistoryPanel';
@@ -25,7 +29,9 @@ import csrfFetch from '../utils/csrf';
 import { clearSmartCacheForPrefix, fetchSmartResource, getUserScopedCacheKey, readSmartCache } from '../utils/smartResource';
 import { operationalChannelsForUser } from '../utils/liveChannels';
 import { ACCOUNTING_WORKSPACE_NAV_GROUPS, withNavCounts } from '../utils/staffWorkspaceNav';
-import { bookingContactEmail, bookingContactName, customerAccountName, hasDifferentBookingContact } from '../utils/customerIdentity';
+import { bookingContactEmail, bookingContactName, bookingContactPhone, customerAccountEmail, customerAccountName, customerAccountPhone, hasDifferentBookingContact } from '../utils/customerIdentity';
+import { createStaffContext, hasStaffContext } from '../utils/staffContext';
+import { StaffWorkTable } from '../Components/staff/StaffV2';
 
 const PAYMENT_TYPE_LABELS = {
     Reservation: { label: 'Reservation Fee', pct: '10%', icon: 'R' },
@@ -35,10 +41,76 @@ const PAYMENT_TYPE_LABELS = {
 
 const eventDisplayName = (booking) => booking?.event_display_name || booking?.event_name || booking?.event_type || booking?.package_name || (booking?.id ? `Booking #${booking.id}` : 'Eloquente event');
 const ACCOUNTING_WORKSPACE_TABS = ['today', 'payments', 'reconciliation', 'refunds', 'ledger', 'settings', 'history'];
+const ACCOUNTING_CONTEXT_TABS = ['payments', 'reconciliation', 'refunds', 'ledger', 'history'];
 const ACCOUNTING_TAB_ALIASES = {
     bookings: 'payments',
     exceptions: 'reconciliation',
     settings: 'settings',
+};
+const compactText = (parts, separator = ' / ') => parts.filter(Boolean).map((part) => String(part).trim()).filter(Boolean).join(separator);
+const normalizeSearch = (value) => String(value ?? '').trim().toLowerCase();
+const matchesNavbarQuery = (entry, query) => {
+    const terms = normalizeSearch(query).split(/\s+/).filter(Boolean);
+    if (terms.length === 0) return true;
+
+    const haystack = normalizeSearch([
+        entry.label,
+        entry.description,
+        entry.path,
+        entry.searchText,
+        ...(entry.aliases || []),
+    ].filter(Boolean).join(' '));
+
+    return terms.every((term) => haystack.includes(term));
+};
+const matchesNavbarAdvancedFilters = (entry, filters, query) => {
+    if (filters.type !== 'all' && entry.kind !== filters.type) return false;
+
+    const terms = normalizeSearch(query).split(/\s+/).filter(Boolean);
+    if (filters.scope === 'all' || terms.length === 0) return true;
+
+    const scopedText = normalizeSearch({
+        name: entry.nameText || compactText([entry.label, entry.path], ' '),
+        contact: entry.contactText || '',
+        booking: entry.bookingText || '',
+    }[filters.scope] || entry.searchText || '');
+
+    return terms.every((term) => scopedText.includes(term));
+};
+const buildAccountingPageSearchEntries = () => {
+    const entries = ACCOUNTING_WORKSPACE_NAV_GROUPS.flatMap((group) => (
+        group.items.map((item) => ({
+            id: `accounting-page:${item.id}`,
+            kind: 'page',
+            tab: item.id,
+            label: item.label,
+            path: `Accounting / ${group.label}`,
+            description: item.description,
+            searchText: compactText([item.label, item.description, ...(item.aliases || [])], ' '),
+            nameText: compactText([item.label, group.label, item.description], ' '),
+            contactText: '',
+            bookingText: '',
+            aliases: item.aliases || [],
+        }))
+    ));
+
+    if (!entries.some((entry) => entry.tab === 'settings')) {
+        entries.push({
+            id: 'accounting-page:settings',
+            kind: 'page',
+            tab: 'settings',
+            label: 'Settings',
+            path: 'Accounting / Workspace',
+            description: 'Finance workspace preferences and role controls.',
+            searchText: 'settings preferences controls payment rules',
+            nameText: 'Settings Accounting Workspace Finance preferences',
+            contactText: '',
+            bookingText: '',
+            aliases: ['preferences', 'controls'],
+        });
+    }
+
+    return entries;
 };
 
 const readInitialAccountingSegment = () => {
@@ -95,6 +167,61 @@ const DashboardAccounting = () => {
     const debouncedBookingSearchQuery = useDebouncedValue(bookingSearchQuery, 250);
     const smartCacheKey = (resourceKey) => getUserScopedCacheKey(user, resourceKey);
     const liveChannels = useMemo(() => operationalChannelsForUser(user), [user?.id, user?.role]);
+    const [accountingNavbarSearch, setAccountingNavbarSearch] = useState('');
+    const [accountingNavbarSearchOpen, setAccountingNavbarSearchOpen] = useState(false);
+    const [accountingNavbarFilterOpen, setAccountingNavbarFilterOpen] = useState(false);
+    const [accountingNavbarFilters, setAccountingNavbarFilters] = useState({ type: 'all', scope: 'all' });
+    const [accountingNavbarBookingMatches, setAccountingNavbarBookingMatches] = useState([]);
+    const [accountingNavbarSearchLoading, setAccountingNavbarSearchLoading] = useState(false);
+    const [accountingContextPanelOpen, setAccountingContextPanelOpen] = useState(false);
+
+    const applyAccountingStaffContext = useCallback(({ targetTab, context, searchText }) => {
+        if (hasStaffContext(context)) {
+            setAccountingContextPanelOpen(true);
+        }
+
+        if (!hasStaffContext(context) || !searchText) return;
+
+        if (targetTab === 'refunds') {
+            setRefundSegment('all');
+            setRefundSearch(searchText);
+            setRefundPage(1);
+        } else if (targetTab === 'reconciliation') {
+            setReconciliationSearch(searchText);
+            setReconciliationTypeFilter('all');
+            setReconciliationPage(1);
+        } else if (targetTab === 'ledger') {
+            setLedgerFilter((current) => ({ ...current, clientSearch: searchText }));
+            setLedgerPage(1);
+        } else if (targetTab !== 'history') {
+            setPaymentSegment('all_active');
+            setBookingPaymentFilter('all');
+            setBookingSearchQuery(searchText);
+            setBookingPage(1);
+        }
+    }, []);
+
+    const {
+        staffContext: accountingStaffContext,
+        setStaffContext: setAccountingStaffContext,
+        clearStaffContext: clearAccountingStaffContext,
+        hasContext: hasAccountingStaffContext,
+        contextSearchText: accountingContextSearchText,
+    } = useStaffContextNavigation({
+        activeTab,
+        setActiveTab,
+        allowedTabs: ACCOUNTING_WORKSPACE_TABS,
+        tabAliases: ACCOUNTING_TAB_ALIASES,
+        defaultTab: accountingDefaultTab,
+        contextTabs: ACCOUNTING_CONTEXT_TABS,
+        onApplyContext: applyAccountingStaffContext,
+    });
+
+    useEffect(() => {
+        if (!hasAccountingStaffContext) {
+            setAccountingContextPanelOpen(false);
+        }
+    }, [hasAccountingStaffContext]);
 
     useEffect(() => {
         if (activeTab === 'today') {
@@ -123,6 +250,51 @@ const DashboardAccounting = () => {
     useEffect(() => {
         setBookingPage(1);
     }, [debouncedBookingSearchQuery, bookingSortOrder, bookingPaymentFilter]);
+
+    useEffect(() => {
+        const query = accountingNavbarSearch.trim();
+
+        if (query.length < 2 || accountingNavbarFilters.type === 'page') {
+            setAccountingNavbarBookingMatches([]);
+            setAccountingNavbarSearchLoading(false);
+            return undefined;
+        }
+
+        const controller = new AbortController();
+        const timer = window.setTimeout(async () => {
+            setAccountingNavbarSearchLoading(true);
+
+            try {
+                const params = new URLSearchParams({
+                    paginated: '1',
+                    per_page: '8',
+                    search: query,
+                    finance_segment: 'all_active',
+                });
+                const response = await fetch(`/api/accounting/bookings?${params.toString()}`, {
+                    headers: { Accept: 'application/json' },
+                    signal: controller.signal,
+                });
+                const payload = response.ok ? await response.json() : { data: [] };
+
+                setAccountingNavbarBookingMatches(getListData(payload).slice(0, 8));
+            } catch (error) {
+                if (error.name !== 'AbortError') {
+                    console.error('Error searching accounting navbar:', error);
+                    setAccountingNavbarBookingMatches([]);
+                }
+            } finally {
+                if (!controller.signal.aborted) {
+                    setAccountingNavbarSearchLoading(false);
+                }
+            }
+        }, 240);
+
+        return () => {
+            window.clearTimeout(timer);
+            controller.abort();
+        };
+    }, [accountingNavbarSearch, accountingNavbarFilters.type]);
 
     useEffect(() => {
         setLedgerPage(1);
@@ -532,6 +704,120 @@ const DashboardAccounting = () => {
         history: 'Event History',
     };
 
+    const accountingNavbarPageEntries = useMemo(() => buildAccountingPageSearchEntries(), []);
+    const accountingNavbarResults = useMemo(() => {
+        const query = accountingNavbarSearch.trim();
+        const pageEntries = query
+            ? accountingNavbarPageEntries.filter((entry) => matchesNavbarQuery(entry, query))
+            : accountingNavbarPageEntries.slice(0, 6);
+        const bookingEntries = query.length < 2 ? [] : accountingNavbarBookingMatches.map((booking) => {
+            const contact = bookingContactName(booking);
+            const contactEmail = bookingContactEmail(booking);
+            const contactPhone = bookingContactPhone(booking);
+            const account = customerAccountName(booking);
+            const accountEmail = customerAccountEmail(booking);
+            const accountPhone = customerAccountPhone(booking);
+            const paid = toMoneyNumber(booking.paid_amount);
+            const remaining = toMoneyNumber(booking.remaining_balance);
+            const searchText = compactText([
+                contact,
+                contactEmail,
+                contactPhone,
+                account,
+                accountEmail,
+                accountPhone,
+                booking.id,
+            ], ' ');
+
+            return {
+                id: `accounting-booking:${booking.id}`,
+                kind: 'booking',
+                label: compactText([contact || account || 'Booking contact', `Booking #${booking.id}`], ' - '),
+                path: 'Accounting / Payments',
+                description: compactText([
+                    eventDisplayName(booking),
+                    formatAccountingDate(booking.event_date),
+                    remaining > 0 ? `Balance P${remaining.toLocaleString()}` : paid > 0 ? `Paid P${paid.toLocaleString()}` : null,
+                ]),
+                searchText: contact || account || String(booking.id),
+                nameText: compactText([contact, account, eventDisplayName(booking)], ' '),
+                contactText: compactText([contactEmail, contactPhone, accountEmail, accountPhone], ' '),
+                bookingText: compactText([booking.id, `Booking #${booking.id}`], ' '),
+                aliases: [searchText],
+                context: createStaffContext({
+                    booking: booking.id,
+                    customer: booking.user_id || booking.customer_account?.id,
+                    customerQuery: contact || account,
+                }),
+                record: booking,
+            };
+        });
+
+        return [...pageEntries, ...bookingEntries]
+            .filter((entry, index, list) => list.findIndex((candidate) => candidate.id === entry.id) === index)
+            .filter((entry) => !query || matchesNavbarQuery(entry, query))
+            .filter((entry) => matchesNavbarAdvancedFilters(entry, accountingNavbarFilters, query))
+            .slice(0, 10);
+    }, [accountingNavbarBookingMatches, accountingNavbarFilters, accountingNavbarPageEntries, accountingNavbarSearch]);
+    const accountingNavbarFilterCount = Object.values(accountingNavbarFilters).filter((value) => value !== 'all').length;
+
+    const selectAccountingNavbarResult = (result) => {
+        if (!result) return;
+
+        if (result.kind === 'page') {
+            setActiveTab(result.tab);
+        } else {
+            const searchText = result.searchText || accountingNavbarSearch.trim();
+            setAccountingStaffContext(result.context || createStaffContext({ customerQuery: searchText }));
+            setAccountingContextPanelOpen(true);
+            setPaymentSegment('all_active');
+            setBookingPaymentFilter('all');
+            setBookingSearchQuery(searchText);
+            setBookingPage(1);
+            setActiveTab('payments');
+        }
+
+        setAccountingNavbarSearch('');
+        setAccountingNavbarSearchOpen(false);
+    };
+
+    const clearAccountingContext = useCallback(() => {
+        clearAccountingStaffContext();
+        setAccountingContextPanelOpen(false);
+    }, [clearAccountingStaffContext]);
+
+    const handleBookingSearchChange = useCallback((event) => {
+        const value = event.target.value;
+        setBookingSearchQuery(value);
+        if (!value.trim()) {
+            clearAccountingContext();
+        }
+    }, [clearAccountingContext]);
+
+    const handleReconciliationSearchChange = useCallback((event) => {
+        const value = event.target.value;
+        setReconciliationSearch(value);
+        if (!value.trim()) {
+            clearAccountingContext();
+        }
+    }, [clearAccountingContext]);
+
+    const handleRefundSearchChange = useCallback((event) => {
+        const value = event.target.value;
+        setRefundSearch(value);
+        if (!value.trim()) {
+            clearAccountingContext();
+        }
+    }, [clearAccountingContext]);
+
+    const handleLedgerClientSearchChange = useCallback((event) => {
+        const value = event.target.value;
+        setLedgerFilter((current) => ({ ...current, clientSearch: value }));
+        if (!value.trim()) {
+            clearAccountingContext();
+        }
+    }, [clearAccountingContext]);
+
     const financeNextActions = useMemo(() => ([
         {
             id: 'verify-payments',
@@ -583,6 +869,156 @@ const DashboardAccounting = () => {
             onOpen: () => setActiveTab('refunds'),
         },
     ]), [dashboardSummary.exceptions, dashboardSummary.overdue, dashboardSummary.pending, dashboardSummary.refunds]);
+
+    const accountingContextBookings = useMemo(() => {
+        if (!hasAccountingStaffContext) return [];
+        const search = normalizeSearch(accountingContextSearchText);
+
+        return bookings.filter((booking) => {
+            if (accountingStaffContext.booking && String(booking.id) === String(accountingStaffContext.booking)) return true;
+            if (accountingStaffContext.customerId && String(booking.user_id || booking.customer_account?.id || '') === String(accountingStaffContext.customerId)) return true;
+            if (!search) return false;
+
+            return normalizeSearch([
+                `booking #${booking.id}`,
+                booking.id,
+                bookingContactName(booking),
+                bookingContactEmail(booking),
+                bookingContactPhone(booking),
+                customerAccountName(booking),
+                customerAccountEmail(booking),
+                customerAccountPhone(booking),
+                eventDisplayName(booking),
+            ].filter(Boolean).join(' ')).includes(search);
+        }).slice(0, 6);
+    }, [accountingContextSearchText, accountingStaffContext, bookings, hasAccountingStaffContext]);
+
+    const accountingContextPayments = useMemo(() => (
+        accountingContextBookings.flatMap((booking) => (
+            (booking.payments || []).map((payment) => ({ booking, payment }))
+        ))
+    ), [accountingContextBookings]);
+
+    const accountingContextIdentity = useMemo(() => {
+        const primary = accountingContextBookings[0] || {};
+        return {
+            accountName: customerAccountName(primary) || accountingStaffContext.customerQuery || 'Customer context',
+            accountEmail: customerAccountEmail(primary),
+            accountPhone: customerAccountPhone(primary),
+            contactName: bookingContactName(primary) || accountingStaffContext.customerQuery,
+            contactEmail: bookingContactEmail(primary),
+            contactPhone: bookingContactPhone(primary),
+            hasDifferentContact: primary.id ? hasDifferentBookingContact(primary) : false,
+        };
+    }, [accountingContextBookings, accountingStaffContext.customerQuery]);
+
+    const accountingContextBalance = useMemo(() => (
+        accountingContextBookings.reduce((summary, booking) => {
+            const total = toMoneyNumber(booking.totalCost ?? booking.total_cost ?? booking.total);
+            const paid = (booking.payments || [])
+                .filter((payment) => isPaidStatus(payment.status))
+                .reduce((sum, payment) => sum + toMoneyNumber(payment.amount), 0);
+            return {
+                total: summary.total + total,
+                paid: summary.paid + paid,
+                remaining: summary.remaining + Math.max(total - paid, 0),
+            };
+        }, { total: 0, paid: 0, remaining: 0 })
+    ), [accountingContextBookings]);
+
+    const openAccountingContextTab = useCallback((tab, searchText = accountingContextSearchText) => {
+        if (tab === 'refunds') {
+            setRefundSegment('all');
+            setRefundSearch(searchText);
+            setRefundPage(1);
+        } else if (tab === 'reconciliation') {
+            setReconciliationSearch(searchText);
+            setReconciliationTypeFilter('all');
+            setReconciliationPage(1);
+        } else if (tab === 'ledger') {
+            setLedgerFilter((current) => ({ ...current, clientSearch: searchText }));
+            setLedgerPage(1);
+        } else if (tab !== 'history') {
+            setPaymentSegment('all_active');
+            setBookingPaymentFilter('all');
+            setBookingSearchQuery(searchText);
+            setBookingPage(1);
+        }
+
+        setActiveTab(tab);
+        setAccountingContextPanelOpen(false);
+    }, [accountingContextSearchText, setActiveTab]);
+
+    const renderAccountingContextPanel = () => {
+        if (!hasAccountingStaffContext || !accountingContextPanelOpen) return null;
+        const primaryBooking = accountingContextBookings[0];
+        const searchLabel = accountingContextSearchText || accountingStaffContext.customerQuery || accountingStaffContext.booking || 'Current context';
+        const accountName = accountingContextIdentity.accountName === 'Customer account' ? searchLabel : accountingContextIdentity.accountName;
+
+        return (
+            <div className="staff-context-drawer-shell" role="dialog" aria-modal="true" aria-label="Accounting customer context">
+                <button type="button" className="staff-context-drawer-backdrop" onClick={() => setAccountingContextPanelOpen(false)} aria-label="Close customer context" />
+                <aside className="staff-context-drawer">
+                    <header className="staff-context-drawer-head">
+                        <div>
+                            <p>Customer context</p>
+                            <h3>{accountName}</h3>
+                            <span>{searchLabel}</span>
+                        </div>
+                        <button type="button" onClick={() => setAccountingContextPanelOpen(false)}>Close</button>
+                    </header>
+                    <div className="staff-context-drawer-body">
+                        <section className="staff-context-card">
+                            <span>Account</span>
+                            <strong>{accountName}</strong>
+                            <p>{accountingContextIdentity.accountEmail || 'No account email in loaded records'}</p>
+                            {accountingContextIdentity.accountPhone && <p>{accountingContextIdentity.accountPhone}</p>}
+                        </section>
+                        {accountingContextIdentity.hasDifferentContact && (
+                            <section className="staff-context-card">
+                                <span>Booking contact</span>
+                                <strong>{accountingContextIdentity.contactName}</strong>
+                                <p>{accountingContextIdentity.contactEmail || 'No booking email'}</p>
+                                {accountingContextIdentity.contactPhone && <p>{accountingContextIdentity.contactPhone}</p>}
+                            </section>
+                        )}
+                        <section className="staff-context-card staff-context-balance-card">
+                            <span>Finance state</span>
+                            <strong>{'P' + accountingContextBalance.remaining.toLocaleString()} remaining</strong>
+                            <p>{'P' + accountingContextBalance.paid.toLocaleString()} paid from {'P' + accountingContextBalance.total.toLocaleString()} total.</p>
+                            <p>{accountingContextPayments.length} payment milestone(s) in loaded records.</p>
+                        </section>
+                        <section className="staff-context-card">
+                            <span>Related bookings</span>
+                            {accountingContextBookings.length ? (
+                                <div className="staff-context-record-list">
+                                    {accountingContextBookings.map((booking) => (
+                                        <button key={booking.id} type="button" onClick={() => { setSelectedFinanceBooking(booking); openAccountingContextTab('payments'); }}>
+                                            <strong>Booking #{booking.id} - {eventDisplayName(booking)}</strong>
+                                            <p>{formatAccountingDate(booking.event_date)} / {booking.pax || 0} guests / {booking.payment_state || booking.status || 'Payment record'}</p>
+                                        </button>
+                                    ))}
+                                </div>
+                            ) : (
+                                <p>No loaded finance record matches this context yet. Keep the filter applied or search all payments.</p>
+                            )}
+                        </section>
+                        <section className="staff-context-actions">
+                            <button type="button" onClick={() => openAccountingContextTab('payments')}>Open payments</button>
+                            <button type="button" onClick={() => openAccountingContextTab('reconciliation')}>Open reconciliation</button>
+                            <button type="button" onClick={() => openAccountingContextTab('refunds')}>Open refunds</button>
+                            <button type="button" onClick={() => openAccountingContextTab('ledger')}>Open ledger</button>
+                            <button type="button" onClick={() => openAccountingContextTab('history')}>Open history</button>
+                            {primaryBooking && (
+                                <button type="button" onClick={() => setSelectedFinanceBooking(primaryBooking)}>Payment details</button>
+                            )}
+                            <button type="button" className="is-muted" onClick={clearAccountingContext}>Clear context</button>
+                        </section>
+                    </div>
+                </aside>
+            </div>
+        );
+    };
 
     const todayQueues = useMemo(() => {
         const pendingBookings = bookings.filter((booking) => paymentMatchesSegment(booking, 'needs_verification')).slice(0, 4);
@@ -685,7 +1121,9 @@ const DashboardAccounting = () => {
         const needle = refundSearch.trim().toLowerCase();
         return refundQueue.filter((item) => {
             const status = String(item.refund_status || '').toLowerCase();
-            const matchesSegment = refundSegment === 'completed'
+            const matchesSegment = refundSegment === 'all'
+                ? true
+                : refundSegment === 'completed'
                 ? ['reviewed', 'refunded', 'completed'].some((value) => status.includes(value))
                 : refundSegment === 'manual'
                     ? status.includes('manual') || status.includes('failed')
@@ -707,6 +1145,7 @@ const DashboardAccounting = () => {
     }, [refundQueue, refundSearch, refundSegment]);
 
     const refundSegments = [
+        { id: 'all', label: 'All refunds' },
         { id: 'needs_review', label: 'Needs review' },
         { id: 'provider', label: 'Provider refund' },
         { id: 'manual', label: 'Manual handling' },
@@ -851,7 +1290,7 @@ const DashboardAccounting = () => {
             <div className="staff-filter-bar">
                 <input
                     value={reconciliationSearch}
-                    onChange={(event) => setReconciliationSearch(event.target.value)}
+                    onChange={handleReconciliationSearchChange}
                     className="staff-control"
                     placeholder="Search booking, customer, or payment reference"
                 />
@@ -866,7 +1305,7 @@ const DashboardAccounting = () => {
                 <StaffEmptyState title="No payment exceptions" message="Online checkout, due dates, and staff payment records are aligned." />
             ) : (
                 <>
-                    <div className="staff-table-wrap custom-scrollbar">
+                    <StaffWorkTable className="custom-scrollbar">
                         <table className="staff-table">
                             <thead>
                                 <tr>
@@ -923,7 +1362,7 @@ const DashboardAccounting = () => {
                                 })}
                             </tbody>
                         </table>
-                    </div>
+                    </StaffWorkTable>
                     <StaffPagination page={reconciliationPage} perPage={reconciliationPerPage} total={filteredReconciliationItems.length} onPageChange={setReconciliationPage} onPerPageChange={setReconciliationPerPage} />
                 </>
             )}
@@ -960,7 +1399,7 @@ const DashboardAccounting = () => {
             </div>
             <StaffOpsSearchBar
                 value={bookingSearchQuery}
-                onChange={(e) => setBookingSearchQuery(e.target.value)}
+                onChange={handleBookingSearchChange}
                 placeholder="Search booking contact or booking number"
             >
                 <select value={bookingSortOrder} onChange={(e) => setBookingSortOrder(e.target.value)} className="staff-control">
@@ -982,7 +1421,7 @@ const DashboardAccounting = () => {
             ) : visibleBookings.length === 0 ? (
                 <StaffEmptyState title="No payment records found" message="Try another segment or clear filters to see active finance records." />
             ) : (
-                <div className="staff-table-wrap">
+                <StaffWorkTable>
                     <table className="staff-table">
                         <thead>
                             <tr>
@@ -1026,7 +1465,7 @@ const DashboardAccounting = () => {
                             })}
                         </tbody>
                     </table>
-                </div>
+                </StaffWorkTable>
             )}
             {bookingPagination && bookingPagination.lastPage > 1 && (
                 <StaffPagination
@@ -1064,6 +1503,87 @@ const DashboardAccounting = () => {
             onNavigate={setActiveTab}
             onLogout={handleLogout}
             roleKey="accounting"
+            workspaceClassName="staff-role-shell accounting-page"
+            topNav={{
+                logo: logoImg,
+                logoAlt: 'ECS',
+                badge: 'Accounting',
+                searchSlot: (
+                    <StaffNavbarSearch
+                        value={accountingNavbarSearch}
+                        onChange={setAccountingNavbarSearch}
+                        onClear={() => {
+                            setAccountingNavbarSearch('');
+                            setAccountingNavbarBookingMatches([]);
+                        }}
+                        isOpen={accountingNavbarSearchOpen && !accountingNavbarFilterOpen}
+                        onOpenChange={(open) => {
+                            setAccountingNavbarSearchOpen(open);
+                            if (!open) setAccountingNavbarFilterOpen(false);
+                        }}
+                        results={accountingNavbarResults}
+                        loading={accountingNavbarSearchLoading}
+                        onSelect={selectAccountingNavbarResult}
+                        placeholder="Search payments, customers, contacts, booking IDs, or pages..."
+                        label="Search accounting workspace"
+                        emptyText="No accounting pages, booking contacts, customer accounts, or booking IDs found."
+                        trailingControl={(
+                            <button
+                                type="button"
+                                className={`staff-navbar-search-filter ${accountingNavbarFilterOpen || accountingNavbarFilterCount > 0 ? 'is-active' : ''}`}
+                                onMouseDown={(event) => event.preventDefault()}
+                                onClick={() => {
+                                    setAccountingNavbarFilterOpen((open) => !open);
+                                    setAccountingNavbarSearchOpen(true);
+                                }}
+                                aria-label="Open search filters"
+                                aria-expanded={accountingNavbarFilterOpen}
+                            >
+                                <Filter aria-hidden="true" />
+                                {accountingNavbarFilterCount > 0 && <span>{accountingNavbarFilterCount}</span>}
+                            </button>
+                        )}
+                        panelSlot={accountingNavbarFilterOpen ? (
+                            <div className="staff-navbar-search-filter-popover" role="dialog" aria-label="Search filters">
+                                <div className="staff-navbar-search-filter-heading">
+                                    <strong>Search filters</strong>
+                                    <button
+                                        type="button"
+                                        onMouseDown={(event) => event.preventDefault()}
+                                        onClick={() => setAccountingNavbarFilters({ type: 'all', scope: 'all' })}
+                                    >
+                                        Reset
+                                    </button>
+                                </div>
+                                <label>
+                                    <span>Show</span>
+                                    <select
+                                        value={accountingNavbarFilters.type}
+                                        onChange={(event) => setAccountingNavbarFilters((filters) => ({ ...filters, type: event.target.value }))}
+                                    >
+                                        <option value="all">Everything</option>
+                                        <option value="page">Pages</option>
+                                        <option value="booking">Payment and booking records</option>
+                                    </select>
+                                </label>
+                                <label>
+                                    <span>Search in</span>
+                                    <select
+                                        value={accountingNavbarFilters.scope}
+                                        onChange={(event) => setAccountingNavbarFilters((filters) => ({ ...filters, scope: event.target.value }))}
+                                    >
+                                        <option value="all">All details</option>
+                                        <option value="name">Names and page labels</option>
+                                        <option value="contact">Email or phone</option>
+                                        <option value="booking">Booking number</option>
+                                    </select>
+                                </label>
+                            </div>
+                        ) : null}
+                    />
+                ),
+                notificationVariant: 'light',
+            }}
             navGroups={withNavCounts(ACCOUNTING_WORKSPACE_NAV_GROUPS, {
                 today: dashboardSummary.pending + dashboardSummary.overdue + dashboardSummary.exceptions + dashboardSummary.refunds,
                 payments: dashboardSummary.pending + dashboardSummary.overdue + dashboardSummary.exceptions,
@@ -1505,19 +2025,19 @@ const DashboardAccounting = () => {
                 )}
                 {activeTab === 'ledger' && (
                     <div>
-                        <div className="marketing-panel staff-filter-bar mb-4">
-                            <div className="flex flex-col flex-1 min-w-[200px]">
-                                <label className="text-xs font-black uppercase text-slate-500 mb-1">Search Client</label>
+                        <div className="marketing-panel accounting-ledger-filter-bar mb-4">
+                            <div className="accounting-ledger-filter-field is-search">
+                                <label>Search client</label>
                                 <input
                                     type="text"
                                     placeholder="Search by name..."
                                     value={ledgerFilter.clientSearch || ''}
-                                    onChange={function (e) { setLedgerFilter(Object.assign({}, ledgerFilter, { clientSearch: e.target.value })); }}
+                                    onChange={handleLedgerClientSearchChange}
                                     className="staff-control"
                                 />
                             </div>
-                            <div className="flex flex-col min-w-[150px]">
-                                <label className="text-xs font-black uppercase text-slate-500 mb-1">Package</label>
+                            <div className="accounting-ledger-filter-field">
+                                <label>Package</label>
                                 <select
                                     value={ledgerFilter.packageFilter || 'All'}
                                     onChange={function (e) { setLedgerFilter(Object.assign({}, ledgerFilter, { packageFilter: e.target.value })); }}
@@ -1530,8 +2050,8 @@ const DashboardAccounting = () => {
                                     <option value="custom">Custom</option>
                                 </select>
                             </div>
-                            <div className="flex flex-col">
-                                <label className="text-xs font-black uppercase text-slate-500 mb-1">Status</label>
+                            <div className="accounting-ledger-filter-field">
+                                <label>Status</label>
                                 <select
                                     value={ledgerFilter.status}
                                     onChange={function (e) { setLedgerFilter(Object.assign({}, ledgerFilter, { status: e.target.value })); }}
@@ -1545,8 +2065,8 @@ const DashboardAccounting = () => {
                                     <option value="Refunded">Refunded</option>
                                 </select>
                             </div>
-                            <div className="flex flex-col">
-                                <label className="text-xs font-black uppercase text-slate-500 mb-1">Payment Type</label>
+                            <div className="accounting-ledger-filter-field">
+                                <label>Payment type</label>
                                 <select
                                     value={ledgerFilter.payment_type || 'All'}
                                     onChange={function (e) { setLedgerFilter(Object.assign({}, ledgerFilter, { payment_type: e.target.value })); }}
@@ -1558,8 +2078,8 @@ const DashboardAccounting = () => {
                                     <option value="Final">Final Payment</option>
                                 </select>
                             </div>
-                            <div className="flex flex-col">
-                                <label className="text-xs font-black uppercase text-slate-500 mb-1">Method</label>
+                            <div className="accounting-ledger-filter-field">
+                                <label>Method</label>
                                 <select
                                     value={ledgerFilter.method || 'All'}
                                     onChange={function (e) { setLedgerFilter(Object.assign({}, ledgerFilter, { method: e.target.value })); }}
@@ -1571,23 +2091,25 @@ const DashboardAccounting = () => {
                                     <option value="Manual">Manual</option>
                                 </select>
                             </div>
-                            <div className="flex flex-col">
-                                <label className="text-xs font-black uppercase text-slate-500 mb-1">Start Date</label>
-                                <input
-                                    type="date"
-                                    value={ledgerFilter.startDate}
-                                    onChange={function (e) { setLedgerFilter(Object.assign({}, ledgerFilter, { startDate: e.target.value })); }}
-                                    className="staff-control"
-                                />
-                            </div>
-                            <div className="flex flex-col">
-                                <label className="text-xs font-black uppercase text-slate-500 mb-1">End Date</label>
-                                <input
-                                    type="date"
-                                    value={ledgerFilter.endDate}
-                                    onChange={function (e) { setLedgerFilter(Object.assign({}, ledgerFilter, { endDate: e.target.value })); }}
-                                    className="staff-control"
-                                />
+                            <div className="accounting-ledger-filter-field is-date-range">
+                                <label>Date range</label>
+                                <div className="accounting-ledger-date-range">
+                                    <input
+                                        type="date"
+                                        value={ledgerFilter.startDate}
+                                        onChange={function (e) { setLedgerFilter(Object.assign({}, ledgerFilter, { startDate: e.target.value })); }}
+                                        className="staff-control"
+                                        aria-label="Start date"
+                                    />
+                                    <span aria-hidden="true">to</span>
+                                    <input
+                                        type="date"
+                                        value={ledgerFilter.endDate}
+                                        onChange={function (e) { setLedgerFilter(Object.assign({}, ledgerFilter, { endDate: e.target.value })); }}
+                                        className="staff-control"
+                                        aria-label="End date"
+                                    />
+                                </div>
                             </div>
                         </div>
 
@@ -1730,7 +2252,7 @@ const DashboardAccounting = () => {
                         <div className="staff-filter-bar">
                             <input
                                 value={reconciliationSearch}
-                                onChange={(event) => setReconciliationSearch(event.target.value)}
+                                onChange={handleReconciliationSearchChange}
                                 className="staff-control"
                                 placeholder="Search booking, booking contact, account, or payment reference"
                             />
@@ -1751,7 +2273,7 @@ const DashboardAccounting = () => {
                             </div>
                         ) : (
                             <>
-                            <div className="staff-table-wrap custom-scrollbar">
+                            <StaffWorkTable className="custom-scrollbar">
                                 <table className="staff-table">
                                     <thead>
                                         <tr>
@@ -1819,7 +2341,7 @@ const DashboardAccounting = () => {
                                         })}
                                     </tbody>
                                 </table>
-                            </div>
+                            </StaffWorkTable>
                             <StaffPagination page={reconciliationPage} perPage={reconciliationPerPage} total={filteredReconciliationItems.length} onPageChange={setReconciliationPage} onPerPageChange={setReconciliationPerPage} />
                             </>
                         )}
@@ -1850,7 +2372,7 @@ const DashboardAccounting = () => {
                         <div className="staff-filter-bar">
                             <input
                                 value={refundSearch}
-                                onChange={(event) => setRefundSearch(event.target.value)}
+                                onChange={handleRefundSearchChange}
                                 className="staff-control"
                                 placeholder="Search booking, booking contact, account, or email"
                             />
@@ -1867,7 +2389,7 @@ const DashboardAccounting = () => {
                             </div>
                         ) : (
                             <>
-                            <div className="staff-table-wrap custom-scrollbar">
+                            <StaffWorkTable className="custom-scrollbar">
                                 <table className="staff-table">
                                     <thead>
                                         <tr>
@@ -1927,7 +2449,7 @@ const DashboardAccounting = () => {
                                         })}
                                     </tbody>
                                 </table>
-                            </div>
+                            </StaffWorkTable>
                             <StaffPagination page={refundPage} perPage={refundPerPage} total={filteredRefundQueue.length} onPageChange={setRefundPage} onPerPageChange={setRefundPerPage} />
                             </>
                         )}
@@ -1939,6 +2461,7 @@ const DashboardAccounting = () => {
                 {activeTab === 'settings' && (
                     <RoleSettingsPanel role="accounting" onNavigate={setActiveTab} />
                 )}
+            {renderAccountingContextPanel()}
             {/* Receipt Modal */}
             <ReceiptModal
                 isOpen={receiptModal.isOpen}
