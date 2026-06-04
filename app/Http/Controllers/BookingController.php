@@ -481,7 +481,10 @@ class BookingController extends Controller
         app(OperationalBroadcastService::class)
             ->bookingChanged($booking->fresh(), 'event_details_updated', 'Booking details updated.');
 
-        return response()->json(['message' => 'Event details updated successfully!']);
+        return response()->json([
+            'message' => 'Event details updated successfully!',
+            'booking' => new BookingSummaryResource($booking->fresh(['user', 'assignee', 'reviewTasks', 'preparationTasks', 'payments'])),
+        ]);
     }
 
     /**
@@ -599,6 +602,7 @@ class BookingController extends Controller
                 'message' => 'Menu updated and pricing recalculated.',
                 'total_cost' => $newTotal,
                 'booking' => new BookingSummaryResource($booking->fresh(['user', 'assignee', 'reviewTasks', 'preparationTasks', 'payments'])),
+                'payments' => PaymentResource::collection($booking->fresh()->payments()->active()->orderByRaw("CASE payment_type WHEN 'Reservation' THEN 1 WHEN 'DownPayment' THEN 2 WHEN 'Final' THEN 3 ELSE 4 END")->orderBy('due_date')->get()),
             ]);
         }
 

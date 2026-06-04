@@ -175,7 +175,7 @@ class AdminCustomerAccountTest extends TestCase
     public function test_deactivating_staff_releases_active_operational_ownership_without_erasing_history(): void
     {
         $admin = $this->user('Admin');
-        $staff = $this->user('Marketing', ['username' => 'former_marketing']);
+        $staff = $this->user('Marketing', ['username' => 'former_marketing', 'email' => 'former.marketing@example.test']);
         $customer = $this->user('Client');
 
         $booking = Booking::create([
@@ -262,6 +262,23 @@ class AdminCustomerAccountTest extends TestCase
         $this->assertDatabaseHas('users', [
             'id' => $staff->id,
             'account_status' => 'deactivated',
+        ]);
+        $this->assertStringStartsWith('deactivated+'.$staff->id, $staff->fresh()->email);
+
+        $this->actingAs($admin)
+            ->postJson('/api/admin/employees', [
+                'full_name' => 'Replacement Marketing',
+                'username' => 'replacement_marketing',
+                'email' => 'former.marketing@example.test',
+                'phone' => '09170000009',
+                'role' => 'Marketing',
+            ])
+            ->assertCreated();
+
+        $this->assertDatabaseHas('users', [
+            'username' => 'replacement_marketing',
+            'email' => 'former.marketing@example.test',
+            'role' => 'Marketing',
         ]);
     }
 

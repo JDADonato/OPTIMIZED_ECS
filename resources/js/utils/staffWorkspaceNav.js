@@ -54,6 +54,7 @@ export const MARKETING_WORKSPACE_NAV_GROUPS = [
         items: [
             { id: 'public-content', label: 'Public Content', description: 'Manage customer-facing catalog and announcements.', aliases: ['announcements', 'packages', 'event types', 'menu items'] },
             { id: 'availability', label: 'Availability', description: 'Review availability, date capacity, and closed dates.', aliases: ['slots', 'capacity', 'closed dates'] },
+            { id: 'settings', label: 'Settings', description: 'Control marketing workspace preferences and role settings.', aliases: ['preferences', 'workspace settings'] },
             { id: 'history', label: 'Event History', description: 'Review completed event history and post-event context.', aliases: ['completed events', 'post-event'] },
         ],
     },
@@ -68,6 +69,7 @@ export const ACCOUNTING_WORKSPACE_NAV_GROUPS = [
             { id: 'reconciliation', label: 'Reconciliation', description: 'Review payment exceptions and reconciliation work.', aliases: ['exceptions', 'matching', 'issues'] },
             { id: 'refunds', label: 'Refunds', description: 'Review refundable cancellations and refund processing.', aliases: ['refund queue', 'cancellations'] },
             { id: 'ledger', label: 'Ledger & Receipts', description: 'Review ledger records, receipts, and payment history.', aliases: ['ledger', 'receipts', 'records'] },
+            { id: 'settings', label: 'Settings', description: 'Control accounting workspace preferences and finance role settings.', aliases: ['preferences', 'workspace settings'] },
             { id: 'history', label: 'Event History', description: 'Review event history with finance context.', aliases: ['completed events', 'past events'] },
         ],
     },

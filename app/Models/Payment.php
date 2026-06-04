@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Facades\Cache;
 
 class Payment extends Model
 {
@@ -100,5 +101,20 @@ class Payment extends Model
         }
 
         return in_array($this->status, ['Pending', 'Failed', 'Rejected'], true);
+    }
+
+    protected static function booted(): void
+    {
+        static::saved(fn (Payment $payment) => self::bumpCustomerDashboardVersion($payment));
+        static::deleted(fn (Payment $payment) => self::bumpCustomerDashboardVersion($payment));
+    }
+
+    private static function bumpCustomerDashboardVersion(Payment $payment): void
+    {
+        if (! $payment->booking_id) {
+            return;
+        }
+
+        Cache::increment("customer.dashboard.payment_version.booking.{$payment->booking_id}");
     }
 }

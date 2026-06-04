@@ -131,7 +131,7 @@ const EventDetailDrawer = ({
                 </div>
 
                 <div className="grid gap-3 lg:grid-cols-3">
-                    <DetailCard label="Event total" value={formatMoney(booking.total_cost || booking.budget)} />
+                    <DetailCard label="Event total" value={formatMoney(booking.totalCost ?? booking.total_cost ?? booking.budget)} />
                     <DetailCard label="Travel fee" value={formatMoney(booking.transport_fee)} />
                     <DetailCard label="Live status">
                         <div className="mt-2"><StaffStatusBadge tone={liveStatus.tone === 'success' ? 'good' : liveStatus.tone === 'warning' ? 'warn' : 'muted'}>{liveStatus.label}</StaffStatusBadge></div>

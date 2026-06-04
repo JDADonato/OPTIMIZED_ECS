@@ -444,6 +444,23 @@ const DashboardAccounting = () => {
         }
     };
 
+    const mergeFinanceBooking = (booking, payments = null) => {
+        if (!booking?.id) return;
+
+        const normalizedPayments = Array.isArray(payments?.data)
+            ? payments.data
+            : (Array.isArray(payments) ? payments : null);
+        const nextBooking = normalizedPayments ? { ...booking, payments: normalizedPayments } : booking;
+
+        setBookings(prev => prev.map(item => item.id === nextBooking.id ? { ...item, ...nextBooking } : item));
+        setSelectedFinanceBooking(prev => prev?.id === nextBooking.id ? { ...prev, ...nextBooking } : prev);
+        setEditPaymentModal(prev => (
+            prev.booking?.id === nextBooking.id
+                ? { ...prev, booking: { ...prev.booking, ...nextBooking }, payment: normalizedPayments?.[0] || prev.payment }
+                : prev
+        ));
+    };
+
     const handleLogout = () => {
         router.post('/logout');
     };
@@ -526,18 +543,19 @@ const DashboardAccounting = () => {
         }
     };
 
-    const fetchRefundQueue = async ({ silent = false } = {}) => {
+    const fetchRefundQueue = async ({ silent = false, force = false } = {}) => {
         if (!silent) setLoading(true);
         try {
             const cacheKey = smartCacheKey('accounting:refunds:queue');
             const cached = readSmartCache(cacheKey);
-            if (cached?.data && refundQueue.length === 0) {
+            if (!force && cached?.data && refundQueue.length === 0) {
                 setRefundQueue(Array.isArray(cached.data) ? cached.data : []);
                 setLoading(false);
             }
             const result = await fetchSmartResource('/api/accounting/refunds/queue', {
                 cacheKey,
                 ttl: 30000,
+                force,
             });
             const data = result.raw || result.data;
             setRefundQueue(Array.isArray(data) ? data : []);
@@ -582,7 +600,7 @@ const DashboardAccounting = () => {
                 setToast({ message: data?.message || 'Refund processed successfully!', type: 'success' });
                 setRefundConfirm({ isOpen: false, bookingId: null, refundAmount: 0, action: 'process', refundCaseId: null });
                 clearSmartCacheForPrefix(smartCacheKey('accounting:'));
-                fetchRefundQueue();
+                fetchRefundQueue({ force: true });
                 fetchBookings({ silent: true, force: true });
                 fetchLedger({ silent: true });
             } else {
@@ -671,12 +689,33 @@ const DashboardAccounting = () => {
             setToast({ message: data.message || 'Refund case updated.', type: 'success' });
             setRefundActionPrompt({ isOpen: false, bookingId: null, refundCaseId: null, action: '', title: '', message: '', busy: false });
             clearSmartCacheForPrefix(smartCacheKey('accounting:'));
-            fetchRefundQueue();
+            fetchRefundQueue({ force: true });
             fetchBookings({ silent: true, force: true });
             fetchLedger({ silent: true });
         } catch (error) {
             setToast({ message: error.message || 'Could not update refund case.', type: 'error' });
             setRefundActionPrompt(prev => ({ ...prev, busy: false }));
+        }
+    };
+
+    const syncRefundProviderStatus = async (item) => {
+        const firstCase = item.refund_cases?.[0] || null;
+        if (!item.booking_id || !firstCase?.id) return;
+
+        try {
+            const res = await csrfFetch(`/api/accounting/refund/${item.booking_id}/sync_provider_status`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ refund_case_id: firstCase.id }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(data.error || 'Could not sync provider status.');
+            setToast({ message: data.message || 'Provider refund status synced.', type: 'success' });
+            clearSmartCacheForPrefix(smartCacheKey('accounting:'));
+            fetchRefundQueue({ force: true });
+            fetchBookings({ silent: true, force: true });
+        } catch (error) {
+            setToast({ message: error.message || 'Could not sync provider status.', type: 'error' });
         }
     };
 
@@ -2406,7 +2445,9 @@ const DashboardAccounting = () => {
                                             // Deduct 10% penalty for late cancellation
                                             const penalty = item.total_paid * 0.10;
                                             const refundAmount = item.total_paid - penalty;
-                                            const canRetryProvider = item.refund_cases?.[0]?.next_actions?.includes('retry_provider_refund');
+                                            const firstRefundCase = item.refund_cases?.[0] || null;
+                                            const canRetryProvider = firstRefundCase?.next_actions?.includes('retry_provider_refund');
+                                            const canSyncProvider = firstRefundCase?.next_actions?.includes('sync_provider_status');
 
                                             return (
                                                 <tr key={item.booking_id} className="border-b border-amber-50 hover:bg-[#fffaf3] transition-colors">
@@ -2426,7 +2467,17 @@ const DashboardAccounting = () => {
                                                         PHP {refundAmount > 0 ? refundAmount.toLocaleString() : '0'}
                                                         <div className="text-[10px] text-slate-400 font-normal mt-1">(PHP {penalty.toLocaleString()} fee deducted)</div>
                                                         <div className="mt-1 text-[10px] font-black uppercase tracking-wide text-slate-500">{item.refund_status || 'Needs Review'}</div>
-                                                        {item.refund_cases?.[0]?.notes && <div className="mt-1 max-w-[14rem] text-left text-[10px] font-semibold text-slate-400">{item.refund_cases[0].notes}</div>}
+                                                        {firstRefundCase?.provider_refund_status && (
+                                                            <div className="mt-1 text-[10px] font-black uppercase tracking-wide text-emerald-700">
+                                                                PayMongo: {firstRefundCase.provider_refund_status}
+                                                            </div>
+                                                        )}
+                                                        {firstRefundCase?.provider_refund_id && (
+                                                            <div className="mt-1 max-w-[14rem] truncate text-left text-[10px] font-semibold text-slate-400">
+                                                                Refund ID: {firstRefundCase.provider_refund_id}
+                                                            </div>
+                                                        )}
+                                                        {firstRefundCase?.notes && <div className="mt-1 max-w-[14rem] text-left text-[10px] font-semibold text-slate-400">{firstRefundCase.notes}</div>}
                                                     </td>
                                                     <td className="px-6 py-4 text-right">
                                                         <div className="flex flex-wrap justify-end gap-2">
@@ -2438,6 +2489,7 @@ const DashboardAccounting = () => {
                                                             </button>
                                                             {item.refund_cases?.length > 0 && (
                                                                 <>
+                                                                    {canSyncProvider && <button type="button" onClick={() => syncRefundProviderStatus(item)} className="staff-row-action text-xs">Sync</button>}
                                                                     <button type="button" onClick={() => openRefundActionPrompt(item, 'mark_manually_refunded')} className="staff-row-action text-xs">Manual</button>
                                                                     <button type="button" onClick={() => openRefundActionPrompt(item, 'mark_forfeited')} className="staff-row-action text-xs">Forfeit</button>
                                                                 </>
@@ -2476,7 +2528,9 @@ const DashboardAccounting = () => {
                 onClose={() => setEditPaymentModal({ isOpen: false, payment: null, booking: null })}
                 booking={editPaymentModal.booking}
                 payment={editPaymentModal.payment}
-                onSuccess={() => {
+                onSuccess={(updatedBooking) => {
+                    const responseBooking = updatedBooking?.booking_summary?.data || updatedBooking?.booking_summary || updatedBooking?.booking || updatedBooking;
+                    mergeFinanceBooking(responseBooking, updatedBooking?.payments);
                     setEditPaymentModal({ isOpen: false, payment: null, booking: null });
                     setToast({ message: 'Payment terms updated successfully!', type: 'success' });
                     clearSmartCacheForPrefix(smartCacheKey('accounting:'));

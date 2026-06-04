@@ -910,10 +910,37 @@ const ClientDashboard = () => {
         enabled: Boolean(user),
         interval: online ? 30000 : 45000,
         idleAfter: 180000,
-        refresh: () => fetchData({ silent: true }),
+        refresh: ({ force = false } = {}) => fetchData({ silent: true, force }),
         channels: liveChannels,
         resources: ['bookings', 'finance', 'payments', 'refunds', 'food_tastings', 'feedback', 'announcements', 'catalog'],
     });
+
+    const mergeDashboardBooking = (bookingPayload, paymentsPayload = null) => {
+        const booking = bookingPayload?.data || bookingPayload;
+        if (!booking?.id) return;
+
+        const normalizedPayments = Array.isArray(paymentsPayload?.data)
+            ? paymentsPayload.data
+            : (Array.isArray(paymentsPayload) ? paymentsPayload : (Array.isArray(booking.payments) ? booking.payments : null));
+
+        setData((current) => {
+            const mergeList = (list = []) => list.map((item) => item.id === booking.id ? { ...item, ...booking } : item);
+            const next = {
+                ...current,
+                bookings: mergeList(current.bookings),
+                historyBookings: mergeList(current.historyBookings),
+                payments: normalizedPayments
+                    ? [
+                        ...(current.payments || []).filter((payment) => payment.booking_id !== booking.id),
+                        ...normalizedPayments,
+                    ]
+                    : current.payments,
+            };
+            writeStoredDashboardJson(dashboardDataStorageKey, next);
+
+            return next;
+        });
+    };
 
     const submitFeedback = async (token) => {
         if (!token || submittingFeedback) return;
@@ -1226,10 +1253,11 @@ const ClientDashboard = () => {
             });
             const result = await res.json().catch(() => ({}));
             if (res.ok) {
+                mergeDashboardBooking(result.booking, result.payments);
                 setToast({ message: 'Event details saved.', type: 'success' });
                 setDetailsEditMode(false);
                 setActiveDetailRow(null);
-                fetchData();
+                fetchData({ silent: true, force: true });
             } else {
                 setToast({ message: result.error || 'Unable to save event details.', type: 'error' });
             }
@@ -1364,24 +1392,26 @@ const ClientDashboard = () => {
         }));
     };
 
-    const saveMenuSelection = () => {
+    const saveMenuSelection = async () => {
         setSavingMenu(true);
-        router.put(`/api/bookings/${activeBooking.id}/menu`, {
-            selected_menu: menuSelections
-        }, {
-            preserveScroll: true,
-            onSuccess: () => {
-                setToast({ message: 'Menu selection updated. Pricing and unpaid balances were recalculated.', type: 'success' });
-                setMenuEditMode(false);
-                fetchData();
-            },
-            onError: (errors) => {
-                setToast({ message: errors.error || 'Unable to update menu.', type: 'error' });
-            },
-            onFinish: () => {
-                setSavingMenu(false);
-            }
-        });
+        try {
+            const res = await csrfFetch(`/api/bookings/${activeBooking.id}/menu`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+                body: JSON.stringify({ selected_menu: menuSelections }),
+            });
+            const result = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(result.error || 'Unable to update menu.');
+
+            mergeDashboardBooking(result.booking, result.payments);
+            setToast({ message: 'Menu selection updated. Pricing and unpaid balances were recalculated.', type: 'success' });
+            setMenuEditMode(false);
+            fetchData({ silent: true, force: true });
+        } catch (error) {
+            setToast({ message: error.message || 'Unable to update menu.', type: 'error' });
+        } finally {
+            setSavingMenu(false);
+        }
     };
 
     const handleCoreUpdate = async (event, confirmedPricingChange = false) => {
@@ -1429,13 +1459,14 @@ const ClientDashboard = () => {
                 throw new Error(firstValidationMessage || result.error || 'Unable to update date and guest count.');
             }
 
+            mergeDashboardBooking(result.booking, result.payments);
             const pricingMessage = result.pricing_change
                 ? ` New balance: ${peso(result.pricing_change.remaining_balance || 0)}.`
                 : '';
             setToast({ message: `${result.message || 'Date and guest count updated.'}${pricingMessage}`, type: 'success' });
             setEditCoreModalOpen(false);
             setCorePricePreview(null);
-            fetchData();
+            fetchData({ silent: true, force: true });
         } catch (error) {
             setToast({ message: error.message || 'Unable to update date and guest count.', type: 'error' });
         } finally {

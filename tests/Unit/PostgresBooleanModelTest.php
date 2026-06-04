@@ -5,6 +5,7 @@ namespace Tests\Unit;
 use App\Models\Announcement;
 use App\Models\BookingReviewTask;
 use App\Models\CalendarAvailabilityOverride;
+use App\Models\EventType;
 use App\Models\FeedbackResponse;
 use App\Models\MenuItem;
 use App\Models\Package;
@@ -37,6 +38,7 @@ class PostgresBooleanModelTest extends TestCase
     {
         $announcement = new Announcement(['send_email' => false]);
         $task = new BookingReviewTask(['customer_visible' => true]);
+        $eventType = new EventType(['is_active' => true]);
         $menuItem = new MenuItem(['is_best_seller' => false, 'is_active' => true]);
         $package = new Package(['is_active' => false]);
         $override = new CalendarAvailabilityOverride(['is_locked' => true]);
@@ -44,6 +46,7 @@ class PostgresBooleanModelTest extends TestCase
 
         $this->assertSame('false', $announcement->getAttributes()['send_email']);
         $this->assertSame('true', $task->getAttributes()['customer_visible']);
+        $this->assertSame('true', $eventType->getAttributes()['is_active']);
         $this->assertSame('false', $menuItem->getAttributes()['is_best_seller']);
         $this->assertSame('true', $menuItem->getAttributes()['is_active']);
         $this->assertSame('false', $package->getAttributes()['is_active']);

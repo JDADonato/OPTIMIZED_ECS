@@ -11,6 +11,7 @@ use App\Support\ResourceVersion;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Cache;
 
 /**
  * Ported from: server/controllers/clientDashboardController.js
@@ -35,17 +36,39 @@ class ClientDashboardController extends Controller
         $allBookings->load(['payments' => fn ($query) => $query->active()]);
 
         $bookingIdsForVersion = $allBookings->pluck('id');
+        $bookingIdValuesForVersion = $bookingIdsForVersion->all();
+        $paymentVersionCounter = collect($bookingIdValuesForVersion)
+            ->sum(fn ($bookingId) => (int) Cache::get("customer.dashboard.payment_version.booking.{$bookingId}", 0));
+        $visiblePaymentQuery = fn ($query) => $query
+            ->whereNull('voided_at')
+            ->orWhereIn('status', ['Paid', 'Verified', 'Refunded']);
+
+        $paymentVersionSignature = Payment::query()
+            ->where($visiblePaymentQuery)
+            ->whereIn('booking_id', $bookingIdValuesForVersion)
+            ->orderBy('id')
+            ->get(['id', 'booking_id', 'amount', 'status', 'payment_type', 'due_date', 'updated_at'])
+            ->map(fn (Payment $payment) => implode(':', [
+                $payment->id,
+                $payment->booking_id,
+                (string) $payment->amount,
+                $payment->status,
+                $payment->payment_type,
+                optional($payment->due_date)->toDateString(),
+                optional($payment->updated_at)->format('Uu'),
+            ]))
+            ->implode('|');
         $latestUpdatedAt = collect([
             $allBookings->max('updated_at'),
-            Payment::active()->whereIn('booking_id', $bookingIdsForVersion)->max('updated_at'),
+            Payment::query()->where($visiblePaymentQuery)->whereIn('booking_id', $bookingIdValuesForVersion)->max('updated_at'),
             FoodTasting::where('user_id', $userId)->max('updated_at'),
         ])->filter()->max();
         $versionMeta = ResourceVersion::make(
             $allBookings->count()
-                + Payment::active()->whereIn('booking_id', $bookingIdsForVersion)->count()
+                + Payment::query()->where($visiblePaymentQuery)->whereIn('booking_id', $bookingIdValuesForVersion)->count()
                 + FoodTasting::where('user_id', $userId)->count(),
             $latestUpdatedAt,
-            $bookingIdsForVersion->max()
+            implode(':', [$bookingIdsForVersion->max(), $paymentVersionCounter, sha1($paymentVersionSignature)])
         );
         if (ResourceVersion::matches($request, $versionMeta)) {
             return ResourceVersion::unchanged($versionMeta);
@@ -90,9 +113,10 @@ class ClientDashboardController extends Controller
 
         $bookingIds = $allBookings->pluck('id');
         $payments = Payment::whereIn('booking_id', $bookingIds)
-            ->active()
+            ->where($visiblePaymentQuery)
             ->with('booking:id,event_date,event_name,event_type,client_full_name,total_cost')
             ->orderBy('booking_id')
+            ->orderByRaw("CASE WHEN status IN ('Paid', 'Verified') THEN 0 ELSE 1 END")
             ->orderByRaw("CASE payment_type WHEN 'Reservation' THEN 1 WHEN 'DownPayment' THEN 2 WHEN 'Final' THEN 3 END")
             ->get()
             ->map(function ($p) {

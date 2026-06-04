@@ -2,10 +2,13 @@
 
 namespace App\Models;
 
+use App\Models\Concerns\StoresPostgresBooleans;
 use Illuminate\Database\Eloquent\Model;
 
 class EventType extends Model
 {
+    use StoresPostgresBooleans;
+
     protected $fillable = [
         'slug',
         'label',
@@ -33,5 +36,10 @@ class EventType extends Model
     public function bookings()
     {
         return $this->hasMany(Booking::class);
+    }
+
+    public function setIsActiveAttribute($value): void
+    {
+        $this->storeBooleanAttribute('is_active', $value);
     }
 }

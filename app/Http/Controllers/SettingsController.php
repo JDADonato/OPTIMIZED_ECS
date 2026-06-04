@@ -230,6 +230,74 @@ class SettingsController extends Controller
         return response()->json(['message' => 'Dish pricing updated successfully.', 'item' => $item->fresh()]);
     }
 
+    public function createMenuItem(Request $request)
+    {
+        $data = $request->validate([
+            'name' => 'required|string|max:255',
+            'category' => 'required|in:starter,main,side,dessert,drink',
+            'cost_per_head' => 'required|numeric|min:0',
+            'price_adj' => 'nullable|numeric|min:0',
+            'image' => 'nullable|string',
+            'description' => 'nullable|string',
+            'is_best_seller' => 'nullable|boolean',
+            'is_active' => 'nullable|boolean',
+        ]);
+
+        $item = MenuItem::create([
+            'dish_id' => 'custom_'.strtolower(preg_replace('/[^a-zA-Z0-9]/', '', $data['name'])).'_'.time(),
+            'name' => $data['name'],
+            'category' => $data['category'],
+            'cost_per_head' => $data['cost_per_head'],
+            'price_adj' => $data['price_adj'] ?? 0,
+            'image' => $data['image'] ?? 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&q=80&w=400',
+            'description' => $data['description'] ?? '',
+            'is_best_seller' => $data['is_best_seller'] ?? false,
+            'is_active' => $data['is_active'] ?? true,
+        ]);
+        $this->bumpCatalogVersion();
+
+        app(OperationalBroadcastService::class)
+            ->adminChanged('catalog', 'menu_item', $item->id, 'created', 'Menu item created.');
+
+        return response()->json($item, 201);
+    }
+
+    public function updateMenuItem(Request $request, int $id)
+    {
+        $item = MenuItem::findOrFail($id);
+
+        $data = $request->validate([
+            'name' => 'sometimes|required|string|max:255',
+            'category' => 'sometimes|required|in:starter,main,side,dessert,drink',
+            'cost_per_head' => 'nullable|numeric|min:0',
+            'price_adj' => 'nullable|numeric|min:0',
+            'image' => 'nullable|string',
+            'description' => 'nullable|string',
+            'is_best_seller' => 'nullable|boolean',
+            'is_active' => 'nullable|boolean',
+        ]);
+
+        $item->update($data);
+        $this->bumpCatalogVersion();
+
+        app(OperationalBroadcastService::class)
+            ->adminChanged('catalog', 'menu_item', $item->id, 'updated', 'Menu item updated.');
+
+        return response()->json(['message' => 'Menu item updated successfully.', 'item' => $item->fresh()]);
+    }
+
+    public function archiveMenuItem(int $id)
+    {
+        $item = MenuItem::findOrFail($id);
+        $item->update(['is_active' => false]);
+        $this->bumpCatalogVersion();
+
+        app(OperationalBroadcastService::class)
+            ->adminChanged('catalog', 'menu_item', $item->id, 'archived', 'Menu item archived.');
+
+        return response()->json(['message' => 'Menu item archived successfully.', 'item' => $item->fresh()]);
+    }
+
     public function createEventType(Request $request)
     {
         $data = $request->validate([

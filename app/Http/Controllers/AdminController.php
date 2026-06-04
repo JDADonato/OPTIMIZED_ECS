@@ -230,9 +230,11 @@ class AdminController extends Controller
             return response()->json(['error' => 'Cannot delete this user'], 403);
         }
 
+        $originalEmail = $user->email;
         $releaseSummary = app(AccountLifecycleService::class)->releaseStaffOwnership($user, Auth::id());
 
         $user->forceFill([
+            'email' => $user->email ? sprintf('deactivated+%d+%s@eloquente.invalid', $user->id, now()->format('YmdHis')) : null,
             'account_status' => 'deactivated',
             'deactivated_at' => now(),
             'deactivated_by' => Auth::id(),
@@ -242,7 +244,7 @@ class AdminController extends Controller
         ])->save();
 
         $emailDelivery = app(EmailDeliveryService::class)
-            ->sendToNotifiable($user, new StaffAccountLifecycleNotification('deactivated'), 'staff_deactivated', true);
+            ->sendToAddress($originalEmail, new StaffAccountLifecycleNotification('deactivated'), 'staff_deactivated');
         $this->recordAccountAudit('Staff account deactivated', $user, 'Succeeded', [
             'email_delivery' => $emailDelivery['status'],
             'released_work' => $releaseSummary,

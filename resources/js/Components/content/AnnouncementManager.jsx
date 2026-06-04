@@ -108,7 +108,7 @@ const AnnouncementManager = ({ variant = 'marketing', user }) => {
     const [composerOpen, setComposerOpen] = useState(false);
 
     const isAdminVariant = variant === 'admin';
-    const shellClass = isAdminVariant ? 'admin-content-flat' : 'marketing-panel';
+    const shellClass = isAdminVariant ? 'admin-content-flat admin-announcement-panel' : 'marketing-panel';
     const primaryClass = 'inline-flex items-center justify-center gap-2 rounded-xl bg-[#720101] px-4 py-3 text-sm font-black text-white transition hover:bg-[#5a0101] disabled:opacity-60';
     const secondaryClass = 'inline-flex items-center justify-center gap-2 rounded-xl border border-[#720101]/15 bg-white px-4 py-3 text-sm font-black text-[#720101] transition hover:bg-[#fff7e8] disabled:opacity-60';
     const publishLabel = isFutureDate(form.starts_at) ? 'Schedule Announcement' : 'Publish Now';
@@ -372,7 +372,7 @@ const AnnouncementManager = ({ variant = 'marketing', user }) => {
     ];
 
     return (
-        <div className={isAdminVariant ? 'admin-content-surface' : 'space-y-5'}>
+        <div className={isAdminVariant ? 'admin-content-surface admin-announcement-surface' : 'space-y-5'}>
             {composerOpen && (
                 <div className="fixed inset-0 z-[130] flex items-center justify-center bg-black/45 px-4 py-6 backdrop-blur-sm">
                     <form onSubmit={(event) => submit(event, 'draft')} className="flex max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-[1.35rem] border border-[#720101]/15 bg-white shadow-2xl">

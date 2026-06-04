@@ -303,6 +303,9 @@ Route::middleware(['auth', 'role:Marketing,Admin'])->group(function () {
     Route::post('/api/settings/event-types', [SettingsController::class, 'createEventType']);
     Route::put('/api/settings/event-types/{id}', [SettingsController::class, 'updateEventType']);
     Route::delete('/api/settings/event-types/{id}', [SettingsController::class, 'deleteEventType']);
+    Route::post('/api/settings/menu-items', [SettingsController::class, 'createMenuItem']);
+    Route::put('/api/settings/menu-items/{id}', [SettingsController::class, 'updateMenuItem']);
+    Route::patch('/api/settings/menu-items/{id}/archive', [SettingsController::class, 'archiveMenuItem']);
     Route::put('/api/settings/menu-items/{id}/pricing', [SettingsController::class, 'updateDishPricing']);
     Route::get('/api/admin/announcements', [AnnouncementController::class, 'index']);
     Route::post('/api/admin/announcements', [AnnouncementController::class, 'store'])->middleware('throttle:announcement-action');

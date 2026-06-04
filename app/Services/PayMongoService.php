@@ -245,6 +245,46 @@ class PayMongoService
         ];
     }
 
+    public function retrieveRefund(string $refundId): array
+    {
+        $this->assertConfigured();
+
+        try {
+            $response = Http::baseUrl((string) config('services.paymongo.base_url'))
+                ->withBasicAuth((string) config('services.paymongo.secret_key'), '')
+                ->acceptJson()
+                ->withOptions([
+                    'verify' => $this->certificateAuthorityBundle(),
+                ])
+                ->timeout((int) config('services.paymongo.timeout', 20))
+                ->get("/v1/refunds/{$refundId}")
+                ->throw()
+                ->json();
+        } catch (ConnectionException $exception) {
+            report($exception);
+
+            throw $this->externalFailure(
+                'refund_retrieve',
+                'Unable to connect securely to PayMongo to retrieve refund status.',
+                $exception,
+                retryable: true
+            );
+        } catch (RequestException $exception) {
+            report($exception);
+
+            throw $this->requestFailure('refund_retrieve', $exception, 'PayMongo rejected the refund status request.');
+        }
+
+        return [
+            'id' => Arr::get($response, 'data.id'),
+            'amount' => Arr::get($response, 'data.attributes.amount') !== null
+                ? Arr::get($response, 'data.attributes.amount') / 100
+                : null,
+            'status' => Arr::get($response, 'data.attributes.status'),
+            'raw' => $response,
+        ];
+    }
+
     private function toCentavos(float $amount): int
     {
         return (int) round($amount * 100);

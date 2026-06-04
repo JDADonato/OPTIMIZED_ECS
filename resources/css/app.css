@@ -3704,7 +3704,7 @@
 
   .admin-account-overview-strip {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-columns: auto minmax(0, 1fr) auto;
     align-items: center;
     gap: 1rem;
     padding: .95rem 1rem .85rem;
@@ -3735,10 +3735,21 @@
     padding: .75rem 1rem;
   }
 
+  .admin-account-segment-tabs {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: .3rem;
+    border: 1px solid rgba(114,1,1,.1);
+    border-radius: .85rem;
+    background: #f8f3ea;
+    padding: .25rem;
+  }
+
   .admin-account-segment-button {
     display: inline-flex;
     align-items: center;
-    gap: .1rem;
+    gap: .42rem;
     border: 1px solid transparent;
     border-radius: .75rem;
     padding: .58rem .85rem;
@@ -3758,6 +3769,21 @@
     border-color: #720101;
     background: #720101;
     color: #fff;
+  }
+
+  .admin-account-segment-button em {
+    display: inline-flex;
+    min-width: 1.35rem;
+    align-items: center;
+    justify-content: center;
+    border-radius: 999px;
+    background: rgba(159, 101, 0, .14);
+    color: inherit;
+    font-size: .7rem;
+    font-style: normal;
+    font-weight: 950;
+    line-height: 1;
+    padding: .22rem .38rem;
   }
 
   .admin-account-workspace {
@@ -6549,7 +6575,12 @@
   .staff-workspace-skeleton-head span,
   .staff-workspace-skeleton-head strong,
   .staff-workspace-skeleton-metrics i,
-  .staff-workspace-skeleton-surface .staff-filter-bar span {
+  .staff-workspace-skeleton-surface .staff-filter-bar span,
+  .staff-workspace-skeleton-navbar .staff-workspace-skeleton-search,
+  .staff-workspace-skeleton-navbar .staff-workspace-skeleton-action,
+  .staff-workspace-skeleton-navbar .staff-workspace-skeleton-avatar,
+  .staff-workspace-skeleton-command span,
+  .staff-workspace-skeleton-card-grid span {
     display: block;
     border-radius: 999px;
     background: linear-gradient(90deg, rgba(226, 218, 209, .62) 0%, rgba(250, 247, 242, .9) 45%, rgba(226, 218, 209, .5) 60%, rgba(250, 247, 242, .9) 78%, rgba(226, 218, 209, .62) 100%);
@@ -6626,6 +6657,77 @@
     background-color: rgba(255,255,255,.72);
   }
 
+  .staff-workspace-skeleton-navbar .staff-workspace-switcher span {
+    display: inline-flex;
+    min-height: 2rem;
+    align-items: center;
+    border-radius: 999px;
+    color: rgba(255, 255, 255, .78);
+    font-size: .68rem;
+    font-weight: 950;
+    letter-spacing: .08em;
+    padding: 0 .82rem;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+
+  .staff-workspace-skeleton-navbar .staff-workspace-switcher span.is-active {
+    background: #f0aa0b;
+    color: #1a1a1a;
+  }
+
+  .staff-workspace-skeleton-brand-text {
+    background: transparent !important;
+    color: #f0aa0b !important;
+  }
+
+  .staff-workspace-skeleton-search {
+    width: 100%;
+    height: 2.55rem;
+    opacity: .38;
+  }
+
+  .staff-workspace-skeleton-action,
+  .staff-workspace-skeleton-avatar {
+    width: 2.35rem;
+    height: 2.35rem;
+    opacity: .42;
+  }
+
+  .staff-workspace-skeleton-surface.is-modern {
+    display: grid;
+    gap: .9rem;
+    border-color: rgba(114, 1, 1, .08);
+    background: #fffefb;
+    padding: 1rem;
+  }
+
+  .staff-workspace-skeleton-command {
+    display: grid;
+    grid-template-columns: minmax(16rem, 1fr) repeat(3, minmax(8rem, .46fr));
+    gap: .72rem;
+    border-bottom: 1px solid rgba(114, 1, 1, .08);
+    padding-bottom: .9rem;
+  }
+
+  .staff-workspace-skeleton-command span {
+    height: 2.7rem;
+    border: 1px solid rgba(114, 1, 1, .08);
+    border-radius: .85rem;
+  }
+
+  .staff-workspace-skeleton-card-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: .75rem;
+  }
+
+  .staff-workspace-skeleton-card-grid span {
+    min-height: 6.75rem;
+    border: 1px solid rgba(114, 1, 1, .08);
+    border-radius: .9rem;
+  }
+
   @keyframes staffSkeletonPulse {
     0% { background-position: 100% 0; }
     100% { background-position: -100% 0; }
@@ -6676,6 +6778,55 @@
   .admin-catalog-action-strip {
     justify-content: flex-end;
     padding-block: .78rem;
+  }
+
+  .admin-catalog-toolbar {
+    display: grid;
+    grid-template-columns: minmax(15rem, .9fr) minmax(0, 1.35fr) auto;
+    align-items: end;
+    gap: .85rem;
+  }
+
+  .admin-catalog-toolbar .admin-command-copy {
+    min-width: 0;
+  }
+
+  .admin-catalog-toolbar .admin-command-copy strong {
+    display: block;
+    margin-top: .12rem;
+    color: #0f172a;
+    font-size: 1rem;
+    font-weight: 950;
+    line-height: 1.1;
+  }
+
+  .admin-catalog-toolbar .admin-command-copy span {
+    display: block;
+    margin-top: .18rem;
+    color: #64748b;
+    font-size: .76rem;
+    font-weight: 750;
+    line-height: 1.35;
+  }
+
+  .admin-catalog-tabs {
+    min-width: 0;
+    border: 1px solid rgba(114,1,1,.08);
+    border-radius: .85rem;
+    background: #fbf8f2;
+    padding: .25rem;
+  }
+
+  .admin-catalog-tabs .staff-catalog-tab {
+    border: 0;
+    border-radius: .65rem;
+    padding: .58rem .78rem;
+  }
+
+  .admin-catalog-toolbar-actions {
+    display: flex;
+    min-width: max-content;
+    justify-content: flex-end;
   }
 
   .staff-catalog-tabs {
@@ -8923,6 +9074,31 @@
     min-width: 11rem;
   }
 
+  .marketing-booking-search-row {
+    grid-template-columns: minmax(22rem, 1fr) auto;
+  }
+
+  .marketing-booking-search-row .staff-ops-search-controls {
+    align-items: center;
+  }
+
+  .marketing-booking-filter-toggle.is-active {
+    border-color: rgba(114,1,1,.35);
+    background: #fff7e8;
+    color: #720101;
+  }
+
+  .marketing-booking-advanced-filters {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(8.75rem, 1fr));
+    gap: .65rem;
+    padding: 1rem;
+  }
+
+  .marketing-booking-advanced-filters .staff-control {
+    min-width: 0;
+  }
+
   .staff-decision-brief {
     display: grid;
     gap: .85rem;
@@ -9057,6 +9233,16 @@
       align-items: stretch;
     }
 
+    .admin-catalog-toolbar {
+      grid-template-columns: minmax(0, 1fr);
+      align-items: stretch;
+    }
+
+    .admin-catalog-toolbar-actions {
+      min-width: 0;
+      justify-content: flex-start;
+    }
+
     .admin-account-actions {
       justify-content: flex-start;
     }
@@ -9144,6 +9330,11 @@
       grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 
+    .staff-workspace-skeleton-command,
+    .staff-workspace-skeleton-card-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
     .staff-sidebar-nav {
       display: flex;
       overflow-x: auto;
@@ -9208,6 +9399,11 @@
     }
 
     .staff-workspace-skeleton-metrics {
+      grid-template-columns: 1fr;
+    }
+
+    .staff-workspace-skeleton-command,
+    .staff-workspace-skeleton-card-grid {
       grid-template-columns: 1fr;
     }
 
@@ -9279,6 +9475,15 @@
     .staff-ops-search-controls .staff-control {
       width: 100%;
       min-width: 0;
+    }
+
+    .marketing-booking-search-row {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .marketing-booking-search-row .staff-ops-search-controls,
+    .marketing-booking-advanced-filters {
+      grid-template-columns: minmax(0, 1fr);
     }
 
     .staff-settings-nav {
@@ -17334,4 +17539,73 @@ select.admin-select:not([multiple])::-ms-expand {
   .staff-role-shell .staff-page-header {
     grid-template-columns: 1fr;
   }
+}
+
+/* Keep the Admin public-content tabs centered inside their rounded rail. */
+.admin-page .staff-catalog-tabs.admin-catalog-tabs {
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(114, 1, 1, .08);
+  border-radius: .85rem;
+  background: #fbf8f2;
+  padding: .45rem;
+}
+
+.admin-page .staff-catalog-tabs.admin-catalog-tabs .staff-catalog-tab {
+  border: 0;
+  border-radius: .65rem;
+  padding: .62rem 1rem;
+}
+
+/* Admin public content announcements need to opt out of broad admin command-grid rules. */
+.admin-page .admin-surface-grid > .admin-announcement-host {
+  width: 100%;
+  min-width: 0;
+}
+
+.admin-page .admin-surface-grid > .admin-announcement-host,
+.admin-page .admin-announcement-surface,
+.admin-page .admin-announcement-surface .admin-content-workspace {
+  border: 0;
+  border-radius: 0;
+  background: #fffefb;
+  box-shadow: none;
+}
+
+.admin-page .admin-announcement-surface {
+  display: block;
+  width: 100%;
+  min-width: 0;
+}
+
+.admin-page .admin-announcement-surface .admin-content-workspace {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  border-top: 1px solid rgba(114, 1, 1, .08);
+  overflow: visible;
+}
+
+.admin-page .admin-announcement-panel {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  border-radius: 0;
+  background: #fffefb;
+  padding: 0;
+  box-shadow: none;
+}
+
+.admin-page .admin-announcement-panel > * {
+  min-width: 0;
+}
+
+.admin-page .admin-announcement-loading {
+  margin: 1rem;
+}
+
+.admin-page table td .admin-menu-item-edit-button,
+.admin-page .admin-menu-item-edit-button {
+  color: #fff;
 }

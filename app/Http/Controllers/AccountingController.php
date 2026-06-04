@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Exceptions\ExternalServiceException;
+use App\Http\Resources\BookingSummaryResource;
 use App\Http\Resources\PaymentResource;
 use App\Models\Booking;
 use App\Models\Payment;
@@ -469,6 +470,8 @@ class AccountingController extends Controller
             'success' => true,
             'message' => 'Payment terms updated successfully.',
             'booking' => $booking,
+            'booking_summary' => new BookingSummaryResource($booking),
+            'payments' => PaymentResource::collection($booking->payments),
         ]);
     }
 
@@ -785,7 +788,7 @@ class AccountingController extends Controller
             ->with([
                 'user:id,full_name,username,email,phone,account_status',
                 'payments' => fn ($query) => $query->active()->whereIn('status', ['Verified', 'Paid']),
-                'refundCases:id,booking_id,payment_id,amount,non_refundable_amount,status,last_action,provider_refund_id,notes,updated_at',
+                'refundCases:id,booking_id,payment_id,amount,non_refundable_amount,status,last_action,provider_refund_id,provider_refund_status,provider_synced_at,notes,updated_at',
             ])
             ->where('status', 'Cancelled')
             ->whereHas('payments', fn ($query) => $query->active()->whereIn('status', ['Verified', 'Paid']))
@@ -818,6 +821,8 @@ class AccountingController extends Controller
                         'status' => $case->status,
                         'last_action' => $case->last_action,
                         'provider_refund_id' => $case->provider_refund_id,
+                        'provider_refund_status' => $case->provider_refund_status,
+                        'provider_synced_at' => $case->provider_synced_at?->toIso8601String(),
                         'notes' => $case->notes,
                         'updated_at' => $case->updated_at?->toIso8601String(),
                         'next_actions' => $this->refundCaseNextActions($case),
@@ -952,6 +957,8 @@ class AccountingController extends Controller
                             'resolved_by' => Auth::id(),
                             'resolved_at' => now(),
                             'provider_refund_id' => data_get($providerResponse, 'id'),
+                            'provider_refund_status' => data_get($providerResponse, 'status'),
+                            'provider_synced_at' => now(),
                             'provider_response' => $providerResponse,
                         ]);
                     } catch (ExternalServiceException $apiException) {
@@ -964,6 +971,8 @@ class AccountingController extends Controller
                         $refundCase->update([
                             'status' => 'Failed',
                             'last_action' => 'provider_refund_failed',
+                            'provider_refund_status' => 'failed',
+                            'provider_synced_at' => now(),
                             'provider_response' => $apiException->safePayload(),
                             'notes' => 'Automatic provider refund failed. Review PayMongo logs before retrying.',
                         ]);
@@ -989,6 +998,8 @@ class AccountingController extends Controller
                         $refundCase->update([
                             'status' => 'Failed',
                             'last_action' => 'provider_refund_failed',
+                            'provider_refund_status' => 'failed',
+                            'provider_synced_at' => now(),
                             'provider_response' => ['error' => SensitiveDataRedactor::redact($apiException->getMessage())],
                             'notes' => 'Automatic provider refund failed. Review PayMongo logs before retrying.',
                         ]);
@@ -1014,6 +1025,8 @@ class AccountingController extends Controller
                     $refundCase->update([
                         'status' => 'Failed',
                         'last_action' => 'missing_provider_payment_id',
+                        'provider_refund_status' => 'missing_payment_id',
+                        'provider_synced_at' => now(),
                         'notes' => $safeMissingReferenceMessage,
                     ]);
                     PaymentEventService::record(
@@ -1103,7 +1116,7 @@ class AccountingController extends Controller
             'notes' => ['nullable', 'string', 'max:3000'],
         ]);
 
-        if (! in_array($action, ['retry_provider_refund', 'mark_manually_refunded', 'mark_forfeited', 'close_no_refund_due', 'reopen_manual_review'], true)) {
+        if (! in_array($action, ['retry_provider_refund', 'sync_provider_status', 'mark_manually_refunded', 'mark_forfeited', 'close_no_refund_due', 'reopen_manual_review'], true)) {
             return response()->json(['error' => 'Unsupported refund action.'], 422);
         }
 
@@ -1145,6 +1158,10 @@ class AccountingController extends Controller
 
         if ($action === 'retry_provider_refund') {
             return $this->retryProviderRefund($case, $payMongo);
+        }
+
+        if ($action === 'sync_provider_status') {
+            return $this->syncProviderRefundStatus($case, $payMongo);
         }
 
         match ($action) {
@@ -1227,6 +1244,8 @@ class AccountingController extends Controller
             $case->update([
                 'status' => 'Failed',
                 'last_action' => 'missing_provider_payment_id',
+                'provider_refund_status' => 'missing_payment_id',
+                'provider_synced_at' => now(),
                 'notes' => 'This payment cannot be refunded automatically because the original online payment reference is missing.',
             ]);
 
@@ -1255,6 +1274,8 @@ class AccountingController extends Controller
         $case->update([
             'status' => 'Processing',
             'last_action' => 'retry_provider_refund',
+            'provider_refund_status' => null,
+            'provider_synced_at' => null,
             'provider_response' => null,
         ]);
 
@@ -1272,6 +1293,8 @@ class AccountingController extends Controller
                 'resolved_by' => Auth::id(),
                 'resolved_at' => now(),
                 'provider_refund_id' => data_get($providerResponse, 'id'),
+                'provider_refund_status' => data_get($providerResponse, 'status'),
+                'provider_synced_at' => now(),
                 'provider_response' => $providerResponse,
             ]);
 
@@ -1301,6 +1324,8 @@ class AccountingController extends Controller
             $case->update([
                 'status' => 'Failed',
                 'last_action' => 'provider_refund_failed',
+                'provider_refund_status' => 'failed',
+                'provider_synced_at' => now(),
                 'provider_response' => $e->safePayload(),
                 'notes' => 'Automatic provider refund failed. Review PayMongo logs before retrying.',
             ]);
@@ -1325,6 +1350,8 @@ class AccountingController extends Controller
             $case->update([
                 'status' => 'Failed',
                 'last_action' => 'provider_refund_failed',
+                'provider_refund_status' => 'failed',
+                'provider_synced_at' => now(),
                 'provider_response' => ['error' => SensitiveDataRedactor::redact($e->getMessage())],
                 'notes' => 'Automatic provider refund failed. Review PayMongo logs before retrying.',
             ]);
@@ -1344,14 +1371,72 @@ class AccountingController extends Controller
         }
     }
 
+    private function syncProviderRefundStatus(RefundCase $case, PayMongoService $payMongo)
+    {
+        if (! $case->provider_refund_id) {
+            return response()->json(['error' => 'This refund case does not have a PayMongo refund ID yet.'], 422);
+        }
+
+        try {
+            $providerResponse = $payMongo->retrieveRefund($case->provider_refund_id);
+            $providerStatus = data_get($providerResponse, 'status');
+
+            $case->update([
+                'provider_refund_status' => $providerStatus,
+                'provider_synced_at' => now(),
+                'provider_response' => $providerResponse,
+                'last_action' => 'sync_provider_status',
+            ]);
+
+            if (in_array($providerStatus, ['succeeded', 'paid', 'refunded'], true) && $case->payment && in_array($case->payment->status, ['Paid', 'Verified'], true)) {
+                $case->payment->update([
+                    'status' => 'Refunded',
+                    'verified_by' => Auth::user()->username ?? 'accounting',
+                    'verified_at' => now(),
+                ]);
+            }
+
+            app(OperationalBroadcastService::class)
+                ->financeChanged($case->booking, 'refund_case', $case->id, 'sync_provider_status', 'Provider refund status synced.');
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Provider refund status synced.',
+                'refund_case' => $case->fresh(),
+            ]);
+        } catch (ExternalServiceException $e) {
+            $case->update([
+                'provider_synced_at' => now(),
+                'provider_response' => $e->safePayload(),
+                'last_action' => 'sync_provider_status_failed',
+            ]);
+
+            return response()->json(['error' => 'Unable to sync PayMongo refund status.', 'reference' => $e->referenceCode()], 500);
+        } catch (\Throwable $e) {
+            $case->update([
+                'provider_synced_at' => now(),
+                'provider_response' => ['error' => SensitiveDataRedactor::redact($e->getMessage())],
+                'last_action' => 'sync_provider_status_failed',
+            ]);
+
+            return response()->json(['error' => 'Unable to sync PayMongo refund status.'], 500);
+        }
+    }
+
     private function refundCaseNextActions(RefundCase $case): array
     {
-        return match ($case->status) {
+        $actions = match ($case->status) {
             'Failed', 'Manual Review' => ['retry_provider_refund', 'mark_manually_refunded', 'mark_forfeited', 'close_no_refund_due'],
             'Requested', 'Approved', 'Processing' => ['mark_manually_refunded', 'reopen_manual_review'],
             'Refunded', 'Manual Refunded', 'Forfeited', 'No Refund Due' => ['reopen_manual_review'],
             default => ['reopen_manual_review'],
         };
+
+        if ($case->provider_refund_id && ! in_array('sync_provider_status', $actions, true)) {
+            array_unshift($actions, 'sync_provider_status');
+        }
+
+        return $actions;
     }
 
     private function paymentWithBookingContext(Payment $payment): array

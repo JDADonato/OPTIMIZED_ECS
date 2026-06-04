@@ -119,7 +119,7 @@ const PaymentTermEditorModal = ({ isOpen, onClose, booking, payment, onSuccess }
 
             const data = await res.json().catch(() => ({}));
             if (res.ok) {
-                onSuccess(data.booking);
+                onSuccess(data);
             } else {
                 setError(data.error || 'We could not save the payment schedule.');
             }

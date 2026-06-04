@@ -20,6 +20,8 @@ class RefundCase extends Model
         'resolved_by',
         'resolved_at',
         'provider_refund_id',
+        'provider_refund_status',
+        'provider_synced_at',
         'provider_response',
         'notes',
     ];
@@ -28,6 +30,7 @@ class RefundCase extends Model
         'amount' => 'decimal:2',
         'non_refundable_amount' => 'decimal:2',
         'provider_response' => 'array',
+        'provider_synced_at' => 'datetime',
         'resolved_at' => 'datetime',
     ];
 

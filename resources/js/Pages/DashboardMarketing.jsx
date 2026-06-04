@@ -7,6 +7,7 @@ import { Filter } from 'lucide-react';
 import FlashToast from '../Components/common/FlashToast';
 import ConfirmModal from '../Components/common/ConfirmModal';
 import PromptModal from '../Components/common/PromptModal';
+import SmartImage from '../Components/common/SmartImage';
 import StaffPagination from '../Components/staff/StaffPagination';
 import StaffWorkspaceLayout from '../Layouts/StaffWorkspaceLayout';
 import StaffNavbarSearch from '../Components/staff/StaffNavbarSearch';
@@ -74,12 +75,9 @@ const MARKETING_TAB_ALIASES = {
 const BOOKING_BACKED_TABS = ['calendar', 'bookings'];
 const ACTIVE_CALENDAR_STATUSES = ['pending', 'confirmed'];
 const BOOKING_WORK_VIEWS = [
-    { id: 'needs-action', label: 'Needs action' },
-    { id: 'claim', label: 'Available to claim' },
-    { id: 'mine', label: 'My bookings' },
-    { id: 'transfers', label: 'Transfers to me' },
-    { id: 'waiting', label: 'Waiting on customer' },
-    { id: 'all', label: 'All active' },
+    { id: 'needs-action', label: 'Needs Action' },
+    { id: 'mine', label: 'Assigned to Me' },
+    { id: 'waiting', label: 'Waiting' },
 ];
 
 const emptyPackageForm = (defaultType = '') => ({
@@ -226,6 +224,12 @@ const DashboardMarketing = () => {
     const [eventTypeForm, setEventTypeForm] = useState(emptyEventTypeForm());
     const [editingEventTypeId, setEditingEventTypeId] = useState(null);
     const [activeMenuCategory, setActiveMenuCategory] = useState('starter');
+    const [menuItemModal, setMenuItemModal] = useState({ open: false, mode: 'add', data: null });
+    const [menuItemForm, setMenuItemForm] = useState({
+        name: '', category: 'starter', cost_per_head: '', price_adj: '0',
+        image: '', description: '', is_best_seller: false,
+    });
+    const [menuItemFormLoading, setMenuItemFormLoading] = useState(false);
     const [activeConfigTab, setActiveConfigTab] = useState('packages');
     const [catalogDrawer, setCatalogDrawer] = useState(null);
     const [packageForm, setPackageForm] = useState(emptyPackageForm());
@@ -236,7 +240,8 @@ const DashboardMarketing = () => {
     const [inquirySearch, setInquirySearch] = useState('');
     const [inquiryStatusFilter, setInquiryStatusFilter] = useState('all');
     const [bookingReviewView, setBookingReviewView] = useState('needs-action');
-    const [inquirySort, setInquirySort] = useState('newest');
+    const [bookingFiltersOpen, setBookingFiltersOpen] = useState(false);
+    const [inquirySort, setInquirySort] = useState('eventDateAsc');
     const [inquiryDateFrom, setInquiryDateFrom] = useState('');
     const [inquiryDateTo, setInquiryDateTo] = useState('');
     const [inquiryPage, setInquiryPage] = useState(1);
@@ -308,7 +313,7 @@ const DashboardMarketing = () => {
             setInquiryStatusFilter('all');
             setInquiryDateFrom('');
             setInquiryDateTo('');
-            setBookingReviewView('all');
+            setBookingReviewView('needs-action');
             setInquiryPage(1);
         } else if (targetTab === 'leads') {
             setLeadFilters((current) => ({
@@ -344,6 +349,18 @@ const DashboardMarketing = () => {
             setMarketingContextPanelOpen(false);
         }
     }, [hasMarketingStaffContext]);
+
+    useEffect(() => {
+        if (activeConfigTab === 'preview') {
+            setActiveConfigTab('announcements');
+        }
+    }, [activeConfigTab]);
+
+    useEffect(() => {
+        if (!BOOKING_WORK_VIEWS.some((view) => view.id === bookingReviewView)) {
+            setBookingReviewView('needs-action');
+        }
+    }, [bookingReviewView]);
 
     useEffect(() => {
         setInquiryPage(1);
@@ -960,13 +977,13 @@ const DashboardMarketing = () => {
         );
     };
 
-    const handleDishPricingUpdate = async (item, cost, adj) => {
+    const handleDishPricingUpdate = async (item, cost) => {
         setSettingsSaving(true);
         try {
             const response = await csrfFetch(`/api/settings/menu-items/${item.id}/pricing`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ cost_per_head: cost, price_adj: adj }),
+                body: JSON.stringify({ cost_per_head: cost, price_adj: 0 }),
             });
             const data = await response.json().catch(() => ({}));
             if (!response.ok) throw new Error(data.error || data.message || 'Could not update dish pricing.');
@@ -976,6 +993,85 @@ const DashboardMarketing = () => {
         } catch (error) {
             console.error('Error updating dish pricing:', error);
             toast.error(error.message || 'Could not update dish pricing.');
+        } finally {
+            setSettingsSaving(false);
+        }
+    };
+
+    const openMenuItemModal = () => {
+        setMenuItemForm({
+            name: '',
+            category: activeMenuCategory,
+            cost_per_head: '',
+            price_adj: '0',
+            image: '',
+            description: '',
+            is_best_seller: false,
+        });
+        setMenuItemModal({ open: true, mode: 'add', data: null });
+    };
+
+    const openEditMenuItemModal = (item) => {
+        const combinedPrice = Number(item.cost_per_head || 0) + Number(item.price_adj || 0);
+        setMenuItemForm({
+            name: item.name || '',
+            category: item.category || activeMenuCategory,
+            cost_per_head: Number.isFinite(combinedPrice) ? combinedPrice : '',
+            price_adj: '0',
+            image: item.image || '',
+            description: item.description || '',
+            is_best_seller: Boolean(item.is_best_seller),
+        });
+        setMenuItemModal({ open: true, mode: 'edit', data: item });
+    };
+
+    const closeMenuItemModal = () => {
+        setMenuItemModal({ open: false, mode: 'add', data: null });
+    };
+
+    const handleMenuItemSubmit = async (event) => {
+        event.preventDefault();
+        setMenuItemFormLoading(true);
+        const isEditing = menuItemModal.mode === 'edit';
+        const itemId = menuItemModal.data?.id;
+
+        try {
+            const response = await csrfFetch(isEditing ? `/api/settings/menu-items/${itemId}` : '/api/settings/menu-items', {
+                method: isEditing ? 'PUT' : 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    ...menuItemForm,
+                    cost_per_head: parseFloat(menuItemForm.cost_per_head) || 0,
+                    price_adj: 0,
+                    image: menuItemForm.image || null,
+                }),
+            });
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(data.error || data.message || 'Could not save menu item.');
+
+            toast.success(data.message || (isEditing ? 'Menu item updated.' : 'Menu item created.'));
+            closeMenuItemModal();
+            bustMarketingSettingsCache();
+            fetchMarketingSettings();
+        } catch (error) {
+            toast.error(error.message || 'Could not save menu item.');
+        } finally {
+            setMenuItemFormLoading(false);
+        }
+    };
+
+    const handleArchiveMenuItem = async (item) => {
+        setSettingsSaving(true);
+        try {
+            const response = await csrfFetch(`/api/settings/menu-items/${item.id}/archive`, { method: 'PATCH' });
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(data.error || data.message || 'Could not archive menu item.');
+
+            toast.success(data.message || 'Menu item archived.');
+            bustMarketingSettingsCache();
+            fetchMarketingSettings();
+        } catch (error) {
+            toast.error(error.message || 'Could not archive menu item.');
         } finally {
             setSettingsSaving(false);
         }
@@ -1298,7 +1394,7 @@ const DashboardMarketing = () => {
             setInquiryStatusFilter('all');
             setInquiryDateFrom('');
             setInquiryDateTo('');
-            setBookingReviewView('all');
+            setBookingReviewView('needs-action');
             setActiveTab('bookings');
         }
 
@@ -1450,7 +1546,7 @@ const DashboardMarketing = () => {
             setInquiryStatusFilter('all');
             setInquiryDateFrom('');
             setInquiryDateTo('');
-            setBookingReviewView('all');
+            setBookingReviewView('needs-action');
             setInquiryPage(1);
         }
         setActiveTab(tab);
@@ -2273,25 +2369,20 @@ const DashboardMarketing = () => {
             const ownedByMe = Number(booking.owner_id ?? booking.assigned_to) === Number(user?.id);
             const waitingOnCustomer = String(booking.review_status || '').toLowerCase() === 'needs customer details' || Boolean(booking.clarification_request && !booking.clarification_response);
             const customerResponded = String(booking.review_status || '').toLowerCase() === 'clarification received' || Boolean(booking.clarification_response);
-            if (!booking.assigned_to) counts.claim += 1;
             if (ownedByMe) counts.mine += 1;
-            if (booking.can_accept_transfer) counts.transfers += 1;
             if (waitingOnCustomer) counts.waiting += 1;
             if (!booking.assigned_to || booking.can_accept_transfer || (ownedByMe && customerResponded) || (ownedByMe && !waitingOnCustomer)) counts['needs-action'] += 1;
-            counts.all += 1;
             return counts;
-        }, { 'needs-action': 0, claim: 0, mine: 0, transfers: 0, waiting: 0, all: 0 });
+        }, { 'needs-action': 0, mine: 0, waiting: 0 });
         const pendingTransferBookings = reviewableBookings.filter(booking => booking.can_accept_transfer);
         const viewBookings = reviewableBookings.filter((booking) => {
             const ownedByMe = Number(booking.owner_id ?? booking.assigned_to) === Number(user?.id);
             const waitingOnCustomer = String(booking.review_status || '').toLowerCase() === 'needs customer details' || Boolean(booking.clarification_request && !booking.clarification_response);
             const customerResponded = String(booking.review_status || '').toLowerCase() === 'clarification received' || Boolean(booking.clarification_response);
             if (bookingReviewView === 'needs-action') return !booking.assigned_to || booking.can_accept_transfer || (ownedByMe && customerResponded) || (ownedByMe && !waitingOnCustomer);
-            if (bookingReviewView === 'claim') return !booking.assigned_to;
             if (bookingReviewView === 'mine') return ownedByMe;
-            if (bookingReviewView === 'transfers') return booking.can_accept_transfer;
             if (bookingReviewView === 'waiting') return waitingOnCustomer;
-            return true;
+            return false;
         });
         const pendingBookings = viewBookings
             .filter((booking) => {
@@ -2332,6 +2423,17 @@ const DashboardMarketing = () => {
                 return inquirySort === 'oldest' || inquirySort === 'eventDateAsc' ? leftDate - rightDate : rightDate - leftDate;
             });
         const pagedPendingBookings = pendingBookings.slice((inquiryPage - 1) * inquiryPerPage, inquiryPage * inquiryPerPage);
+        const advancedFilterCount = [
+            inquiryStatusFilter !== 'all',
+            inquirySort !== 'eventDateAsc',
+            Boolean(inquiryDateFrom),
+            Boolean(inquiryDateTo),
+        ].filter(Boolean).length;
+        const emptyBookingMessage = {
+            'needs-action': 'No bookings need action right now.',
+            mine: 'No bookings are assigned to you.',
+            waiting: 'No bookings are waiting on customer details.',
+        }[bookingReviewView] || 'No bookings match this view.';
         return (
             <div className="staff-ops-workspace">
                 <StaffOpsPanel
@@ -2387,40 +2489,47 @@ const DashboardMarketing = () => {
                     </div>
                 )}
                 <StaffOpsSearchBar
+                    className="marketing-booking-search-row"
                     value={inquirySearch}
                     onChange={handleInquirySearchChange}
                     placeholder="Search booking, customer, phone, or city"
                 >
-                    <select value={inquiryStatusFilter} onChange={(event) => setInquiryStatusFilter(event.target.value)} className="staff-control">
-                        <option value="all">All statuses</option>
-                        <option value="submitted">Submitted</option>
-                        <option value="under review">Under Review</option>
-                        <option value="needs customer details">Needs Customer Details</option>
-                        <option value="clarification received">Clarification Received</option>
-                    </select>
-                    <select value={inquirySort} onChange={(event) => setInquirySort(event.target.value)} className="staff-control">
-                        <option value="eventDateAsc">Event date ascending</option>
-                        <option value="eventDateDesc">Event date descending</option>
-                        <option value="newest">Newest</option>
-                        <option value="oldest">Oldest</option>
-                        <option value="az">A-Z</option>
-                        <option value="za">Z-A</option>
-                    </select>
-                    <input type="date" value={inquiryDateFrom} onChange={(event) => setInquiryDateFrom(event.target.value)} className="staff-control" />
-                    <input type="date" value={inquiryDateTo} onChange={(event) => setInquiryDateTo(event.target.value)} className="staff-control" />
+                    <button type="button" onClick={() => setBookingFiltersOpen((open) => !open)} className={`staff-row-action marketing-booking-filter-toggle ${bookingFiltersOpen || advancedFilterCount > 0 ? 'is-active' : ''}`}>
+                        Filters{advancedFilterCount > 0 ? ` (${advancedFilterCount})` : ''}
+                    </button>
                 </StaffOpsSearchBar>
+                {bookingFiltersOpen && (
+                    <div className="marketing-panel marketing-booking-advanced-filters">
+                        <select value={inquiryStatusFilter} onChange={(event) => setInquiryStatusFilter(event.target.value)} className="staff-control">
+                            <option value="all">All active statuses</option>
+                            <option value="submitted">Submitted</option>
+                            <option value="under review">Under Review</option>
+                            <option value="needs customer details">Needs Customer Details</option>
+                            <option value="clarification received">Clarification Received</option>
+                        </select>
+                        <select value={inquirySort} onChange={(event) => setInquirySort(event.target.value)} className="staff-control">
+                            <option value="eventDateAsc">Event date ascending</option>
+                            <option value="eventDateDesc">Event date descending</option>
+                            <option value="newest">Newest</option>
+                            <option value="oldest">Oldest</option>
+                            <option value="az">A-Z</option>
+                            <option value="za">Z-A</option>
+                        </select>
+                        <input type="date" value={inquiryDateFrom} onChange={(event) => setInquiryDateFrom(event.target.value)} className="staff-control" aria-label="Event date from" />
+                        <input type="date" value={inquiryDateTo} onChange={(event) => setInquiryDateTo(event.target.value)} className="staff-control" aria-label="Event date to" />
+                    </div>
+                )}
 
                 {(
                     <div className="marketing-panel overflow-hidden">
                         <ul className="divide-y divide-amber-100/70">
-                            {pendingBookings.length === 0 ? <li className="p-8 text-gray-500 text-center">No bookings match this view.</li> : null}
+                            {pendingBookings.length === 0 ? <li className="p-8 text-gray-500 text-center">{emptyBookingMessage}</li> : null}
                             {pagedPendingBookings.map(booking => {
                                 const isClaiming = Boolean(claimingBookingIds[booking.id]);
                                 const canEdit = canEditBooking(booking);
                                 const canClaim = canClaimBooking(booking) && !isClaiming;
                                 const pendingTransferToMe = Boolean(booking.can_accept_transfer);
                                 const hasPendingTransfer = Boolean(booking.transfer_requested_to);
-                                const isClaimQueue = bookingReviewView === 'claim';
                                 return (
                                 <li key={booking.id} onClick={() => setSelectedBooking(booking)} className="block cursor-pointer transition-colors hover:bg-[#fffaf3]">
                                     <div className="px-6 py-5">
@@ -2493,7 +2602,7 @@ const DashboardMarketing = () => {
                                                         Unclaim
                                                     </button>
                                                 )}
-                                                {canEdit && !isClaimQueue && (
+                                                {canEdit && (
                                                     <>
                                                         <button
                                                             onClick={(e) => { e.stopPropagation(); requestClarification(booking.id); }}
@@ -2564,11 +2673,6 @@ const DashboardMarketing = () => {
                 text: 'Review menu items by category and update pricing values quickly.',
                 action: null,
             },
-            preview: {
-                title: 'Customer Preview',
-                text: 'Open public customer-facing screens to review content changes before customers see them.',
-                action: null,
-            },
         };
         const activeCatalogMeta = catalogMeta[activeConfigTab] || catalogMeta.packages;
         const openPackageDrawer = (pkg = null) => {
@@ -2619,6 +2723,9 @@ const DashboardMarketing = () => {
                         {activeConfigTab === 'eventTypes' && (
                             <button type="button" onClick={() => openEventTypeDrawer()} className="staff-button-primary">Create event type</button>
                         )}
+                        {activeConfigTab === 'menuItems' && (
+                            <button type="button" onClick={openMenuItemModal} className="staff-button-primary">Add menu item</button>
+                        )}
                     </div>
                 </div>
                 <div className="staff-catalog-tabs">
@@ -2628,7 +2735,6 @@ const DashboardMarketing = () => {
                             ['packages', 'Packages'],
                             ['eventTypes', 'Event Types'],
                             ['menuItems', 'Menu Items'],
-                            ['preview', 'Customer Preview'],
                         ].map(([key, label]) => (
                             <button
                                 key={key}
@@ -2646,22 +2752,6 @@ const DashboardMarketing = () => {
                         <Suspense fallback={<StaffSkeleton variant="panel" rows={3} label="Loading announcements" />}>
                             <AnnouncementManager user={user} />
                         </Suspense>
-                    </div>
-                )}
-
-                {activeConfigTab === 'preview' && (
-                    <div className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-4">
-                        {[
-                            ['Menu', '/preview/menu'],
-                            ['Packages', '/preview/packages'],
-                            ['Booking flow', '/preview/book'],
-                            ['Public homepage', '/'],
-                        ].map(([label, href]) => (
-                            <a key={href} href={href} target="_blank" rel="noreferrer" className="rounded-xl border border-amber-100 bg-white p-4 text-sm font-black text-slate-700 hover:bg-[#fffaf3]">
-                                Preview {label}
-                                <span className="mt-2 block text-xs font-bold text-slate-400">Opens in a new tab</span>
-                            </a>
-                        ))}
                     </div>
                 )}
 
@@ -2742,7 +2832,7 @@ const DashboardMarketing = () => {
 
                 {activeConfigTab === 'menuItems' && (
                     <div>
-                        <div className="border-b border-gray-100 p-6">
+                        <div className="flex flex-col gap-4 border-b border-gray-100 p-6 lg:flex-row lg:items-center lg:justify-between">
                             <nav className="flex gap-2 overflow-x-auto">
                                 {categories.map(category => (
                                     <button key={category} onClick={() => setActiveMenuCategory(category)} className={`whitespace-nowrap rounded-lg px-4 py-2 text-sm font-bold capitalize transition-colors ${activeMenuCategory === category ? 'bg-[#720101] text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
@@ -2757,27 +2847,37 @@ const DashboardMarketing = () => {
                                     <tr>
                                         <th className="px-6 py-4 text-left">Menu Item</th>
                                         <th className="px-6 py-4 text-left">Category</th>
-                                        <th className="px-6 py-4 text-right">Cost / Head</th>
-                                        <th className="px-6 py-4 text-right">Per-head adjustment</th>
-                                        <th className="px-6 py-4 text-right">Final / Head</th>
-                                        <th className="px-6 py-4 text-right">Action</th>
+                                        <th className="px-6 py-4 text-left">Current Price</th>
+                                        <th className="px-6 py-4 text-right">Actions</th>
                                     </tr>
                                 </thead>
                                 <tbody className="divide-y divide-gray-100">
                                     {visibleItems.map(item => (
                                         <tr key={item.id} className="hover:bg-gray-50">
                                             <td className="px-6 py-4">
-                                                <div className="font-bold text-gray-900">{item.name}</div>
-                                                <div className="text-xs text-gray-500">{item.description || 'No description'}</div>
+                                                <div className="flex min-w-0 items-center gap-3">
+                                                    <SmartImage
+                                                        src={item.image}
+                                                        alt={item.name}
+                                                        aspectRatio="1 / 1"
+                                                        containerClassName="shrink-0 rounded-lg ring-1 ring-gray-200"
+                                                        style={{ width: '3.25rem', height: '3.25rem', flex: '0 0 3.25rem' }}
+                                                    />
+                                                    <div className="min-w-0">
+                                                        <div className="font-bold text-gray-900">
+                                                            {item.name}
+                                                            {item.is_active === false && <span className="ml-2 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-black uppercase text-slate-500">Inactive</span>}
+                                                        </div>
+                                                        <div className="line-clamp-1 text-xs text-gray-500">{item.description || 'No description'}</div>
+                                                    </div>
+                                                </div>
                                             </td>
                                             <td className="px-6 py-4 capitalize text-gray-600">{item.category}</td>
-                                            <td className="px-6 py-4 text-right"><input id={`marketing_cost_${item.id}`} type="number" defaultValue={item.cost_per_head} className="w-28 rounded-lg border border-gray-200 px-3 py-2 text-right text-sm font-bold outline-none focus:ring-2 focus:ring-primary-100" /></td>
+                                            <td className="px-6 py-4 text-left font-bold text-gray-900">PHP {(Number(item.cost_per_head || 0) + Number(item.price_adj || 0)).toLocaleString()}</td>
                                             <td className="px-6 py-4 text-right">
-                                                <input id={`marketing_adj_${item.id}`} type="number" defaultValue={item.price_adj || 0} className="w-28 rounded-lg border border-gray-200 px-3 py-2 text-right text-sm font-bold outline-none focus:ring-2 focus:ring-primary-100" />
-                                                <p className="mt-1 text-[11px] font-semibold text-gray-400">Added per guest during customer recalculation.</p>
+                                                <button onClick={() => openEditMenuItemModal(item)} className="mr-2 rounded-lg bg-[#720101] px-3 py-2 text-xs font-bold text-white hover:bg-[#5a0101]">Edit</button>
+                                                {item.is_active !== false && <button onClick={() => handleArchiveMenuItem(item)} className="rounded-lg bg-red-50 px-3 py-2 text-xs font-bold text-red-700 hover:bg-red-100">Archive</button>}
                                             </td>
-                                            <td className="px-6 py-4 text-right font-black text-gray-900">{formatMoney(Number(item.cost_per_head || 0) + Number(item.price_adj || 0))}</td>
-                                            <td className="px-6 py-4 text-right"><button onClick={() => handleDishPricingUpdate(item, document.getElementById(`marketing_cost_${item.id}`).value, document.getElementById(`marketing_adj_${item.id}`).value)} disabled={settingsSaving} className="rounded-lg bg-[#720101] px-3 py-2 text-xs font-bold text-white hover:bg-[#5a0101] disabled:opacity-60">Save</button></td>
                                         </tr>
                                     ))}
                                 </tbody>
@@ -2826,15 +2926,27 @@ const DashboardMarketing = () => {
                                             ))}
                                         </div>
                                     </section>
-                                    <section className="staff-drawer-section">
-                                        <p className="staff-section-title">Customer-facing details</p>
-                                        <div className="mt-4 grid gap-3">
-                                            <textarea value={packageForm.description} onChange={e => setPackageForm({ ...packageForm, description: e.target.value })} placeholder="Description" rows={3} className="staff-control" />
-                                            <textarea value={packageForm.inclusions} onChange={e => setPackageForm({ ...packageForm, inclusions: e.target.value })} placeholder="Inclusions, one per line" rows={3} className="staff-control" />
-                                            <textarea value={packageForm.amenities} onChange={e => setPackageForm({ ...packageForm, amenities: e.target.value })} placeholder="Amenities, one per line" rows={3} className="staff-control" />
-                                            <textarea value={packageForm.applicable_setups} onChange={e => setPackageForm({ ...packageForm, applicable_setups: e.target.value })} placeholder="Applicable setup notes, one per line" rows={3} className="staff-control" />
-                                        </div>
-                                    </section>
+                                        <section className="staff-drawer-section">
+                                            <p className="staff-section-title">Customer-facing details</p>
+                                            <div className="mt-4 grid gap-3">
+                                                <label className="admin-field-label">
+                                                    Description
+                                                    <textarea value={packageForm.description} onChange={e => setPackageForm({ ...packageForm, description: e.target.value })} placeholder="Short customer-facing package summary" rows={3} className="staff-control mt-2 normal-case tracking-normal" />
+                                                </label>
+                                                <label className="admin-field-label">
+                                                    Inclusions
+                                                    <textarea value={packageForm.inclusions} onChange={e => setPackageForm({ ...packageForm, inclusions: e.target.value })} placeholder="Included menu, service, or package items, one per line" rows={3} className="staff-control mt-2 normal-case tracking-normal" />
+                                                </label>
+                                                <label className="admin-field-label">
+                                                    Amenities
+                                                    <textarea value={packageForm.amenities} onChange={e => setPackageForm({ ...packageForm, amenities: e.target.value })} placeholder="Included amenities, one per line" rows={3} className="staff-control mt-2 normal-case tracking-normal" />
+                                                </label>
+                                                <label className="admin-field-label">
+                                                    Applicable setup notes
+                                                    <textarea value={packageForm.applicable_setups} onChange={e => setPackageForm({ ...packageForm, applicable_setups: e.target.value })} placeholder="Setup notes customers should see, one per line" rows={3} className="staff-control mt-2 normal-case tracking-normal" />
+                                                </label>
+                                            </div>
+                                        </section>
                                     <section className="staff-drawer-section">
                                         <p className="staff-section-title">Menu structure</p>
                                         <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-5">
@@ -2903,6 +3015,119 @@ const DashboardMarketing = () => {
                             </button>
                         </footer>
                     </form>
+                </div>
+            )}
+
+            {menuItemModal.open && (
+                <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm">
+                    <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl bg-white shadow-2xl">
+                        <div className="sticky top-0 z-10 flex items-center justify-between border-b border-gray-100 bg-white px-6 py-4">
+                            <h3 className="flex items-center gap-2 text-xl font-black text-gray-900">
+                                {menuItemModal.mode === 'edit' ? 'Edit Menu Item' : 'Add New Menu Item'}
+                            </h3>
+                            <button
+                                type="button"
+                                onClick={closeMenuItemModal}
+                                className="rounded-lg p-2 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600"
+                            >
+                                X
+                            </button>
+                        </div>
+
+                        <form onSubmit={handleMenuItemSubmit} className="space-y-5 p-6">
+                            <div>
+                                <label className="mb-1.5 block text-sm font-bold text-gray-700">Dish Name <span className="text-red-500">*</span></label>
+                                <input
+                                    type="text"
+                                    required
+                                    value={menuItemForm.name}
+                                    onChange={e => setMenuItemForm({ ...menuItemForm, name: e.target.value })}
+                                    placeholder="e.g. Garlic Butter Shrimp"
+                                    className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm outline-none transition-all focus:border-[#720101] focus:ring-2 focus:ring-[#720101]/10"
+                                />
+                            </div>
+
+                            <div>
+                                <label className="mb-1.5 block text-sm font-bold text-gray-700">Category <span className="text-red-500">*</span></label>
+                                <select
+                                    value={menuItemForm.category}
+                                    onChange={e => setMenuItemForm({ ...menuItemForm, category: e.target.value })}
+                                    className="w-full rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm capitalize outline-none transition-all focus:border-[#720101] focus:ring-2 focus:ring-[#720101]/10"
+                                >
+                                    <option value="starter">Starter</option>
+                                    <option value="main">Main</option>
+                                    <option value="side">Side</option>
+                                    <option value="dessert">Dessert</option>
+                                    <option value="drink">Drink</option>
+                                </select>
+                            </div>
+
+                            <div>
+                                <label className="mb-1.5 block text-sm font-bold text-gray-700">Price Per Head (PHP) <span className="text-red-500">*</span></label>
+                                <input
+                                    type="number"
+                                    required
+                                    min="0"
+                                    step="0.01"
+                                    value={menuItemForm.cost_per_head}
+                                    onChange={e => setMenuItemForm({ ...menuItemForm, cost_per_head: e.target.value, price_adj: '0' })}
+                                    placeholder="0"
+                                    className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm outline-none transition-all focus:border-[#720101] focus:ring-2 focus:ring-[#720101]/10"
+                                />
+                                <p className="mt-1 text-xs text-gray-400">Used as the per-guest dish price during customer menu recalculation.</p>
+                            </div>
+
+                            <div>
+                                <label className="mb-1.5 block text-sm font-bold text-gray-700">Image Link</label>
+                                <input
+                                    type="url"
+                                    value={menuItemForm.image}
+                                    onChange={e => setMenuItemForm({ ...menuItemForm, image: e.target.value })}
+                                    placeholder="https://images.unsplash.com/..."
+                                    className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm outline-none transition-all focus:border-[#720101] focus:ring-2 focus:ring-[#720101]/10"
+                                />
+                                <p className="mt-1 text-xs text-gray-400">Leave blank to use a standard menu image.</p>
+                            </div>
+
+                            <div>
+                                <label className="mb-1.5 block text-sm font-bold text-gray-700">Description</label>
+                                <textarea
+                                    rows="3"
+                                    value={menuItemForm.description}
+                                    onChange={e => setMenuItemForm({ ...menuItemForm, description: e.target.value })}
+                                    placeholder="A brief description of the dish..."
+                                    className="w-full resize-none rounded-xl border border-gray-200 px-4 py-3 text-sm outline-none transition-all focus:border-[#720101] focus:ring-2 focus:ring-[#720101]/10"
+                                />
+                            </div>
+
+                            <label className="flex cursor-pointer select-none items-center gap-3">
+                                <input
+                                    type="checkbox"
+                                    checked={menuItemForm.is_best_seller}
+                                    onChange={e => setMenuItemForm({ ...menuItemForm, is_best_seller: e.target.checked })}
+                                    className="h-5 w-5 rounded border-gray-300 text-[#720101] focus:ring-[#720101]"
+                                />
+                                <span className="text-sm font-medium text-gray-700">Mark as Best Seller</span>
+                            </label>
+
+                            <div className="flex justify-end gap-3 border-t border-gray-100 pt-4">
+                                <button
+                                    type="button"
+                                    onClick={closeMenuItemModal}
+                                    className="rounded-xl border border-gray-200 px-6 py-2.5 text-sm font-bold text-gray-600 transition-colors hover:bg-gray-50"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    type="submit"
+                                    disabled={menuItemFormLoading}
+                                    className="rounded-xl bg-[#720101] px-6 py-2.5 text-sm font-bold text-white shadow-md transition-colors hover:bg-[#5a0101] disabled:opacity-50"
+                                >
+                                    {menuItemFormLoading ? (menuItemModal.mode === 'edit' ? 'Saving...' : 'Adding...') : (menuItemModal.mode === 'edit' ? 'Save changes' : 'Create menu item')}
+                                </button>
+                            </div>
+                        </form>
+                    </div>
                 </div>
             )}
 
@@ -2983,11 +3208,11 @@ const DashboardMarketing = () => {
                             <div key={item.id} className="rounded-xl border border-gray-100 bg-gray-50 p-4">
                                 <h4 className="font-bold text-gray-900">{item.name}</h4>
                                 <p className="text-xs text-gray-500 mt-1 line-clamp-2">{item.description}</p>
-                                <div className="mt-4 grid grid-cols-2 gap-2">
-                                    <input id={`marketing_cost_${item.id}`} type="number" defaultValue={item.cost_per_head} className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-bold" />
-                                    <input id={`marketing_adj_${item.id}`} type="number" defaultValue={item.price_adj || 0} className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-bold" />
+                                <div className="mt-4">
+                                    <input id={`marketing_cost_${item.id}`} type="number" defaultValue={Number(item.cost_per_head || 0) + Number(item.price_adj || 0)} className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm font-bold" />
+                                    <p className="mt-1 text-[11px] font-semibold text-gray-400">Price per guest during customer recalculation.</p>
                                 </div>
-                                <button onClick={() => handleDishPricingUpdate(item, document.getElementById(`marketing_cost_${item.id}`).value, document.getElementById(`marketing_adj_${item.id}`).value)} disabled={settingsSaving} className="mt-3 w-full rounded-lg bg-primary-600 px-4 py-2 text-sm font-bold text-white hover:bg-primary-700 disabled:opacity-60">Save pricing</button>
+                                <button onClick={() => handleDishPricingUpdate(item, document.getElementById(`marketing_cost_${item.id}`).value)} disabled={settingsSaving} className="mt-3 w-full rounded-lg bg-primary-600 px-4 py-2 text-sm font-bold text-white hover:bg-primary-700 disabled:opacity-60">Save pricing</button>
                             </div>
                         ))}
                     </div>
